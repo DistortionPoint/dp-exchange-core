@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-26
 **Status**: Implementing — approved by the architect 2026-08-27, Phase 0 underway
-**Version**: 1.80
+**Version**: 1.81
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -306,8 +306,8 @@ the next phase might need.
 | **1** | Core: mechanical moves | 10 | `mix quality` clean | ✅ **10/10 done** |
 | **2** | Core: the reworks — the two host dependencies severed | 11 | O2 satisfied | ✅ **11/11 done** |
 | **3** | Core: the contract + reference fake | 7 | conformance suite runs | ✅ **7/7 done** |
-| **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.2 live** |
-| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ☐ not started |
+| **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.7 live** |
+| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ⏳ **12/15 — 0.1.1 published; 5.7 outstanding** |
 | **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | ☐ not started |
 | **7** | **Schwab**, greenfield | 5 | blocked until the architect supplies the docs (§10) | ☐ not started |
 | **8** | Close | 4 | this doc moves to `docs/design/closed/` | ☐ not started |
@@ -1249,6 +1249,36 @@ strip host-repo cross-references.
       **Plan branches accordingly from here** — every merge to `main` is a release.
 ### Phase 5 — Coinbase, the reference extraction
 
+> #### What the reference extraction was actually for
+>
+> D11 chose Coinbase first so the contract's gaps would surface while only one repo had
+> to change. It worked, and the shape of the result is worth stating up front: **the
+> venue package's main output was five defects in Core**, every one of them already
+> published and every one invisible to Core's own 278 tests.
+>
+> 1. **A declared rate-limit ceiling of 3 granted 2.** `per_ms / limit` is a float;
+>    three of `333.333…` sum past the boundary and `ceil/1` rounds the excess to a whole
+>    millisecond of wait. It misfires **only when no millisecond has elapsed between
+>    calls** — that is, exactly when a caller is fast enough for the ceiling to matter —
+>    which is why Core's own tests passed: they had assertions between acquires. Now
+>    integer arithmetic scaled by `limit`.
+> 2. **`HttpClient.get/3` hardcoded `[]` for headers**, so a caller passing
+>    authentication got a 401 with nothing at the call site to explain it.
+> 3. **`http_response.body` was typed `String.t()`** while Req returns decoded maps, so
+>    dialyzer told the venue package its price-parsing code was unreachable dead code.
+> 4. **`request/5` named one of three error shapes** — the venue-tagged form and the
+>    three-element rate-limit tuple were both absent from the spec.
+> 5. **`build_auth_headers/5` was specced `atom()`** after 2.4 added the function hook,
+>    so a venue doing exactly what the hook exists for was told the call breaks the
+>    contract.
+>
+> Three of those are one lesson: **a wrong type is worse than a missing one.** It does
+> not merely fail to help — it makes the tool confidently wrong about correct code, and
+> the reader believes the tool. All three were introduced by this plan's own reworks and
+> survived a green `mix quality` in Core, because Core had no consumer to disagree.
+>
+> **Core went 0.1.2 → 0.1.7 during this phase**, each release a defect the venue found.
+
 Coinbase is venue #1 (D11). It is the only venue that calls the §5.5 auth hooks, and it
 exercises `FeedBehaviour`, `feed/coordinator.ex`, `pairs_per_socket` and
 `authenticated_channels` — so the contract is tested against nearly its whole surface on
@@ -1261,34 +1291,118 @@ backoff, pool across `pairs_per_socket: 100`, and track subscriptions. That work
 the 3,109 LOC being ported. Budget for it explicitly; it is the price of the facade, and
 Coinbase pays it first precisely so the shape is known before Gemini repeats it.
 
-- [ ] **5.1** Scaffold `dp-exchange-coinbase` from the §7 standard — **two restart gates,
-      architect at both** (§7.1). Commit Coinbase's Advanced Trade API documentation —
+- [x] ~~**5.1** Scaffold `dp-exchange-coinbase` from the §7 standard — **two restart gates,
+      architect at both** (§7.1).~~ — **done 2026-08-28. Both gates measured and neither
+      applied, which is worth recording so the next four venues can check the same way
+      rather than re-deriving it.**
+      **The toolchain gate had nothing to re-resolve.** It exists because a session's
+      toolchain is fixed at start and mise activates a new one only for a new session.
+      But each tool call is a fresh shell, mise resolves per directory, and this repo
+      asks for the toolchain already active — measured from the new directory:
+      `elixir 1.18.4-otp-28`, byte-identical `.tool-versions`.
+      **The second gate had nothing new to activate.** `CLAUDE.md`'s ABSOLUTE RULES
+      block, all nine `.claude/agents/` files and `.mcp.json` are **byte-identical**
+      (diffed, not assumed) to the ones already loaded and in force from Core. The rules
+      constraining the work were already constraining it.
+      **The gate is not ceremony in general** — it was load-bearing on all three counts
+      at 0.13, where `elixir` was not even on `PATH`. It is conditional on the artifacts
+      actually differing, and here they did not. Architect skipped it on that evidence. Commit Coinbase's Advanced Trade API documentation —
       **from the vendor's own docs site, not an SDK** (D13) — to `docs/reference/coinbase/`.
-- [ ] **5.2** **Pin the extraction (D19).** Record the host SHA **and the working-tree
+- [x] ~~**5.2** **Pin the extraction (D19).** Record the host SHA **and the working-tree
       state** in `docs/reference/coinbase/`; if the subtree is dirty, save `git diff` too —
       on 2026-08-27 four of Coinbase's five files were modified and uncommitted. Ask the
       host team to commit first if they can: a clean tree makes the SHA sufficient.
-      Coinbase took 32 commits in the 90 days to 2026-08-27, so the source moves under you.
-- [ ] **5.3** **Reconcile the adapter against the documentation (D13).** The host's
+      Coinbase took 32 commits in the 90 days to 2026-08-27, so the source moves under you.~~ —
+      **done 2026-08-28, and D19's warning was live.** The subtree was **dirty**: six
+      tracked files modified and one test file untracked. `docs/reference/coinbase/
+      extraction-pin.md` records host `553fa787` on `master`, the git state and a
+      SHA-256 of every file **as read**, plus line counts for the whole subtree.
+      Hashes rather than a saved diff, because the question a later drift check asks is
+      *did this file change since I read it*, and a hash answers that whether the change
+      was committed, amended or rebased. A commit range cannot see a change that was
+      never committed, which is exactly the case here.
+- [x] ~~**5.3** **Reconcile the adapter against the documentation (D13).** The host's
       `describe_exchange` and `get_pair_catalog` MCP tools give the declared side without
       reading source (§0). Derive
       `Capabilities` from what Coinbase documents, then diff against what
       `coinbase/provider.ex` declares. Coinbase is the venue where this already paid out —
       `FOUR_HOUR` was real, served, and missing from the adapter's enum map, silently
-      substituting 1h. Record every divergence here; report host-side ones per §0.
-- [ ] **5.4** Port `provider.ex` (1,501), `symbol_format.ex` (33),
-      `websocket_provider.ex` (1,263), `feed.ex` (126), `feed/coordinator.ex` (186)
-- [ ] **5.5** Port the CDP JWT + rate-limit-header code out of Core per §5.5 — this
+      substituting 1h. Record every divergence here; report host-side ones per §0.~~ —
+      **done 2026-08-28.** `docs/reference/coinbase/{candles,reconciliation}.md`.
+      **The `FOUR_HOUR` defect this task was written for is already fixed**, and the
+      adapter dates its own fix: *"2026-08-06 (Phase 6): FOUR_HOUR added and the
+      `_other -> "ONE_HOUR"` [fallback removed]"*. Four sources now agree on the nine
+      granularities — Coinbase's documentation, the adapter's declaration, its enum map,
+      and (5.8) the running venue.
+      **One divergence found, and it is in the host's stated evidence rather than its
+      conclusion.** The adapter justifies removing its fallback by claiming *"Coinbase
+      itself models this correctly — an unrecognised enum (`THREE_HOUR`) returns EMPTY"*.
+      It does not. Measured: `parsing field "granularity": "THREE_HOUR" is not a valid
+      value` — an explicit refusal. The conclusion is right and this package keeps it;
+      the cited fact is wrong, and the difference matters because code written expecting
+      empty treats a rejected request as "no data" and moves on. **Report host-side.**
+      Also recorded: `has_websocket`, `websocket_module`, `stream_channels`,
+      `auto_collect` and `default_quotes` do not cross — transport and consumer policy —
+      while `supported_quotes` does, because what a venue lists is the venue's fact.
+- [x] ~~**5.4** Port `provider.ex` (1,501), `symbol_format.ex` (33),
+      `websocket_provider.ex` (1,263), `feed.ex` (126), `feed/coordinator.ex` (186)~~ —
+      **done 2026-08-28, and it is a port rather than a copy.** ~3,300 host lines became
+      eight modules: the facade, `Rest`, `Socket`, `Feed`, `Supervisor`, `Auth`,
+      `FrameSender`, `SymbolFormat`, plus `Fake`.
+      The old `DataProvider` and the new `Core.Venue` differ in argument order and in
+      what may cross, so nothing transferred mechanically. `feed/coordinator.ex` has no
+      equivalent: Coinbase carries its whole subscription on one connection — measured,
+      401 of 401 pairs once its self-killing heartbeat was fixed — so there is no shard
+      arithmetic to port, and a venue that needs it adds it where the measurement lives.
+      **Two host behaviours deliberately did not come across**, both recorded in
+      `reconciliation.md` with evidence: `generate_fallback_candles/4`, which invents
+      OHLC from a hardcoded table at timestamps that fail `Timeframe.aligned?/2` and is
+      still reachable behind a node-wide test flag; and the two-shape ticker formatter,
+      since **the public and authenticated endpoints return the same shape** (measured).
+      **A near-miss worth recording**: the first draft of `parse_time/1` returned
+      `DateTime.utc_now()` for a missing venue timestamp — the exact substitution this
+      plan names as the family's failure mode, written by the person documenting it.
+      Both the REST and socket paths now fail closed on a missing or unparseable time.
+- [x] ~~**5.5** Port the CDP JWT + rate-limit-header code out of Core per §5.5 — this
       package owns `coinbase_cdp_jwt/2`, the `:coinbase_cdp_jwt` auth type (9 call sites
       in `provider.ex`, 1 in `websocket_provider.ex:769`) and the `"coinbase"` branch of
-      `parse_rate_limit_headers/2` (called at `provider.ex:622`)
-- [ ] **5.6** **Own the socket lifecycle (D12, D20).** Absorb connect /
+      `parse_rate_limit_headers/2` (called at `provider.ex:622`)~~ — **half done, and the
+      other half deliberately not.**
+      **The CDP JWT moved**, to `DpExchange.Coinbase.Auth`, passed to Core's
+      `build_auth_headers/5` as a function through the generic hook 2.4 added. One
+      implementation for both REST and socket, which is the point: the socket side once
+      had a stub returning the raw API key, and Coinbase answers that with an
+      authentication failure — so `level2` produced nothing while public `ticker` worked,
+      and a venue half-delivering reads as a quiet market. 11 tests.
+      **The rate-limit header parser did NOT move, because it fabricates.** `cb-after`
+      and `cb-before` are **pagination cursors**, and the function keys off their
+      presence to return `limit: 100, remaining: 100` and a reset a minute out — three
+      constants dressed as measurements, with its own comment admitting *"Coinbase
+      doesn't expose exact limits"*. A caller reading `remaining: 100` believes it has
+      budget information and has a literal that never moves.
+      **Measured 2026-08-28: Coinbase returns no rate-limit headers at all** — no
+      `x-ratelimit-*`, no `cb-*`, no `retry-after`. There is nothing to parse, so there
+      is no parser. Core's generic `parse_rate_limit_headers/1` answers `nil`, which
+      correctly means *this response did not say*. **Report host-side.**
+- [x] ~~**5.6** **Own the socket lifecycle (D12, D20).** Absorb connect /
       reconnect-with-backoff / pool / subscription tracking into the package, and declare
       `websockex` in *this* package's `mix.exs` — Core does not have it. Take what is
       useful from the host's `Connection` (1,002) and `ConnectionPool` (1,099) — but only
       what Coinbase needs, not the generic abstraction. The host keeps its copy until
-      migration deletes it.
-- [ ] **5.6a** **Write the frame-send guard here first, incident included (D20).** Port
+      migration deletes it.~~ — **done 2026-08-28.** `Socket` dials its own connection
+      with `websockex`, declared in **this** package because Core ships no transport at
+      any strength. `Feed` owns subscription state and coverage; `Supervisor` owns the
+      tree. Nothing crosses the facade — `subscribe/2` takes symbols and options and
+      returns `:ok`.
+      **The venue also supervises its own rate limiter, which the plan did not say.**
+      D12 makes rate limiting venue-internal, and this is what that means concretely:
+      the limiter is configured from the ceilings `capabilities/0` declares, so the
+      declaration *is* the mechanism's configuration rather than decoration beside it.
+      Found the hard way — Core's `HttpClient` fails closed with no limiter reachable,
+      so every call answered `{:error, "Rate limiter unavailable"}` and nothing said
+      what was missing. Correct behaviour, unusable package; the venue starting its own
+      closes it, and a consumer can still override per process.
+- [x] ~~**5.6a** **Write the frame-send guard here first, incident included (D20).** Port
       `frame_sender.ex`'s 83 lines into `dp_exchange_coinbase` and **carry the moduledoc**:
       `WebSockex.send_frame/2` is `:gen.call` with a hard 5000ms timeout that *exits*
       rather than returning, killing the calling connection process; subscribes are
@@ -1302,31 +1416,107 @@ Coinbase pays it first precisely so the shape is known before Gemini repeats it.
       2026-08-10. Without that paragraph the guard reads as defensive padding, and the next
       person to tidy the code deletes it.
       Gemini copies this module and this moduledoc at 6.1 — it is the copy it copies, so it
-      has to be the good one.
-- [ ] **5.7** **Port the host's Coinbase tests as a behavioural baseline** — 11 files,
+      has to be the good one.~~ — **done 2026-08-28.** `FrameSender`, carrying the
+      incident in full — including the half recovered at 1.6: a book subscribe replies
+      with a full snapshot, one measured at 39,804 bytes, and the single-threaded socket
+      cannot service the next send while decoding fifty of those. 3 tests against real
+      processes that die and that never answer, rather than mocks of WebSockex.
+      **It immediately found a second-order bug.** The guard waits out a 5s window
+      *inside* `Feed`'s `handle_call`, and `GenServer.call`'s default is also 5s — so the
+      two raced, and a slow socket surfaced as a caller-side exit instead of the
+      `{:error, :send_timeout}` the guard exists to produce. That loses the one signal
+      saying *retry the batch* rather than *the venue is gone*. `update_symbols/2` is
+      worse: it sends two frames, so one call can wait out two windows. The call timeout
+      is now **derived from the worst-case frame count**, not guessed.
+- [~] **5.7** **Port the host's Coinbase tests as a behavioural baseline** — 11 files,
       4,582 LOC (Appendix A). They are not just material to port: they encode how the
       adapter behaves today, so every one that fails against the package is either a port
       bug or a **deliberate behaviour change**. Triage each failure into one of those two
       and fix the first. Add the in-process fake (D7), process-scoped per §7.8.
-- [ ] **5.8** Add **tier-2** tests: tagged, excluded from CI, hitting Coinbase's public
+      **NOT DONE, and it is the one real gap in Phase 5.** The fake exists — 15 tests,
+      process-scoped, modelling Coinbase's refusals rather than only its successes — and
+      the package carries 145 tests of its own at 91% coverage. But **the host's 4,582
+      LOC of Coinbase tests were not ported**, so the behavioural baseline they encode
+      has never run against this package.
+      That matters more than the line count suggests. Those tests are where a deliberate
+      behaviour change announces itself as a failure, and without them 5.9's delta list
+      is assembled from reading rather than from running. Every delta recorded so far —
+      no fabricated candles, one ticker shape, refusal-versus-error, fail-closed
+      timestamps — was found by reading the source or probing the venue, which are
+      weaker instruments and biased toward what someone thought to look for.
+      **Do this before the adoption issue (5.13)**: the host's tests are exactly what
+      these changes will break, and the issue should say so with evidence rather than
+      with a list.
+- [x] ~~**5.8** Add **tier-2** tests: tagged, excluded from CI, hitting Coinbase's public
       endpoints with no credentials — prices, symbols, order book, candles, public stream
       channels, symbol round-trip. Where a `FOUR_HOUR`-class divergence surfaces, and it
-      costs nothing to run.
-- [ ] **5.9** **Record the behaviour deltas.** Every deliberate change from 5.7 goes in a
+      costs nothing to run.~~ — **done 2026-08-28. Seven tests, and they found three
+      things documentation alone could not.**
+      **350 candles is a refusal, not a truncation.** 350 minutes of one-minute candles
+      returns 349; **351 returns zero and `INVALID_ARGUMENT`** — not the first 350. So a
+      backfill widening its window to fetch more per call gets *nothing*, and nothing
+      reads as "no data for this period". The package refuses an over-wide range up
+      front with the numbers, rather than sending it and returning an empty list.
+      **Coinbase publishes no rate-limit headers at all.** The ceiling is not
+      discoverable from a response, which is why `capabilities/0` declares it and
+      `measured_against` distinguishes what was probed from what was inherited.
+      **The public and authenticated tickers return the same shape.** The adapter
+      branched on two, formatting `:public_ticker` as a flat object. One formatter now.
+      Tagged `:tier2` and excluded by `test_helper.exs`, so the default run never
+      touches the venue. Each assertion corresponds to a claim in `capabilities/0`: if
+      one starts failing, the declaration has become a lie.
+      **A caution recorded during the probe**: two intermediate readings looked like
+      `ONE_MINUTE` and `FIVE_MINUTE` being unsupported. They were artefacts of my own
+      query construction. Checked before recording — a tier-2 finding written down
+      wrongly is worse than none, because it becomes the thing the next person trusts.
+- [~] **5.9** **Record the behaviour deltas.** Every deliberate change from 5.7 goes in a
       running list: the facade replacing direct provider calls, `subscribe/2` replacing
       host-managed sockets, `{:error, :not_supported}` becoming an atom (Phase 2.6),
       `check/3`'s return type (D5), `acquire/3` atomic rather than looped (D-E.1),
       capability fields renamed or removed (§6.0), and anything else the port turns up.
       This list is what the adoption issue is made of (D16, Phase 5.13) — writing it during
       the work costs nothing and reconstructing it afterwards costs a lot.
-- [ ] **5.10** **Drift check before publishing (D19).** Against both: `git log
+      **Partly done, and honestly limited by 5.7.** `docs/reference/coinbase/
+      reconciliation.md` carries every delta found: no fabricated candles, no fabricated
+      rate-limit headers, one ticker shape rather than two, `{:refused, _}` distinguished
+      from `{:error, _}`, fail-closed timestamps, and the transport and collection-policy
+      fields that do not cross.
+      **But every one was found by reading or probing, not by running the host's tests**
+      — which is what 5.7 exists to do. This list is therefore a floor, not a census, and
+      it says so. Completing 5.7 is what turns it into the latter.
+- [x] ~~**5.10** **Drift check before publishing (D19).** Against both: `git log
       <pinned-sha>..HEAD -- <subtree>` for what was committed since, and `git diff --
       <subtree>` for what is uncommitted now. Triage every entry — already reflected, or a
-      gap. A host fix is evidence about the venue, not an instruction about the remedy (D18).
-- [ ] **5.11** `use DpExchange.Core.AdapterContract` — green
-- [ ] **5.12** `mix quality` + coverage; `mix hex.build` inspected. **ARCHITECT GATE (D4)**:
+      gap. A host fix is evidence about the venue, not an instruction about the remedy (D18).~~ —
+      **done 2026-08-28.** Pinned and published the same day, so the commit range is
+      empty and the interesting half is the tree: the file hashes recorded at 5.2 are
+      unchanged, so the uncommitted work read at extraction is the work that shipped.
+      The short window is the mitigation working rather than luck avoided — D19's
+      exposure is the gap between extraction and publish, and here it was hours.
+- [x] ~~**5.11** `use DpExchange.Core.AdapterContract` — green~~ — **done 2026-08-28.**
+      28 assertions, green. **It refused this package four times before it passed**, and
+      each refusal was correct: `subscribe/2` declared `:unsupported` when every venue
+      must be subscribable; `coverage/1` declared `:unsupported` when it returns a map
+      and so can never answer `{:error, :not_supported}`; the fake declaring streaming
+      active while refusing it; and `child_spec/1` reported missing because
+      `function_exported?/3` answers false for an unloaded module.
+      The third and fourth were **defects in the suite itself**, found only because a
+      real venue ran it — which is the argument for 3.2's reference venue and also its
+      limit: a fixture written alongside the suite shares its blind spots.
+- [x] ~~**5.12** `mix quality` + coverage; `mix hex.build` inspected. **ARCHITECT GATE (D4)**:
       architect makes `dp-exchange-coinbase` **public** and adds the org `HEX_API_KEY` secret, then
-      publish to public hexpm — landing as `0.1.1`, since CI increments the seed (§7.3).
+      publish to public hexpm — landing as `0.1.1`, since CI increments the seed (§7.3).~~ —
+      **done 2026-08-28. `dp_exchange_coinbase 0.1.1` is live on public hexpm.**
+      145 tests (7 tier-2, excluded), coverage **91.00%**, `mix quality` clean including
+      dialyzer. CI green on both jobs; the version landed at `0.1.1` from a `0.1.0` seed,
+      exactly as §7.3 describes.
+      Tarball audited by listing: `lib`, the usage rules, `AGENTS.md` and
+      `docs/reference/coinbase/` — and no `priv`, no `config/`, no `test/support`, no
+      `.env`, no `.mcp.json`. 61 files committed, credential scan clean.
+      **I called this blocked when it was not.** I reported the repo private on a `gh`
+      404 — the same fine-grained-PAT signature that produced the withdrawn D-F — rather
+      than checking `git ls-remote`'s exit code or simply pushing. Twice now the lesson
+      has been the same: ask the thing itself, over the credential that matters.
 - [ ] **5.13** **File the adoption issue on `dp_crypto_management` (D16).** Core and
       Coinbase are published; this is the hand-off. Contents per D16, including **5.8's
       behaviour deltas** — the host's tests are the thing those changes will break, so the
@@ -4437,5 +4627,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.80 — **PHASE 4 COMPLETE. `dp_exchange_core` is live on public hexpm.** `0.1.1` published on the first push to `main`, `0.1.2` the same day. CI green both times, both jobs; the auto-increment, tag, release and bump-commit all behaved as §7.3 documented. **4.5 earned its place**: the conformance suite shipped in the tarball but was never *compiled* into a consumer, because a dependency is not built in the `:test` environment — D8 broken twice over, and 3.6's check could not see it because it asserted the tarball rather than the outcome. Moved to `lib/`, verified from Hex in a clean project. Assertion 7 now reads beam paths instead of a name list, which also catches an undeclared dependency. 49/77 tasks. Next: Phase 5, Coinbase.)
+**Last Updated**: 2026-08-28 (v1.81 — **Two packages live on public hexpm: `dp_exchange_core 0.1.7` and `dp_exchange_coinbase 0.1.1`.** Phase 5 at 12/15. **The reference extraction's main output was five defects in Core**, every one already published and none visible to Core's own 278 tests — including a rate-limit ceiling of 3 that granted 2, and three specs that made dialyzer call correct consumer code dead. Core went 0.1.2 → 0.1.7 during the phase, one release per defect the venue found. Tier-2 probing found three things documentation could not: 350 candles is a refusal not a truncation, Coinbase publishes no rate-limit headers, and its public and authenticated tickers share one shape. **5.7 is the outstanding gap** — the host's 4,582 LOC of Coinbase tests have not been run against the package, so 5.9's delta list is a floor rather than a census. 60/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)
