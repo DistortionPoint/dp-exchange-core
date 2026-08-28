@@ -106,6 +106,9 @@ defmodule DpExchange.Core.AdapterContract do
       alias DpExchange.Core.{Capabilities, SymbolNormalizer, Timeframe, Venue}
 
       @venue Keyword.fetch!(opts, :venue)
+      # The venue's in-process fake. Assertion 12's active-endpoint direction runs
+      # against this and never against the real venue.
+      @fake Keyword.get(opts, :fake)
       @symbol_format Keyword.get(opts, :symbol_format)
       @sample_pairs Keyword.get(opts, :sample_pairs, [])
       @credentials Keyword.get(opts, :credentials, %{})
@@ -307,13 +310,26 @@ defmodule DpExchange.Core.AdapterContract do
         test "an active endpoint does not answer :not_supported" do
           # Under-declaring hides working functionality; over-declaring fails in the
           # caller's hands. Only checking one direction leaves the other open.
+          #
+          # Driven against the venue's FAKE, never the real venue. Calling an active
+          # endpoint for real is a network request, and a tier-1 run that reaches a third
+          # party's API is tier 1 in name only — it would hit the live venue from every CI
+          # run of every consumer. The `:unsupported` direction is safe against the real
+          # venue precisely because those endpoints return without going anywhere.
+          assert @fake,
+                 "pass `fake:` to run this assertion. Calling active endpoints on the " <>
+                   "real venue would make every CI run hit the live API, which D7 " <>
+                   "reserves for tier 2 and for a human choosing to run it."
+
           caps = @venue.capabilities()
 
           for endpoint <-
                 Capabilities.endpoints_at(caps, :proven) ++
-                  Capabilities.endpoints_at(caps, :experimental) do
-            refute call_endpoint(endpoint) == {:error, :not_supported},
-                   "#{inspect(endpoint)} declares active but answered :not_supported"
+                  Capabilities.endpoints_at(caps, :experimental),
+              answerable?(endpoint) do
+            refute call_on(@fake, endpoint) == {:error, :not_supported},
+                   "#{inspect(endpoint)} declares active but the fake answered " <>
+                     ":not_supported — the fake and the declaration disagree"
           end
         end
 
@@ -409,6 +425,11 @@ defmodule DpExchange.Core.AdapterContract do
           # A callback in an argument list is an injected sink wearing a different name.
           # The venue must start, subscribe and serve with nothing but credentials and
           # options.
+          # `Code.ensure_loaded!/1` first: `function_exported?/3` answers false for a
+          # module that is merely not loaded, so without it this asserts "not exported"
+          # while meaning "does not exist".
+          Code.ensure_loaded!(@venue)
+
           assert function_exported?(@venue, :child_spec, 1),
                  "the package declares its own supervision entry point"
         end
@@ -491,13 +512,20 @@ defmodule DpExchange.Core.AdapterContract do
     quote location: :keep do
       # --- helpers ---------------------------------------------------------
 
-      defp call_endpoint({name, arity}) do
-        apply(@venue, name, endpoint_args(name, arity))
+      defp call_endpoint(endpoint), do: call_on(@venue, endpoint)
+
+      defp call_on(module, {name, arity}) do
+        apply(module, name, endpoint_args(name, arity))
       rescue
         error -> {:raised, error}
       catch
         kind, reason -> {kind, reason}
       end
+
+      # Lifecycle callbacks are not answerable by calling them — `child_spec/1` returns a
+      # spec, `start_link/1` starts something. Their maturity is asserted for presence
+      # like everything else; the round trip does not apply.
+      defp answerable?({name, _arity}), do: name not in [:child_spec, :start_link]
     end
   end
 

@@ -8,6 +8,7 @@ defmodule DpExchange.Core.AdapterContractTest do
 
   use DpExchange.Core.AdapterContract,
     venue: DpExchange.Core.ReferenceVenue,
+    fake: DpExchange.Core.ReferenceVenue,
     symbol_format: DpExchange.Core.ReferenceVenue.SymbolFormat,
     sample_pairs: ~w(BTC-USDC ETH-USD BTC-USDT),
     credentials: %{api_key: "reference", api_secret: "reference"}
