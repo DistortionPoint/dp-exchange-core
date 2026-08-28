@@ -1,0 +1,354 @@
+defmodule DpExchange.Core.ReferenceVenue do
+  @moduledoc """
+  A complete, in-process venue implementing the whole facade — the thing the conformance
+  suite is proven against inside Core, rather than waiting on a venue package.
+
+  **Core's own suite must not depend on a venue to exercise Core's own invariants.** If
+  the first thing that runs `DpExchange.Core.AdapterContract` is `dp_exchange_coinbase`,
+  then every defect in the suite is discovered in a repo that cannot fix it.
+
+  ## Its symbol mapping is deliberately hostile
+
+  `sep: ""` with a quote asset that **contains** another — `BUSD` and `USD` — which is the
+  exact shape of the round-trip bug that motivated the invariant. `BTCBUSD` ends with
+  `USD` before it ends with `BUSD`, so a quote list not ordered longest-first splits the
+  base as `BTCB`: a pair that does not exist, carrying values that all look plausible.
+
+  Note that `USD`, `USDT` and `USDC` do **not** collide this way — none is a suffix of
+  another, so they round-trip in either order. A fixture built only on those would look
+  like it was testing the ordering rule while testing nothing.
+
+  Coinbase, the reference extraction, has an effectively identity mapping, so a fake
+  modelled on it would exercise assertion 4 barely at all. This one is chosen to be the
+  hardest case the contract has to survive, not the easiest.
+
+  ## What it refuses, and why that is the interesting part
+
+  It declares `{:get_transfers, 2}` and `{:quantization, 1}` as `:unsupported` and returns
+  `{:error, :not_supported}` — **the atom** — from both, so the bidirectional agreement
+  assertion has something real to check in each direction. A fake where everything works
+  proves only half the contract.
+
+  ## The two rules it follows, from thirteen real bug reports
+
+  Eleven of the thirteen bugs found in a comparable in-process fake were the fake
+  diverging from the real client. They split into six *loud* divergences — the fake
+  rejecting what the real thing accepts — and three *silent* ones, which are the dangerous
+  half. So:
+
+    1. **Less capable is allowed; differently capable is not.** Where this fake cannot
+       answer, it returns an error. It never returns an empty success for something
+       unsupported — the original returned `{:ok, []}` for an unsupported aggregate and
+       silently dropped clauses it could not parse, so callers got plausible wrong answers
+       rather than failures.
+    2. **It never rewrites a value the caller supplied.** The original discarded the
+       caller's timestamp and substituted the current clock, landing points written 900
+       seconds apart microseconds apart.
+  """
+
+  @behaviour DpExchange.Core.Venue
+
+  alias DpExchange.Core.{CanonicalPair, Capabilities, Instrument, Notice, Types}
+
+  # Longest-first, which is the whole point: reversed, `BTCUSDC` parses as `BTC-USD`.
+  # Longest-first, and `BUSD` before `USD` is the ordering that matters: `BTCBUSD` ends
+  # with `USD` before it ends with `BUSD`, so the reverse order splits the base as
+  # `BTCB`. USDC/USDT/USD do not collide that way — worth knowing, because a fixture
+  # built only on those would prove nothing.
+  @mapping %{sep: "", quotes: ~w(BUSD USDC USDT USD EUR BTC ETH)}
+
+  @symbols ~w(BTC-USD BTC-USDC BTC-USDT BTC-BUSD ETH-USD ETH-EUR)
+
+  @unsupported [{:get_transfers, 2}, {:quantization, 1}]
+
+  # --- lifecycle ---------------------------------------------------------
+
+  @impl true
+  def child_spec(opts) do
+    %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
+  end
+
+  @impl true
+  def start_link(_opts), do: :ignore
+
+  # --- declaration -------------------------------------------------------
+
+  @impl true
+  def provider_name, do: "Reference Venue"
+
+  @impl true
+  def runtime_id, do: :reference_venue
+
+  @impl true
+  def asset_classes, do: [:crypto]
+
+  @impl true
+  def capabilities do
+    Capabilities.new(
+      endpoints: endpoint_maturities(),
+      supported_quotes: @mapping.quotes,
+      supported_order_types: [:market, :limit, :post_only],
+      supported_time_in_force: [:gtc, :ioc],
+      supported_instrument_types: [:spot],
+      supports_short_selling: false,
+      streamable: [:quotes, :trades],
+      authenticated_streamable: [],
+      historical_timeframes: ~w(1m 5m 1h 1d),
+      credential_benefit: :higher_ceiling,
+      public_ceiling: %{limit: 10, per_ms: 1_000},
+      authenticated_ceiling: %{limit: 100, per_ms: 1_000},
+      max_candles_per_request: 300,
+      reports_trade_volume: true,
+      catalog_size: :small,
+      measured_at: ~D[2026-08-27],
+      measured_against: "in-process reference implementation, not a live venue"
+    )
+  end
+
+  # Everything the facade declares is :experimental — the honest state for code no one
+  # has run in production — except the two deliberate refusals.
+  defp endpoint_maturities do
+    active =
+      for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:callbacks),
+          {name, arity} not in @unsupported,
+          into: %{},
+          do: {{name, arity}, :experimental}
+
+    Enum.reduce(@unsupported, active, &Map.put(&2, &1, :unsupported))
+  end
+
+  # --- market data -------------------------------------------------------
+
+  @impl true
+  def get_price(symbol, _opts) do
+    if symbol in @symbols do
+      {:ok,
+       %Types.Quote{
+         symbol: symbol,
+         price: Decimal.new("42000.50"),
+         volume: Decimal.new("1234.5"),
+         bid: Decimal.new("42000.00"),
+         ask: Decimal.new("42001.00"),
+         # The caller's clock is never substituted for a venue's. Here there is no venue,
+         # so this is the reference's own event time — stated, not disguised.
+         timestamp: ~U[2026-08-27 12:00:00Z],
+         provider: runtime_id()
+       }}
+    else
+      # A refusal, not an error: this venue does not carry the symbol, and that is a
+      # permanent answer rather than something to retry forever.
+      {:refused, :symbol_not_listed}
+    end
+  end
+
+  @impl true
+  def get_historical_prices(symbol, timeframe, _range, _opts) do
+    cond do
+      symbol not in @symbols ->
+        {:refused, :symbol_not_listed}
+
+      timeframe not in capabilities().historical_timeframes ->
+        # Refused rather than served at the nearest width. A missing granularity becoming
+        # the closest one mislabels every candle it touches and every value stays
+        # plausible.
+        {:error, {:unsupported_timeframe, timeframe}}
+
+      true ->
+        {:ok, [elem(get_price(symbol, []), 1)]}
+    end
+  end
+
+  @impl true
+  def get_symbols(_opts), do: {:ok, @symbols}
+
+  @impl true
+  def get_order_book(symbol, _opts) do
+    if symbol in @symbols do
+      {:ok,
+       %Types.OrderBook{
+         symbol: symbol,
+         bids: [
+           {Decimal.new("42000"), Decimal.new("1.5")},
+           {Decimal.new("41999"), Decimal.new("2")}
+         ],
+         asks: [
+           {Decimal.new("42001"), Decimal.new("1.0")},
+           {Decimal.new("42002"), Decimal.new("3")}
+         ],
+         timestamp: ~U[2026-08-27 12:00:00Z],
+         provider: runtime_id()
+       }}
+    else
+      {:refused, :symbol_not_listed}
+    end
+  end
+
+  @impl true
+  def get_market_overview(_opts) do
+    {:ok, Map.new(@symbols, fn symbol -> {symbol, Decimal.new("42000.50")} end)}
+  end
+
+  @impl true
+  def list_instruments(_opts) do
+    {:ok,
+     Enum.map(@symbols, fn symbol ->
+       [base, quote_asset] = String.split(symbol, "-")
+
+       Instrument.new(
+         symbol: symbol,
+         base: base,
+         quote: quote_asset,
+         instrument: :spot,
+         status: :tradable
+       )
+     end)}
+  end
+
+  # --- account and trading -----------------------------------------------
+
+  @impl true
+  def get_balances(_credentials, _opts) do
+    {:ok,
+     [
+       %Types.Balance{
+         currency: "USD",
+         balance: Decimal.new("10000"),
+         available_balance: Decimal.new("9500"),
+         hold: Decimal.new("500"),
+         timestamp: ~U[2026-08-27 12:00:00Z],
+         provider: runtime_id()
+       }
+     ]}
+  end
+
+  @impl true
+  def get_accounts(_credentials, _opts), do: {:ok, [%{id: "acct-1", currency: "USD"}]}
+
+  @impl true
+  def get_fees(_credentials, _opts),
+    do: {:ok, %{maker: Decimal.new("0.004"), taker: Decimal.new("0.006")}}
+
+  @impl true
+  def get_transfers(_credentials, _opts), do: DpExchange.Core.Venue.not_supported()
+
+  @impl true
+  def place_order(_credentials, request, _opts) do
+    {:ok,
+     %Types.Order{
+       id: "order-1",
+       symbol: Map.get(request, :symbol, "BTC-USD"),
+       side: Map.get(request, :side, :buy),
+       order_type: Map.get(request, :order_type, :limit),
+       quantity: Map.get(request, :quantity, Decimal.new("1")),
+       price: Map.get(request, :price),
+       status: :open,
+       created_at: ~U[2026-08-27 12:00:00Z],
+       provider: runtime_id()
+     }}
+  end
+
+  @impl true
+  def cancel_order(credentials, id, opts) do
+    with {:ok, order} <- get_order(credentials, id, opts) do
+      {:ok, %{order | status: :cancelled}}
+    end
+  end
+
+  @impl true
+  def get_order(_credentials, id, _opts) do
+    {:ok,
+     %Types.Order{
+       id: id,
+       symbol: "BTC-USD",
+       side: :buy,
+       order_type: :limit,
+       quantity: Decimal.new("1"),
+       status: :open,
+       provider: runtime_id()
+     }}
+  end
+
+  @impl true
+  def get_orders(_credentials, _opts), do: {:ok, []}
+
+  @impl true
+  def get_trade_history(_credentials, _opts), do: {:ok, []}
+
+  # --- streaming ---------------------------------------------------------
+
+  @impl true
+  def subscribe(symbols, opts) do
+    target = Keyword.get(opts, :to, self())
+
+    # Pushed immediately, which is what a REST-only venue's internal poll would do on its
+    # first tick. A caller cannot tell the difference, and that is the point.
+    for symbol <- symbols, symbol in @symbols do
+      case get_price(symbol, []) do
+        {:ok, quote_struct} -> send(target, {:dp_exchange, runtime_id(), quote_struct})
+        _refused_or_error -> :ok
+      end
+    end
+
+    :ok
+  end
+
+  @impl true
+  def unsubscribe(_symbols, _opts), do: :ok
+
+  @impl true
+  def update_symbols(_symbols, _opts), do: :ok
+
+  @impl true
+  def coverage(_opts) do
+    # Observed, never intended. This reference observes its own sends, so it reports what
+    # it actually delivered — a venue that could not observe delivery would answer
+    # :not_covered rather than claiming success.
+    Map.new(@symbols, fn symbol -> {symbol, :internal_poll} end)
+  end
+
+  @impl true
+  def subscribe_notices(opts) do
+    target = Keyword.get(opts, :to, self())
+    send(target, {:dp_exchange, runtime_id(), Notice.new(:link_up, runtime_id())})
+    :ok
+  end
+
+  # --- health ------------------------------------------------------------
+
+  @impl true
+  def test_connection(_credentials, _opts), do: {:ok, %{reachable: true}}
+
+  @impl true
+  def get_rate_limit_status(_credentials, _opts) do
+    {:ok, %{limit: 10, remaining: 10, reset_time: nil}}
+  end
+
+  @impl true
+  def market_status(_opts), do: {:ok, :open}
+
+  @impl true
+  def quantization(_symbol), do: DpExchange.Core.Venue.not_supported()
+
+  @doc "The hostile mapping, so a test can drive `CanonicalPair` with the same one."
+  @spec mapping() :: CanonicalPair.mapping()
+  def mapping, do: @mapping
+end
+
+defmodule DpExchange.Core.ReferenceVenue.SymbolFormat do
+  @moduledoc """
+  The reference venue's symbol format — separator-less with overlapping quote assets,
+  which is the hardest shape assertion 4 has to survive.
+  """
+
+  @behaviour DpExchange.Core.SymbolNormalizer
+
+  alias DpExchange.Core.{CanonicalPair, ReferenceVenue}
+
+  @impl true
+  def to_canonical_symbol(native),
+    do: CanonicalPair.to_canonical(ReferenceVenue.mapping(), native)
+
+  @impl true
+  def to_exchange_symbol(canonical),
+    do: CanonicalPair.to_exchange(ReferenceVenue.mapping(), canonical)
+end
