@@ -212,24 +212,44 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   # --- internal ----------------------------------------------------------
 
-  # Virtual scheduling. `tat` is the time this provider's next request may proceed if
-  # no burst were allowed; the tolerance lets it run that far ahead of now. Reserving
+  # Virtual scheduling. `tat` is the time this provider's next request may proceed if no
+  # burst were allowed; the tolerance lets it run that far ahead of now. Reserving
   # `weight` advances it by `weight` emission intervals — one addition, so a weight of
   # ten is as atomic as a weight of one.
+  #
+  # ## All integers, and that is not fussiness
+  #
+  # The obvious version computes `emission_interval = per_ms / limit` as a float. With
+  # `limit: 3, per_ms: 1000` that is 333.333…; three of them sum to 1000.0000000000002
+  # while the tolerance sums to 999.9999999999999, so the third acquire lands a
+  # ten-billionth of a millisecond past the boundary and `ceil/1` rounds that to a whole
+  # millisecond of wait. **A ceiling declared as 3 per second then grants 2.**
+  #
+  # Worse, it is timing-dependent in the wrong direction: the error only shows when no
+  # whole millisecond has elapsed between calls — that is, exactly when the caller is
+  # fast enough for the ceiling to matter. A slow caller never sees it, so it survives
+  # casual testing and quietly leaves a third of a venue's budget unused.
+  #
+  # So `tat` is carried **scaled by `limit`**, in units of millisecond × limit, where
+  # every quantity is an exact integer.
   defp reserve(state, provider, weight) do
     %{limit: limit, per_ms: per_ms, burst: burst} = limit_for(state, provider)
 
-    emission_interval = per_ms / limit
-    tolerance = burst * emission_interval
-    now = System.monotonic_time(:millisecond)
+    now_scaled = System.monotonic_time(:millisecond) * limit
 
-    tat = max(Map.get(state.tat, provider, now), now)
-    new_tat = tat + weight * emission_interval
-    allowed_at = new_tat - tolerance
+    tat_scaled = max(Map.get(state.tat, provider, now_scaled), now_scaled)
+    new_tat_scaled = tat_scaled + weight * per_ms
+    allowed_at_scaled = new_tat_scaled - burst * per_ms
 
-    wait_ms = max(0, ceil(allowed_at - now))
-    {wait_ms, new_tat}
+    wait_ms = max(0, ceil_div(allowed_at_scaled - now_scaled, limit))
+    {wait_ms, new_tat_scaled}
   end
+
+  # Integer ceiling division. `div/2` truncates toward zero, so the usual
+  # `div(a + b - 1, b)` is wrong for a negative numerator — and the numerator here is
+  # negative whenever there is capacity to spare, which is the common case.
+  defp ceil_div(numerator, denominator) when numerator <= 0, do: div(numerator, denominator)
+  defp ceil_div(numerator, denominator), do: div(numerator - 1, denominator) + 1
 
   # No venue table here, and never one: limits are the consumer's configuration.
   defp limit_for(state, provider) do

@@ -350,6 +350,22 @@ defmodule DpExchange.Core.HttpClientTest do
   end
 
   describe "get/3" do
+    test "sends headers from opts — they used to be dropped silently" do
+      # Hardcoded to [] before, so a caller passing authentication headers got a 401
+      # with nothing at the call site to explain it.
+      plug = fn conn ->
+        assert Plug.Conn.get_req_header(conn, "x-venue-auth") == ["signed"]
+        Req.Test.json(conn, %{})
+      end
+
+      assert {:ok, _body} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: plug,
+                 retry_attempts: 0,
+                 headers: [{"x-venue-auth", "signed"}]
+               )
+    end
+
     test "builds a query string from a keyword list" do
       plug = fn conn ->
         assert conn.query_string =~ "symbol=BTC-USD"

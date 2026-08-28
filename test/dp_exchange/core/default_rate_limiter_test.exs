@@ -7,7 +7,10 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
   # processes with no shared bucket. That is also how a consumer would isolate one.
   defp start_limiter(limits) do
     name = :"limiter_#{System.unique_integer([:positive])}"
-    start_supervised!({Limiter, name: name, limits: limits})
+
+    # A unique child id as well as a unique name: `{Limiter, opts}` takes its id from
+    # the module, so a single test starting more than one collides with itself.
+    start_supervised!(%{id: name, start: {Limiter, :start_link, [[name: name, limits: limits]]}})
     [limiter: name]
   end
 
@@ -135,6 +138,44 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
 
       assert :ok = Limiter.check(:venue, 5, opts)
       assert :ok = Limiter.record(:venue, 5, opts)
+      assert {:rate_limited, _wait} = Limiter.check(:venue, 1, opts)
+    end
+  end
+
+  describe "a declared ceiling grants exactly what it declares" do
+    test "3 per second grants three, not two" do
+      # Float arithmetic made this grant TWO: 1000/3 is 333.333…, three of those sum to
+      # 1000.0000000000002, and `ceil/1` turned that fraction into a whole millisecond of
+      # wait. A limiter that quietly under-grants leaves a third of the venue's budget
+      # unused and nothing in the system says so.
+      opts = start_limiter(%{default: %{limit: 3, per_ms: 1_000, burst: 3}})
+
+      for i <- 1..3 do
+        assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0]), "acquire #{i} of 3"
+      end
+
+      assert {:rate_limited, _wait} = Limiter.check(:venue, 1, opts)
+    end
+
+    test "the awkward divisors grant their full allowance too" do
+      # 3, 6, 7, 9 and 11 all divide 1000 badly. Each must still grant exactly `limit`.
+      for limit <- [3, 6, 7, 9, 11] do
+        opts = start_limiter(%{default: %{limit: limit, per_ms: 1_000, burst: limit}})
+
+        for i <- 1..limit do
+          assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0]),
+                 "limit #{limit}: acquire #{i} was refused"
+        end
+
+        assert {:rate_limited, _wait} = Limiter.check(:venue, 1, opts)
+      end
+    end
+
+    test "a weight-N acquire spends exactly N of the allowance" do
+      opts = start_limiter(%{default: %{limit: 9, per_ms: 1_000, burst: 9}})
+
+      assert :ok = Limiter.acquire(:venue, 6, opts ++ [timeout: 0])
+      assert :ok = Limiter.acquire(:venue, 3, opts ++ [timeout: 0])
       assert {:rate_limited, _wait} = Limiter.check(:venue, 1, opts)
     end
   end

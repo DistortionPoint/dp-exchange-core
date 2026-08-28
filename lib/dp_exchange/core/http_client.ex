@@ -123,7 +123,11 @@ defmodule DpExchange.Core.HttpClient do
     query_string = build_query_string(params)
     full_url = if query_string == "", do: url, else: "#{url}?#{query_string}"
 
-    case request(:get, full_url, [], nil, opts) do
+    # `:headers` is read from opts rather than hardcoded to `[]`. It was hardcoded, so a
+    # caller that passed authentication headers had them silently dropped and got a 401
+    # with nothing to explain it — the request looked correct at the call site and was
+    # not correct on the wire. Found by a venue package's tier-2 tests.
+    case request(:get, full_url, Keyword.get(opts, :headers, []), nil, opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
         parse_response_body(body)
 
