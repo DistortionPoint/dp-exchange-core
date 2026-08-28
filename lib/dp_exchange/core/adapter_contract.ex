@@ -3,9 +3,22 @@ defmodule DpExchange.Core.AdapterContract do
   The conformance suite every venue package runs in its own CI.
 
   **This is the mechanism.** Prose in six `CLAUDE.md` files drifts; a suite that runs in
-  five CI pipelines cannot. It ships inside the Hex tarball — `test/support` is in
-  `mix.exs`'s `files:` — so a venue package gets it as a dependency and runs it against
-  itself.
+  five CI pipelines cannot.
+
+  ## Why this lives in `lib/` and not `test/support/`
+
+  It was in `test/support/` first, following the reference repo, and **that does not
+  work for a suite consumers run.** `elixirc_paths(:test)` governs *this* package's own
+  build; a dependency is not compiled in the `:test` environment, so the file shipped
+  inside the tarball and was never compiled into the consumer. A venue package's
+  `use DpExchange.Core.AdapterContract` failed with *module not loaded and could not be
+  found* — the suite present on disk and absent from the code path.
+
+  Shipping a file is not the same as shipping a module. A public testing API belongs in
+  `lib/`, which is why `Ecto.Adapters.SQL.Sandbox` and `Phoenix.ConnTest` live there.
+
+  `use ExUnit.Case` appears only inside the generated block, so nothing here needs
+  ExUnit at compile time and this compiles cleanly as a dependency.
 
       defmodule DpExchange.Coinbase.ContractTest do
         use DpExchange.Core.AdapterContract,
@@ -78,7 +91,8 @@ defmodule DpExchange.Core.AdapterContract do
       purity(),
       isolation(),
       helpers(),
-      arg_helpers()
+      arg_helpers(),
+      purity_helpers()
     ]
   end
 
@@ -355,18 +369,38 @@ defmodule DpExchange.Core.AdapterContract do
       # --- 7, 10, 11. purity, exclusivity, self-sufficiency ----------------
 
       describe "7. purity" do
-        test "the package's source references no host application" do
-          # These literals are the check, so they necessarily appear in a package that
-          # ships this suite. A tarball audit will flag this line; it is the assertion
-          # forbidding the thing, not the thing.
-          for path <- Path.wildcard(Path.join(@package_root, "**/*.ex")),
-              namespace <- ["DpCryptoManagement.", "Phoenix.", "Ash.", "Cloak.", "Ecto."] do
-            source = File.read!(path)
+        test "the compiled package links against nothing but its declared dependencies" do
+          # Asserted from the BEAM's `imports` chunk rather than by grepping for a list
+          # of forbidden namespaces. Two reasons, and the second is the better one.
+          #
+          # A name list has to contain the names it forbids, so a package shipping this
+          # suite fails its own check — which is how this assertion was first written.
+          #
+          # More importantly, a list only forbids what someone thought to list. The
+          # imports chunk answers the real question: does this package reach for anything
+          # its consumers have not agreed to install? A transitive reference nobody
+          # noticed shows up here and in no grep.
+          config = Mix.Project.config()
+          app = config[:app]
+          declared = for {dep, _rest} <- config[:deps], do: dep
 
-            refute strip_docs(source) =~ namespace,
-                   "#{path} references #{namespace} — a public package cannot depend on " <>
-                     "an application its consumers do not have"
-          end
+          linked =
+            Mix.Project.build_path()
+            |> Path.join("lib/#{app}/ebin/*.beam")
+            |> Path.wildcard()
+            |> Enum.flat_map(fn beam ->
+              {:ok, {_module, [imports: imports]}} =
+                :beam_lib.chunks(String.to_charlist(beam), [:imports])
+
+              Enum.map(imports, fn {module, _fun, _arity} -> module end)
+            end)
+            |> Enum.uniq()
+
+          foreign = Enum.reject(linked, &permitted_module?(&1, declared))
+
+          assert foreign == [],
+                 "#{app} links against modules outside stdlib and its declared " <>
+                   "dependencies: #{inspect(foreign)}"
         end
       end
 
@@ -500,11 +534,32 @@ defmodule DpExchange.Core.AdapterContract do
       defp arg_value(:opts), do: []
 
       defp sample_symbol, do: List.first(@sample_pairs) || "BTC-USD"
+    end
+  end
 
-      defp strip_docs(source) do
-        source
-        |> String.replace(~r/@(module)?doc\s+"""..*?"""/s, "")
-        |> String.replace(~r/^\s*#.*$/m, "")
+  # Which modules a package may legitimately link against.
+  defp purity_helpers do
+    quote location: :keep do
+      # Asked of the loaded module's own beam path rather than of a list of names.
+      #
+      # A module loaded from `deps/<name>/` came from dependency `<name>`; anything else
+      # is OTP, the Elixir standard library, or this package itself. That is both simpler
+      # than a name list and strictly stronger: it catches a dependency nobody declared,
+      # which no list of forbidden namespaces ever could — a list only forbids what
+      # someone thought to write down.
+      defp permitted_module?(module, declared) do
+        case :code.which(module) do
+          path when is_list(path) -> from_declared_dep?(to_string(path), declared)
+          # Preloaded (`:erlang`) or not on disk. Neither is a foreign dependency.
+          _preloaded -> true
+        end
+      end
+
+      defp from_declared_dep?(path, declared) do
+        case Regex.run(~r{/deps/([^/]+)/}, path) do
+          [_match, dep] -> String.to_atom(dep) in declared
+          nil -> true
+        end
       end
     end
   end

@@ -25,9 +25,14 @@ defmodule DpExchange.PackagingTest do
   end
 
   describe "what must ship" do
-    test "the conformance suite ships — venue packages cannot run it otherwise" do
-      assert "test/support" in package_files()
-      assert File.exists?("test/support/adapter_contract.ex")
+    test "the conformance suite ships AS A COMPILED MODULE, not as a file" do
+      # It lived in `test/support/` first. The file shipped and was never compiled,
+      # because a dependency is not built in the `:test` environment — so a venue
+      # package's `use DpExchange.Core.AdapterContract` failed with "module not loaded".
+      # Shipping a file is not shipping a module.
+      assert "lib" in package_files()
+      assert File.exists?("lib/dp_exchange/core/adapter_contract.ex")
+      refute "test/support" in package_files()
     end
 
     test "usage rules ship — they are how the contract reaches a consumer's agent" do

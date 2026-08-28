@@ -1159,8 +1159,10 @@ strip host-repo cross-references.
       blocker, but it belongs before the first push rather than after it.
       **4.3's first half is done**: the repository went public 2026-08-28, with zero
       commits, so D17's "flipping public exposes every commit ever made" had nothing to
-      expose. `HEX_API_KEY` cannot be verified from here — reading Actions secrets is
-      also 403.
+      expose. **`HEX_API_KEY` is an organization key that already exists and already
+      works** — influx-elixir publishes with it today (D4) — so there is nothing to
+      obtain, only the existing org secret to be visible to this repo. Whether it is
+      cannot be checked from here: reading Actions secrets is also 403.
       Everything checkable without a remote has been checked: 274 tests, `mix quality`
       clean, coverage 91.83%, the tarball audited by extraction (4.2).
 - [x] ~~**4.2** `mix hex.build` — inspect the tarball contents. This is the **last

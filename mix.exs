@@ -114,8 +114,11 @@ defmodule DpExchangeCore.MixProject do
       # into the tarball while the conformance suite and `usage-rules.md` did not.
       # Nothing warns about this. Inspect `mix hex.build` output before every publish.
       #
-      # `test/support` ships on purpose: it carries the conformance suite every venue
-      # package runs against itself.
+      # `test/support` deliberately does NOT ship. The conformance suite moved to `lib/`
+      # because a dependency is never compiled in the `:test` environment — shipping the
+      # file left it uncompiled and unusable in the consumer, which is the whole point of
+      # shipping it. What remains in `test/support` is this package's own reference venue,
+      # which proves the suite works here and is of no use to a consumer.
       #
       # `config/` is deliberately absent — it governs this package's own dev and test
       # only, never a consumer's.
@@ -123,7 +126,6 @@ defmodule DpExchangeCore.MixProject do
       # `priv/` is absent because the only thing in it is the dialyzer PLT.
       files: [
         "lib",
-        "test/support",
         "mix.exs",
         ".formatter.exs",
         "README.md",
