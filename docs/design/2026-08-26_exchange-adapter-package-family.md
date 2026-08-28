@@ -308,7 +308,7 @@ the next phase might need.
 | **3** | Core: the contract + reference fake | 7 | conformance suite runs | ✅ **7/7 done** |
 | **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.7 live** |
 | **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ✅ **15/15 — 0.1.2 published; 5.13 filed as host issue #1** |
-| **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | 🔄 **6.1 gemini code-complete — 180 tests green, awaiting Core 0.1.8 publish; 3 Core defects found** |
+| **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | ✅ **6.1 gemini shipped — 319 tests, 97.18% coverage; 3 Core defects found; auth boundary + demo environment corrected by architect** |
 | **7** | **Schwab**, greenfield | 5 | blocked until the architect supplies the docs (§10) | ☐ not started |
 | **8** | Close | 4 | this doc moves to `docs/design/closed/` | ☐ not started |
 
@@ -1684,12 +1684,12 @@ package ships. Everything goes to public hexpm; nothing is ever published privat
 **The four the host runs on** — `auto_collect: true` today; these are what make the
 packages match real usage (O0) and the only ones that can graduate (D15):
 
-- [~] **6.1** `gemini` (6 files) — closes §5.5 by owning the `"gemini"` branch of
+- [x] ~~**6.1** `gemini` (6 files) — closes §5.5 by owning the `"gemini"` branch of
       `parse_rate_limit_headers/2`; second venue to absorb a socket lifecycle per D12,
       with Coinbase 5.5 setting the shape; `l2_book.ex`; 10-pairs-per-socket sharding.
       Also the first real test of §6.1.4: `sep: ""` plus `String.downcase/1` is a harder
-      round-trip than Coinbase's identity mapping (D11).
-      **In progress 2026-08-28.** Scaffold complete (toolchain gate satisfied by
+      round-trip than Coinbase's identity mapping (D11).~~
+      **Complete 2026-08-28, pushed to `main`.** Scaffold complete (toolchain gate satisfied by
       measurement, not restart — mise reports `1.18.4-otp-28` / `28.0.2` in the new repo).
       Extraction pinned at host `553fa787`, subtree **dirty again** — 3 of 5 source files
       and 1 test file uncommitted, per-file SHA-256 recorded. 3,359 LOC of adapter,
@@ -1772,6 +1772,89 @@ packages match real usage (O0) and the only ones that can graduate (D15):
       - `get_price/2` built a `Quote` with `nil` prices from a 200 that was not a ticker —
         a struct that passes every type check and means nothing. Now
         `{:error, :unexpected_response_shape}`.
+      **Two architect corrections landed after the package was first complete, and both
+      changed the design rather than adding to it.**
+      **1. The demo environment is first-class (architect, 2026-08-28).** Gemini's sandbox
+      is a *full exchange with test funds* — bots make the book, accounts are credited
+      $100k USD and 1,000 BTC — which is what lets the **host** exercise its trading code
+      against real venue machinery with fake money. `environment: :production | :sandbox`
+      now drives REST and WebSocket alike, resolving from an explicit option, then
+      `Core.Config` (per **process**, walking `$callers`), then production. An unknown
+      value **raises**: the failure is asymmetric, since meaning demo and getting
+      production sends a real order to a real exchange.
+      A **third documentation defect** fell out of it — the market-data page names
+      `exchange.sandbox.gemini.com` as the sandbox base URL, which is the *website*;
+      `/v1/symbols` there is a 404 HTML page while `api.sandbox` serves 391 symbols. Same
+      shape as the other two: the page is close, and close is indistinguishable from
+      correct until measured.
+      **The architect then asked the question that found two real bugs**: can a host run
+      real and demo *at the same time* — live trading in one process, strategy testing in
+      another? It could not, and worse, it half-could:
+      - **A name collision.** One shared set of default names meant the second tree simply
+        failed to start. Loud, and merely blocking.
+      - **A shared rate-limit bucket**, which is the dangerous one because it is silent. A
+        REST call carrying `environment: :sandbox` but no `:limiter` metered against the
+        **production** bucket. Demo strategy testing would spend the budget live trading
+        depends on, surfacing as a 429 on a real order at an arbitrary later moment with
+        nothing pointing back at the cause.
+      Supervisor, feed and limiter names now all derive from the environment, so the two
+      trees coexist with nothing named. **Neither bug is reachable by testing sandbox
+      alone** — both need production and demo live simultaneously, which is exactly the
+      case that was not being tested until it was asked for.
+      **2. This package does not handle authentication (architect, 2026-08-28).** It
+      *signs*; the **host** authenticates and **chooses which kind**. `Auth.headers/5` now
+      takes the scheme as an argument, supports `:api_key` and `:oauth`, and refuses an
+      unknown scheme or mismatched credentials rather than inferring or half-signing. The
+      original took `%{api_key:, api_secret:}` and so had quietly decided HMAC *was* the
+      authentication.
+      The venue's own documentation is the argument: OAuth 2.0 here means registering an
+      application, fixing its client type permanently, redirecting **users** to approve
+      scopes, PKCE for public clients, and refreshing a 24-hour token forever. A venue
+      package has no browser, no redirect URI and nowhere safe for a refresh token.
+      Guessing is also actively punished — the venue returns `AmbiguousAuthentication`
+      (400) when V1 key headers and OAuth headers arrive together.
+      Consequences carried through: every authenticated endpoint stays `:unsupported`
+      regardless of environment, and **`.env.sample` now carries no venue credential at
+      all** — there is nothing here for one to do, and an unused credential in a public
+      repo is a liability with no upside.
+      **3. Account and trading are IMPLEMENTED — I had marked them `:unsupported` and that
+      contradicted the spec (architect, 2026-08-28).** §6.0 lists `get_balances/2` through
+      `get_trade_history/2` as facade endpoints, and the exclusions section draws the line
+      exactly: credential **storage** is host-side and never leaves, while credential
+      **use** — signing, session refresh, token rotation — "is venue strategy and crosses
+      into the package per D12; credentials themselves arrive as function arguments
+      (invariant #2)".
+      I over-corrected from "you do not handle auth" into "implement nothing", which made
+      trading impossible through the facade — the opposite of what the plan says and of
+      why the demo environment matters. **The lesson is not about auth**: I had a detailed
+      written spec and improvised instead of reading it, twice in one phase.
+      Now implemented in `Private`: nine account/trading callbacks plus `test_connection/2`
+      against the venue's own authenticated heartbeat. Only two endpoints remain
+      `:unsupported` and neither concerns authentication — `list_instruments/1` (346
+      symbols, no bulk endpoint) and `get_rate_limit_status/2` (no headers exist).
+      **The venue serves no market orders**, and its documented workaround is an IOC order
+      "coupled with an aggressive limit price" — a price the caller never supplied.
+      `:market` and `:stop` are errors. This is the family's named failure mode at its most
+      expensive: every other instance costs a wrong number in a chart, this one costs a
+      fill at a price nobody chose. `supported_order_types` exists precisely so the venue
+      says this rather than a package guessing.
+      **Coverage: the instrument mattered more than the effort.** Six rounds of adding
+      tests moved coverage 0.00% because I was guessing which lines were uncovered — the
+      cover HTML leaves uncovered lines blank, identically to non-executable ones. One
+      script importing the coverdata (`:cover` is loadable from plain `elixir`; `mix run`
+      prunes it from the code path) gave the exact list, and the dominant cause was **dead
+      default-argument heads** on internal modules: `def get_price(symbol, opts \\ [])` in
+      `Rest` generates a `get_price/1` nothing calls, because the facade always passes
+      opts. Removing them from `Rest`, `Private` and `Feed` — and covering `Fake`'s short
+      arities, which consumers really do call — took coverage **89.50% → 97.18%**.
+      Two real defects fell out of the tests written for those branches: `book_time/1`
+      crashed on a venue sending `"asks": null`, reaching a caller as a crash rather than
+      an answer; and `epoch_ms/1` silently dropped **float** timestamps, so an order from a
+      float-encoding venue had no time at all. JSON has one number type — `Rest` handled
+      this and `Private` did not.
+      **Final state**: 319 tests (304 tier-1, 15 tier-2 live including the demo
+      environment), 0 failures, `mix quality` exit 0, coverage **97.18%**, built against
+      the published `dp_exchange_core 0.1.8`. Pushed to `main` 2026-08-28.
       **Still open**: `list_instruments/1` is `:unsupported` (346 symbols, no bulk detail
       endpoint — one request per symbol is not a listing), and the no-sharding claim is
       exercised with a handful of symbols rather than the full catalogue, which is stated
@@ -4829,5 +4912,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.83 — **Phase 5 closed: 15/15, adoption issue filed as `dp_crypto_management#1`.** Phase 6.1 gemini **code-complete**: 180 tier-1 + 10 tier-2 tests green, `mix quality` clean, coverage 90.03%, and the conformance suite's 28 assertions passed **first run** — the first venue to manage that. **The largest finding of the extraction is not ours**: Gemini replaced its WebSocket API and gave no notice beyond removing the old one from its docs site — four years of its dated changelog mention `marketdata` zero times — and its candles documentation names three of seven timeframes wrongly, which the venue's own 400 body corrects. The package speaks the documented API, which **only D12 makes affordable**. Three more Core defects found by ordinary use: ceilings could not carry a burst depth, `HttpClient` destroyed the 4xx evidence a refusal is made of, and a fourth wrong `@spec`. Core 0.1.7 → 0.1.8 pending publish. **D13 refined**: where a documented claim is directly measurable, the measurement is the source. 66/77 tasks.)
+**Last Updated**: 2026-08-28 (v1.84 — **Phase 6.1 gemini SHIPPED**: 319 tests (304 tier-1, 15 tier-2 live incl. the demo environment), `mix quality` clean, coverage **97.18%**, pushed to `main`. **Four documentation defects found on one venue in one day** — a replaced WebSocket API announced only by its absence from the docs site (four years of the venue's dated changelog mention `marketdata` zero times), three of seven candle timeframes that the API rejects, a sandbox base URL that is actually the website, and auth error codes that disagree with the live ones. **Two architect corrections reshaped the package**: the demo environment is first-class and production/demo run side by side with separate limiters (a shared bucket would have spent live trading's budget on strategy testing); and account/trading ARE implemented per §6.0 — credentials as arguments, signing in the package, storage and scheme-choice with the host. **`:market` orders are refused**, because the venue serves none and its documented workaround needs a price only the caller can choose. Three more Core defects found by ordinary use (burst depth had nowhere to be declared, `HttpClient` destroyed the 4xx evidence a refusal is made of, a fourth wrong `@spec`) → Core 0.1.8 published. **D13 refined**: where a documented claim is directly measurable, the measurement is the source. 67/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)
