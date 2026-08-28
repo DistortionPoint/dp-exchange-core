@@ -52,10 +52,28 @@ defmodule DpExchange.Core.HttpClient do
   @type account_id :: String.t()
   @type user_id :: String.t()
 
+  @typedoc """
+  A response as it comes back from the pipeline.
+
+  `body` is **whatever the transport decoded**, not a string. Req decodes JSON into a map
+  or a list before this module sees it, and only leaves a binary when it could not.
+
+  It was declared `String.t()`, and that was not a harmless inaccuracy: dialyzer then
+  concluded that any consumer matching a decoded body was matching something impossible,
+  so every function reachable only through that branch was reported as **unreachable
+  dead code**. A venue package's `mix dialyzer` failed with `Function decimal/1 will
+  never be called` about a function called on every price it parses.
+
+  The application this pipeline came from hit the same class of problem from the other
+  end and said so in a comment: a missing clause "poisoned dialyzer's success typing for
+  every `HttpClient.request/5` caller — the whole chain got narrowed to `{:error, _}`
+  only." A wrong type is worse than a missing one; it makes the tool confidently wrong,
+  and the reader believes it.
+  """
   @type http_response :: %{
           status: integer(),
-          headers: headers(),
-          body: String.t()
+          headers: headers() | map(),
+          body: term()
         }
 
   @type rate_limited_request_options ::
