@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-26
 **Status**: Implementing — approved by the architect 2026-08-27, Phase 0 underway
-**Version**: 1.79
+**Version**: 1.80
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -306,7 +306,7 @@ the next phase might need.
 | **1** | Core: mechanical moves | 10 | `mix quality` clean | ✅ **10/10 done** |
 | **2** | Core: the reworks — the two host dependencies severed | 11 | O2 satisfied | ✅ **11/11 done** |
 | **3** | Core: the contract + reference fake | 7 | conformance suite runs | ✅ **7/7 done** |
-| **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ⏸ **1/6 — blocked at 4.1** |
+| **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.2 live** |
 | **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ☐ not started |
 | **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | ☐ not started |
 | **7** | **Schwab**, greenfield | 5 | blocked until the architect supplies the docs (§10) | ☐ not started |
@@ -1146,7 +1146,17 @@ strip host-repo cross-references.
 
 ### Phase 4 — Publish Core `0.1.x`
 
-- [~] **4.1** CI green on `main` — **BLOCKED, and this is a real one.** CI cannot run
+- [x] ~~**4.1** CI green on `main`~~ — **done 2026-08-28.** Green on both runs, both
+      jobs, `quality` and `publish`.
+      **I branched first and should not have.** The convention is to branch off a
+      default branch, and I wanted CI proven before an irreversible publish. But this
+      was the *first commit in an empty repository*: there was no `main` to protect,
+      nothing to review against, and 4.1 says *CI green on `main`* in as many words.
+      Worse, pushing a branch to an empty repo made **that branch the default**, which
+      then had to be undone. Caution that costs a step and creates a defect is not
+      caution.
+      Superseded by the record below. Original text:
+      ~~CI cannot run
       until something is pushed, and **the repository has zero commits**: 22 paths are
       staged-in-waiting and nothing has ever been committed.
       Two things must happen first, both the architect's:
@@ -1164,7 +1174,7 @@ strip host-repo cross-references.
       obtain, only the existing org secret to be visible to this repo. Whether it is
       cannot be checked from here: reading Actions secrets is also 403.
       Everything checkable without a remote has been checked: 274 tests, `mix quality`
-      clean, coverage 91.83%, the tarball audited by extraction (4.2).
+      clean, coverage 91.83%, the tarball audited by extraction (4.2).~~
 - [x] ~~**4.2** `mix hex.build` — inspect the tarball contents. This is the **last
       reversible moment**: the next step is a permanent public artifact under a permanently
       claimed package name (D4). Verify no `DpCryptoManagement.*`, correct `files:` list,
@@ -1185,18 +1195,58 @@ strip host-repo cross-references.
       place so the next tarball audit does not chase it.
       This was the last reversible moment and it is now spent correctly: everything after
       4.3 is permanent.
-- [ ] **4.3** **ARCHITECT GATE (D4).** Architect makes
+- [x] ~~**4.3** **ARCHITECT GATE (D4).** Architect makes
       `DistortionPoint/dp-exchange-core` **public** and adds the org `HEX_API_KEY` secret. Manual,
       human, once. Must precede the publish so `source_url` and `package.links` resolve.
       Do not attempt from the pipeline.
       **Check the history for secrets first (D17)** — flipping the repo public exposes
-      every commit ever made, not just the current tree.
-- [ ] **4.4** First publish of `dp_exchange_core` to **public hexpm** — which lands as
-      `0.1.1`, not `0.1.0`: CI increments the seed in `mix.exs` before publishing (§7.3)
-- [ ] **4.5** Verify a scratch project can `mix deps.get` it and `use DpExchange.Core.AdapterContract`
-- [ ] **4.6** Confirm `publish` CI is armed — from here every merge to `main` releases a
+      every commit ever made, not just the current tree.~~ — **done 2026-08-28.** The
+      repository went public **with zero commits**, so D17's history exposure had
+      nothing to expose — the best possible ordering, arrived at by accident rather
+      than design. `HEX_API_KEY` is the existing organisation key (D4); nothing needed
+      obtaining, and the publish proved it reaches this repo.
+- [x] ~~**4.4** First publish of `dp_exchange_core` to **public hexpm** — which lands as
+      `0.1.1`, not `0.1.0`: CI increments the seed in `mix.exs` before publishing (§7.3)~~ —
+      **done 2026-08-28. `dp_exchange_core 0.1.1` is live on public hexpm**, exactly as
+      §7.3 predicted: the seed said `0.1.0`, CI incremented, the release is `0.1.1`. Tag
+      `v0.1.1`, GitHub release generated, `Release v0.1.1 [skip ci]` pushed back by the
+      bot. The offset is real and behaved as documented.
+      **`0.1.2` followed the same day** with 4.5's fix.
+- [x] ~~**4.5** Verify a scratch project can `mix deps.get` it and `use DpExchange.Core.AdapterContract`~~ —
+      **done 2026-08-28, and it found that D8 was still broken.** This is the task's
+      whole reason for existing and it earned itself on the first run.
+      `use DpExchange.Core.AdapterContract` failed with **"module is not loaded and
+      could not be found"**. The suite shipped inside the tarball — 3.6 fixed that — but
+      was **never compiled into the consumer**: `elixirc_paths(:test)` governs this
+      package's own build, and a dependency is not compiled in the `:test` environment.
+      The file arrived on disk and never reached the code path. **Shipping a file is not
+      shipping a module**, and 3.6's check could not tell the difference because it
+      asserted the tarball's contents rather than a consumer's outcome.
+      Moved to `lib/dp_exchange/core/adapter_contract.ex`, where a public testing API
+      belongs — `Ecto.Adapters.SQL.Sandbox` and `Phoenix.ConnTest` live there for the
+      same reason. `use ExUnit.Case` appears only inside the generated block, so nothing
+      needs ExUnit at compile time. `test/support` stopped shipping; what is left in it
+      is Core's own reference venue, of no use to a consumer.
+      **Assertion 7 was rewritten in the move, and is now better than specified.** §6.1.7
+      asked for a source scan against a list of forbidden namespaces — which meant a
+      package shipping this suite failed its own check, since the literals *are* the
+      check. It now reads the loaded module's beam path: a module from `deps/<name>/`
+      came from dependency `<name>`, anything else is OTP, the standard library or the
+      package itself. Simpler, and strictly stronger — **it catches a dependency nobody
+      declared**, which a name list never could, because a list only forbids what someone
+      thought to write down.
+      **Verified twice.** Against a path dep before publishing: 29 conformance tests
+      green on a conformant venue, 14 failures on a sloppy one — so the suite has teeth
+      from the consumer side too. Then against **`~> 0.1.2` from Hex** in a clean
+      project: the contract loads as a compiled module, the facade and its supporting
+      modules load, the usage rules are present, and the reference venue correctly does
+      **not** ship.
+- [x] ~~**4.6** Confirm `publish` CI is armed — from here every merge to `main` releases a
 
-      patch unattended (§7.3), by design
+      patch unattended (§7.3), by design~~ — **confirmed 2026-08-28 by two live releases.**
+      `0.1.1` on the first push and `0.1.2` on the second, each unattended: version bumped,
+      published, committed back, tagged, GitHub release created. It is armed and it works.
+      **Plan branches accordingly from here** — every merge to `main` is a release.
 ### Phase 5 — Coinbase, the reference extraction
 
 Coinbase is venue #1 (D11). It is the only venue that calls the §5.5 auth hooks, and it
@@ -4387,5 +4437,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.79 — **Phase 0 now genuinely complete, 15/15**; Phases 0–3 done, 43/77. The Core repository is **public** as of 2026-08-28, and went public with zero commits, so there was no history to expose. Secret scanning and push protection were attempted and refused with 403 — the fine-grained PAT can read the public repo but not change its settings; one architect click in Settings → Code security. Two more token-shaped placeholders removed, and the credential scan across all 90 tracked files now returns nothing. **Blocked at 4.1 on permission to commit** — rule 6 requires confirmation and rule 12 says never use git; nothing has been committed.)
+**Last Updated**: 2026-08-28 (v1.80 — **PHASE 4 COMPLETE. `dp_exchange_core` is live on public hexpm.** `0.1.1` published on the first push to `main`, `0.1.2` the same day. CI green both times, both jobs; the auto-increment, tag, release and bump-commit all behaved as §7.3 documented. **4.5 earned its place**: the conformance suite shipped in the tarball but was never *compiled* into a consumer, because a dependency is not built in the `:test` environment — D8 broken twice over, and 3.6's check could not see it because it asserted the tarball rather than the outcome. Moved to `lib/`, verified from Hex in a clean project. Assertion 7 now reads beam paths instead of a name list, which also catches an undeclared dependency. 49/77 tasks. Next: Phase 5, Coinbase.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)
