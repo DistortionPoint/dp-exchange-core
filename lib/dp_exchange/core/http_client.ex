@@ -109,8 +109,25 @@ defmodule DpExchange.Core.HttpClient do
   - `{:ok, http_response()}` on success
   - `{:error, reason}` on failure
   """
+  @typedoc """
+  Why a request did not produce a response.
+
+  Three shapes, and the spec used to name only the first — which made dialyzer tell every
+  consumer that its handling of the other two was unreachable dead code.
+
+    * `String.t()` — a plain message, when no `:provider` was given.
+    * `{:exchange_error, provider, reason}` — the same message tagged with the venue,
+      which is what a caller gets whenever it passes `:provider`, i.e. almost always.
+    * The rate-limit case is a **three-element tuple**, `{:error, :rate_limited,
+      retry_after: seconds}`, not a two-element one. Unusual, and worth stating rather
+      than leaving a caller to discover it from a `CaseClauseError`.
+  """
+  @type request_error :: String.t() | {:exchange_error, provider(), term()}
+
   @spec request(http_method(), String.t(), headers(), body(), rate_limited_request_options()) ::
-          {:ok, http_response()} | {:error, String.t()}
+          {:ok, http_response()}
+          | {:error, request_error()}
+          | {:error, :rate_limited, retry_after: non_neg_integer()}
   def request(method, url, headers \\ [], body \\ nil, opts \\ []) do
     _timeout = Keyword.get(opts, :timeout, 30_000)
     retry_attempts = Keyword.get(opts, :retry_attempts, 3)
