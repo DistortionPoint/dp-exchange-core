@@ -87,8 +87,29 @@ defmodule DpExchange.Core.Capabilities do
   There are **two** of these on a venue with a better authenticated path, and which
   applies depends on what the caller supplied. Carrying one number means a package holding
   credentials meters itself against the public limit and leaves most of its budget unused.
+
+  ## `:burst` is optional because most venues do not publish one
+
+  A GCRA limiter takes three parameters — rate, interval, and how far a caller may run
+  ahead of the rate before being made to wait. This type carried only the first two, so a
+  venue that **publishes its burst depth** had nowhere to declare it and the package had
+  to hardcode the number beside the declaration, which is precisely the drift this struct
+  exists to prevent.
+
+  Gemini publishes one: *"we offer a burst rate of five additional requests that are
+  queued"*. It is the first venue in the family to do so, and it found this gap.
+
+  Optional, not required, because a venue that does not publish a burst depth must not be
+  made to invent one — and `nil` here means "not published", which a consumer can tell
+  apart from a declared burst of zero.
   """
-  @type ceiling :: %{limit: pos_integer(), per_ms: pos_integer()} | nil
+  @type ceiling ::
+          %{
+            required(:limit) => pos_integer(),
+            required(:per_ms) => pos_integer(),
+            optional(:burst) => pos_integer()
+          }
+          | nil
 
   @typedoc """
   Roughly how many instruments the venue lists.
@@ -351,6 +372,18 @@ defmodule DpExchange.Core.Capabilities do
       unless match?(%{limit: l, per_ms: p} when is_integer(l) and is_integer(p), ceiling) do
         raise ArgumentError,
               "#{name} must be %{limit: pos_integer, per_ms: pos_integer}, got #{inspect(ceiling)}"
+      end
+
+      # `:burst` is optional, but a present one must be a real depth. A burst of zero
+      # would be a limiter that never lets anything through, and a string here would
+      # reach the limiter's arithmetic before anyone noticed.
+      case ceiling do
+        %{burst: burst} when not (is_integer(burst) and burst > 0) ->
+          raise ArgumentError,
+                "#{name} :burst must be a pos_integer when present, got #{inspect(burst)}"
+
+        _no_burst_or_valid ->
+          :ok
       end
     end
 

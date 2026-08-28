@@ -276,6 +276,41 @@ defmodule DpExchange.Core.HttpClientTest do
       assert message =~ "Server error (503)"
     end
 
+    test "raw_status: true hands a 4xx back intact so a venue can tell refusal from error" do
+      # The contract makes `{:refused, reason}` permanent and `{:error, reason}` possibly
+      # transient, and the venue says which in the 4xx body. Flattened into a message,
+      # that evidence is only recoverable by string-matching — and matching "404" also
+      # matches a body that happens to contain it.
+      body = %{"result" => "error", "reason" => "InvalidSymbol"}
+
+      assert {:ok, %{status: 400, body: returned}} =
+               HttpClient.request(:get, "https://venue.test/thing", [], nil,
+                 plug: responding(400, body),
+                 retry_attempts: 0,
+                 raw_status: true
+               )
+
+      assert returned["reason"] == "InvalidSymbol"
+    end
+
+    test "raw_status leaves 5xx alone — a server error is not a considered answer" do
+      assert {:error, message} =
+               HttpClient.request(:get, "https://venue.test/thing", [], nil,
+                 plug: responding(503, %{}),
+                 retry_attempts: 0,
+                 raw_status: true
+               )
+
+      assert message =~ "Server error (503)"
+    end
+
+    test "without raw_status a 4xx is still the message string every caller matches on" do
+      # Opt-in, so existing refusal detection keeps working. Changing this silently would
+      # turn a working `{:refused, :not_listed}` into a permanent error.
+      assert {:error, message} = get(plug: responding(404, %{}))
+      assert message =~ "Client error (404)"
+    end
+
     test "an unexpected status is reported as such rather than assumed successful" do
       assert {:error, message} = get(plug: responding(301, %{}))
       assert message =~ "Unexpected status (301)"

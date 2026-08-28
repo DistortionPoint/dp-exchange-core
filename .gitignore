@@ -48,3 +48,7 @@ Thumbs.db
 # Claude Code local state — agents ARE shared and committed; these are not
 .claude/settings.local.json
 .claude/projects/
+
+# Playwright MCP scratch — page snapshots and console logs from browser-driven
+# documentation reads. Never a package artifact.
+.playwright-mcp/

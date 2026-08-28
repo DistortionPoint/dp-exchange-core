@@ -115,3 +115,58 @@ documentation: 350 candles is a refusal rather than a truncation; no rate-limit 
 published at all; the public and authenticated tickers share one shape where the adapter
 assumed two. **All three are venue behaviour that changed or was never documented** — which
 is exactly the class this doc is about, found by the cheapest instrument available.
+
+---
+
+## From Phase 6.1 (Gemini), 2026-08-28
+
+**The negative result is the finding: a well-maintained changelog told us nothing.**
+Gemini publishes a dated revision history going back to 2022-06, updated the day before we
+read it. Gemini also, at some point, stopped documenting the WebSocket market-data
+endpoint the host's entire price feed runs on — `wss://api.gemini.com/v2/marketdata` — and
+replaced it with a different API at a different host. Searching four years of that
+changelog: `marketdata` **0 hits**, `l2_updates` **0**, `v2/marketdata` **0**, `sunset`
+**0**, `breaking` **0**. The two `deprecat*` hits are about prediction-market ticker
+formats.
+
+So the entire notice given for replacing a venue's streaming API was **its absence from
+the new documentation site**. A consumer diffing the changelog — the obvious mechanism,
+and the one this document was reaching for — would have seen nothing at all.
+
+**What would have caught it**: diffing the *documentation's own index*, not its changelog.
+The endpoint did not change behaviour and did not start failing; it stopped being listed.
+That suggests the cheap monitor is a stored list of the endpoint URLs a package depends on
+plus a periodic check that each still appears in the vendor's current documentation — a
+link-rot check, not a behaviour check. It is the only instrument in this list that would
+have fired here, and it costs one fetch per venue.
+
+**Documentation moving is itself a signal, and it is easy to miss because it works.**
+`https://docs.gemini.com/rest-api/` — the URL the host adapter's moduledoc cites — now
+301s to a different site. A 301 is invisible to `curl`, to a browser, and to a reader. The
+old content is gone; the redirect makes it look like a rename. **A permanent redirect on a
+documentation URL a package cites should be treated as a change notice**, because in this
+case it was the only one issued.
+
+**Documentation can be wrong about the thing it exists to specify.** Gemini's candles page
+lists seven `time_frame` values in an enum block; the live endpoint rejects three of them
+and names its real set in the error body. The page also contradicts *itself* — prose says
+`1day`, the enum list says `1d`, and only the prose is right. This is not drift between a
+package and a venue; it is drift between a venue and itself, and no amount of watching the
+package would find it. **Cheap rule: any documented value that is a literal the venue will
+accept or reject should be probed, because probing it costs one request and the failure
+mode is silent.**
+
+**A venue that names its accepted set in the error body is a gift.** Gemini's 400 carries
+`time_frame expects one of the following: [1m, 5m, 15m, 30m, 1hr, 6hr, 1day]`. That single
+response is a machine-readable capability declaration, more current than the documentation
+and free to obtain. Where a venue does this, an assertion can be written against the
+venue's *own* statement of its enum rather than against a list copied into our code —
+which is the difference between a test that notices a change and a test that has to be
+told about one.
+
+**The reverse also happened, and it is the more comfortable failure.** The host adapter's
+timeframe mapping is *more correct than the documentation that replaced the documentation
+it was written from*. It maps `1h → 1hr` because someone measured it on 2026-08-06; the
+current docs say `1h`, which fails. A pure documentation-follows-vendor rule would have
+regressed working code. **Measurement outranks documentation for anything measurable** —
+recorded as a refinement to D13 in the main plan, not a contradiction of it.

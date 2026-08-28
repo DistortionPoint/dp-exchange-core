@@ -104,9 +104,15 @@ defmodule DpExchange.Core.HttpClient do
   - `:account_id` - Account ID for account-aware rate limiting (optional)
   - `:user_id` - User ID for additional isolation (optional)
   - `:operation` - Operation type for fine-grained rate limiting (default: "default")
+  - `:raw_status` - Return `{:ok, response}` for a 4xx instead of an error string
+    (default: `false`). A venue package needs this to tell a **refusal** from an
+    **error**: the contract makes `{:refused, reason}` permanent and `{:error, reason}`
+    possibly transient, and the venue states which in the 4xx status and body. Without
+    it that evidence is flattened into a message and the venue has to string-match its
+    way back to it. 5xx is unaffected — a server error is not a venue's considered answer.
 
   ## Returns
-  - `{:ok, http_response()}` on success
+  - `{:ok, http_response()}` on success, and on a 4xx when `raw_status: true`
   - `{:error, reason}` on failure
   """
   @typedoc """
@@ -118,16 +124,30 @@ defmodule DpExchange.Core.HttpClient do
     * `String.t()` — a plain message, when no `:provider` was given.
     * `{:exchange_error, provider, reason}` — the same message tagged with the venue,
       which is what a caller gets whenever it passes `:provider`, i.e. almost always.
-    * The rate-limit case is a **three-element tuple**, `{:error, :rate_limited,
-      retry_after: seconds}`, not a two-element one. Unusual, and worth stating rather
-      than leaving a caller to discover it from a `CaseClauseError`.
+
+  ## Rate limiting arrives as a two-element error, not a three-element one
+
+  This spec used to advertise `{:error, :rate_limited, retry_after: seconds}` as a third
+  return shape. **`request/5` never returns it.** Both rate-limit paths convert to a
+  two-element error before returning, deliberately and for recorded reasons:
+
+    * a **venue 429** becomes `"Rate limited by the venue — retry after Ns"`, because a
+      three-element tuple reaching a `case` written for two-element ones crashed 152
+      collector tasks in one night;
+    * **our own limiter** refusing becomes `"Throttled by our own rate limiter (not the
+      venue)"`, because the two used to share wording and a self-inflicted refusal was
+      read as a flaky venue for weeks.
+
+  Both keep the retry interval in the message. The spec is corrected here rather than the
+  behaviour: a spec that names a shape the function cannot return sends dialyzer after
+  every caller that handles it, reporting correct code as unreachable — which is exactly
+  what it did to the Gemini package's rate-limit clause. Found 2026-08-28.
   """
   @type request_error :: String.t() | {:exchange_error, provider(), term()}
 
   @spec request(http_method(), String.t(), headers(), body(), rate_limited_request_options()) ::
           {:ok, http_response()}
           | {:error, request_error()}
-          | {:error, :rate_limited, retry_after: non_neg_integer()}
   def request(method, url, headers \\ [], body \\ nil, opts \\ []) do
     _timeout = Keyword.get(opts, :timeout, 30_000)
     retry_attempts = Keyword.get(opts, :retry_attempts, 3)
@@ -427,8 +447,24 @@ defmodule DpExchange.Core.HttpClient do
             429 ->
               handle_rate_limit(response, method, url, opts)
 
+            # A 4xx is where a venue says *why*, and the contract has a shape for it:
+            # `{:refused, reason}` is permanent and `{:error, reason}` may be transient,
+            # and a caller acts on the difference. Flattening the status and body into a
+            # message string destroys the only evidence that tells them apart — so a
+            # venue package that wants to produce a refusal has to string-match its way
+            # back, and `String.contains?(message, "404")` also matches a body that
+            # happens to contain "404".
+            #
+            # `raw_status: true` hands the response back intact and lets the venue decide.
+            # Opt-in rather than the default, because the string form is what every
+            # existing caller matches on and changing it silently would turn working
+            # refusal detection into a permanent error.
             status when status in 400..499 ->
-              {:error, "Client error (#{status}): #{format_body(resp_body)}"}
+              if Keyword.get(opts, :raw_status, false) do
+                {:ok, response}
+              else
+                {:error, "Client error (#{status}): #{format_body(resp_body)}"}
+              end
 
             status when status in 500..599 ->
               {:error, "Server error (#{status}): #{format_body(resp_body)}"}

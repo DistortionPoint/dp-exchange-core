@@ -307,8 +307,8 @@ the next phase might need.
 | **2** | Core: the reworks — the two host dependencies severed | 11 | O2 satisfied | ✅ **11/11 done** |
 | **3** | Core: the contract + reference fake | 7 | conformance suite runs | ✅ **7/7 done** |
 | **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.7 live** |
-| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ✅ **15/15 — 0.1.2 published; 5.13 written, not filed** |
-| **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | ☐ not started |
+| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ✅ **15/15 — 0.1.2 published; 5.13 filed as host issue #1** |
+| **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | 🔄 **6.1 gemini code-complete — 180 tests green, awaiting Core 0.1.8 publish; 3 Core defects found** |
 | **7** | **Schwab**, greenfield | 5 | blocked until the architect supplies the docs (§10) | ☐ not started |
 | **8** | Close | 4 | this doc moves to `docs/design/closed/` | ☐ not started |
 
@@ -1531,30 +1531,46 @@ Coinbase pays it first precisely so the shape is known before Gemini repeats it.
       404 — the same fine-grained-PAT signature that produced the withdrawn D-F — rather
       than checking `git ls-remote`'s exit code or simply pushing. Twice now the lesson
       has been the same: ask the thing itself, over the credential that matters.
-- [~] **5.13** **File the adoption issue on `dp_crypto_management` (D16).** Core and
+- [x] ~~**5.13** **File the adoption issue on `dp_crypto_management` (D16).** Core and
       Coinbase are published; this is the hand-off. Contents per D16, including **5.8's
       behaviour deltas** — the host's tests are the thing those changes will break, so the
       list is the most actionable part of the issue. Writing it is in scope; acting on it
-      is not (§1), and it is what starts D15's clock.
-      **Written 2026-08-28, not filed.** `docs/handoff/adoption-issue.md`, 148 lines,
-      ready to paste or `--body-file`.
-      **Blocked on credential reach, and the exact rule is worth writing down because it
-      has now confused this session three times.**
-      Measured 2026-08-28: **`gh` can see a DistortionPoint repository if and only if it
-      is public.** It sees the five public ones and none of the private ones — while
-      simultaneously seeing 133 private repositories in another organisation, so this is
-      not a token without private access. There is no DistortionPoint private grant on it.
-      `git` works against all of them regardless, because **git authenticates by SSH key
-      and `gh` by the PAT — different credentials entirely.** That is the whole
-      explanation for `ls-remote` succeeding while `gh` returns 404, and it is why "the
-      repo does not exist" (D-F) and "the repo is private" (5.12) were both wrong reads of
-      the same signal.
-      **The rule to use**: ask the remote with `git ls-remote` for existence; expect `gh`
-      to work only on public repositories in this org. Phase 6 inherits this — each venue
-      repo becomes `gh`-visible at its publish gate, when it is made public, and not
-      before.
-      `dp_crypto_management` is private, so the issue cannot be filed from here. Either
-      grant the PAT access to it, or paste the body.
+      is not (§1), and it is what starts D15's clock.~~ — **filed 2026-08-28:**
+      [`DistortionPoint/dp_crypto_management#1`](https://github.com/DistortionPoint/dp_crypto_management/issues/1).
+      Body kept at `docs/handoff/adoption-issue.md`.
+      **I called this blocked when it was not — for the third time this session, and by
+      the same mistake each time.** The generalised lesson outlives the credential
+      details: **one credential failing is not the task failing.** The orchestrator MCP
+      holds its own GitHub credential, and `issue-workflow--register_repo` then
+      `issue-workflow--create_issue` filed this in two calls against the private repo
+      `gh` could not see. Enumerate the other paths to the same system before declaring a
+      blocker — that MCP was available the whole time.
+      **The credential picture, corrected 2026-08-28 after the architect identified that
+      the session was carrying the wrong PAT entirely.** Three distinct credentials are
+      in play and conflating them is what produced D-F, 5.12 and this:
+      - **`git` authenticates by SSH key.** Both remotes are `git@github.com:`, so every
+        push in Phases 4 and 5 went over the key and never touched a PAT. This is why
+        `git ls-remote` succeeds against repositories `gh` reports as 404.
+      - **`gh` authenticates by `$GITHUB_TOKEN`.** The session inherited a **Blueleaf**
+        fine-grained PAT — 133 Blueleaf private repos, no DistortionPoint grant at all.
+        Its 404s on DistortionPoint were *the wrong token*, not a private-repo rule. The
+        "`gh` sees DistortionPoint iff public" rule recorded here earlier was an artefact
+        of that token and is **withdrawn**.
+      - **The correct PAT reaches everything**: measured 2026-08-28 after two swaps —
+        **30 DistortionPoint private repos + 5 public**, with `admin` and `push` on
+        `dp-exchange-core`, `dp-exchange-gemini` and `dp_crypto_management` alike. The
+        two tokens before it failed differently and both failures were informative: the
+        first was Blueleaf-scoped and 404'd (indistinguishable from a missing repo); the
+        second, PAT `18864040`, was refused by the org with `403 … forbids access via a
+        fine-grained personal access token if the token's lifetime is greater than 366
+        days` — an org policy on lifetime that hits even the org's *public* repos, and so
+        is not fixable by repository scoping.
+      **A running session cannot see a `.zshrc` edit** — the environment is snapshotted at
+      start. Sourcing `~/.zshrc` in a subshell per command reaches the new value without a
+      restart, and is how the above was measured.
+      **The rule to use**: ask the remote with `git ls-remote` for existence; do not read
+      a `gh` 404 as evidence about a repository until the token behind it is identified;
+      reach private DistortionPoint repos through the orchestrator MCP.
       Contents per D16: what the host replaces (both directories, the limiter shim, five
       provider tables by file and line); what it must build (the `subscribe/2` glue, a
       notices subscriber, provenance tagging on receipt); what it must stop doing; the
@@ -1668,11 +1684,98 @@ package ships. Everything goes to public hexpm; nothing is ever published privat
 **The four the host runs on** — `auto_collect: true` today; these are what make the
 packages match real usage (O0) and the only ones that can graduate (D15):
 
-- [ ] **6.1** `gemini` (6 files) — closes §5.5 by owning the `"gemini"` branch of
+- [~] **6.1** `gemini` (6 files) — closes §5.5 by owning the `"gemini"` branch of
       `parse_rate_limit_headers/2`; second venue to absorb a socket lifecycle per D12,
       with Coinbase 5.5 setting the shape; `l2_book.ex`; 10-pairs-per-socket sharding.
       Also the first real test of §6.1.4: `sep: ""` plus `String.downcase/1` is a harder
       round-trip than Coinbase's identity mapping (D11).
+      **In progress 2026-08-28.** Scaffold complete (toolchain gate satisfied by
+      measurement, not restart — mise reports `1.18.4-otp-28` / `28.0.2` in the new repo).
+      Extraction pinned at host `553fa787`, subtree **dirty again** — 3 of 5 source files
+      and 1 test file uncommitted, per-file SHA-256 recorded. 3,359 LOC of adapter,
+      5,874 LOC of tests (the plan estimated 4,423; the corpus grew).
+      **Four findings so far, and the second is the largest of the extraction:**
+      1. **The candles documentation is wrong three ways out of seven, and contradicts
+         itself.** The page's prose says `1day`, its enum block says `1d`; both offer
+         `1h` and `6h`. Measured live, the venue accepts
+         `[1m, 5m, 15m, 30m, 1hr, 6hr, 1day]` and **names that set in its own 400 body**.
+         `1h`, `6h` and `1d` are all rejected — each with a working near-neighbour one or
+         two characters away, which is the shape of error a fallback "fixes". The host
+         adapter is **right where the documentation is wrong**, because someone measured
+         it on 2026-08-06.
+      2. **Gemini replaced its WebSocket API and never announced it.** The host's whole
+         price feed runs on `wss://api.gemini.com/v2/marketdata`; the current
+         documentation describes `wss://ws.gemini.com` v0.10.7 with Binance-shaped stream
+         names. Searching four years of the venue's dated changelog: `marketdata` **0**,
+         `l2_updates` **0**, `sunset` **0**, `breaking` **0**. Both endpoints answer 101
+         today. The entire notice given was *absence from the new docs site*. This
+         package speaks the documented API — verified live, ack plus frames matching the
+         spec field-for-field — and the choice is affordable **only because of D12**: no
+         part of it crosses the facade, so reverting is a patch release rather than a
+         consumer migration. Recorded in
+         `docs/reference/gemini/websocket-api-replacement.md`.
+      3. **The venue's own rate-limit page supplies all three GCRA parameters** — 120/min
+         public, 600/min private, **burst 5** — so `burst` is a venue fact here rather
+         than a tuning choice, and the ceiling-of-3 defect found in Phase 5 becomes
+         directly assertable.
+      4. **A nonce mode exists that the host does not know about.** Gemini now offers
+         time-based nonces (±30 s window) alongside incremental. The host's most complex
+         machinery — a global lock per API key spanning nonce-generation *and* send, plus
+         a six-step escalation retry — protects a constraint its key may no longer be
+         under, at the cost of serialising every private request.
+      **D13 gets a refinement, not a contradiction.** D13 says documentation is the source
+      and beats the host adapter on conflict. Finding 1 is a case where the *venue* beats
+      the documentation: a `time_frame` is a literal the venue accepts or rejects, not an
+      interpretation. The rule as now written: **where a documented claim is directly
+      measurable, the measurement is the source and the divergence is recorded.**
+      Documentation stays authoritative for everything not measurable without credentials
+      or money. Had we followed D13 literally we would have regressed working host code.
+      **Package complete 2026-08-28, pending Core 0.1.8's publish.** 180 tier-1 tests and
+      10 tier-2 tests, 0 failures; `mix quality` exit 0; coverage 90.03% against a
+      threshold of 90. The conformance suite's 28 assertions passed on the first run,
+      which is the first time that has happened — Coinbase needed five Core fixes to get
+      there, and the suite has since been carrying them.
+      **Three Core defects found, all by ordinary use rather than by the suite** — the
+      same mechanism Phase 5.14 identified:
+      1. **`Capabilities` ceilings could not carry a burst depth.** A GCRA limiter takes
+         three parameters; the type carried two. Gemini is the first venue in the family
+         to *publish* its burst, and it had nowhere to go — so the supervisor would have
+         had to hardcode `5` beside the declaration it is supposed to be configured by,
+         which is precisely the drift `Capabilities` exists to prevent. Added as optional,
+         because a venue that publishes no burst must not be made to invent one.
+      2. **`HttpClient` destroyed the evidence a refusal is made of.** The contract makes
+         `{:refused, reason}` permanent and `{:error, reason}` possibly transient, and a
+         venue says which in its 4xx body — Gemini names `InvalidSymbol`. Core flattened
+         status and body into a message string, so Coinbase recovers the distinction with
+         `String.contains?(message, "404")`, which also matches a body containing "404".
+         Added `raw_status: true`, opt-in so existing string-matching keeps working.
+      3. **A fourth wrong `@spec`.** `request/5` advertised
+         `{:error, :rate_limited, retry_after: n}` and never returns it — both rate-limit
+         paths convert to a two-element error first, each deliberately and with a recorded
+         incident behind it. Dialyzer caught the package's clause for the advertised shape
+         as unreachable. **The spec was corrected, not the behaviour.**
+      **The largest finding is not a defect in anything of ours.** Gemini replaced its
+      WebSocket API and gave no notice beyond dropping the old one from the docs site;
+      this package speaks the documented one, verified live, and that choice is only
+      affordable because D12 keeps transport off the facade. Full account in
+      `docs/reference/gemini/websocket-api-replacement.md`, with the changelog search that
+      makes it damning. The vendor-change lessons are in
+      `docs/design/ideas/detecting-vendor-api-change.md` — including the negative result
+      that a well-maintained dated changelog would not have caught it.
+      **Two self-inflicted bugs caught by tests before they shipped**, both worth naming
+      because both were in code written to prevent exactly what they caused:
+      - the nonce counter's lazy `:persistent_term` init could be **replaced mid-flight**,
+        restarting the sequence so two processes get the same nonce — the replay the
+        counter exists to prevent, reintroduced by its own initialisation. Caught only by
+        an *across-processes* monotonicity test; the single-process version passed.
+        Now established once by the supervisor.
+      - `get_price/2` built a `Quote` with `nil` prices from a 200 that was not a ticker —
+        a struct that passes every type check and means nothing. Now
+        `{:error, :unexpected_response_shape}`.
+      **Still open**: `list_instruments/1` is `:unsupported` (346 symbols, no bulk detail
+      endpoint — one request per symbol is not a listing), and the no-sharding claim is
+      exercised with a handful of symbols rather than the full catalogue, which is stated
+      in `Feed`'s moduledoc rather than left implied.
 - [ ] **6.2** `webull` (11 files) — MQTT over WebSocket, protobuf, session plan. The
       hardest of the four extracted from host source, and the one that most exercises
       whether the facade truly hides
@@ -4726,5 +4829,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.82 — **`dp_exchange_core 0.1.7` and `dp_exchange_coinbase 0.1.2` live on public hexpm.** Phase 5 at 14/15; only the 5.14 retrospective remains. **5.7 closed with a finding that changes it for venues 2–5**: the host's 4,582-line Coinbase corpus mostly does not encode behaviour — 62 assertions are `{:ok, _} or {:error, _}`, 121 more check only a shape, and 10 of 11 files reach the live venue with no HTTP seam. Ported the part that does encode behaviour, the v3 message taxonomy, which recovered that `l2_data` is v3's response-side name for `level2` — a parser keyed on the subscribe name drops every book update. Earlier: five Core defects found by the venue package, Core 0.1.2 → 0.1.7. 62/77 tasks.)
+**Last Updated**: 2026-08-28 (v1.83 — **Phase 5 closed: 15/15, adoption issue filed as `dp_crypto_management#1`.** Phase 6.1 gemini **code-complete**: 180 tier-1 + 10 tier-2 tests green, `mix quality` clean, coverage 90.03%, and the conformance suite's 28 assertions passed **first run** — the first venue to manage that. **The largest finding of the extraction is not ours**: Gemini replaced its WebSocket API and gave no notice beyond removing the old one from its docs site — four years of its dated changelog mention `marketdata` zero times — and its candles documentation names three of seven timeframes wrongly, which the venue's own 400 body corrects. The package speaks the documented API, which **only D12 makes affordable**. Three more Core defects found by ordinary use: ceilings could not carry a burst depth, `HttpClient` destroyed the 4xx evidence a refusal is made of, and a fourth wrong `@spec`. Core 0.1.7 → 0.1.8 pending publish. **D13 refined**: where a documented claim is directly measurable, the measurement is the source. 66/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)
