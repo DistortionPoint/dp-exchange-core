@@ -202,7 +202,22 @@ defmodule DpExchange.Core.HttpClient do
   ## Returns
   - List of authentication headers
   """
-  @spec build_auth_headers(http_method(), String.t(), body(), map(), atom()) :: headers()
+  @typedoc """
+  How to authenticate: one of the generic schemes, or a venue's own builder.
+
+  The function form is the hook that replaced a per-venue branch. The spec named only
+  `atom()` for a while after the hook was added, so a venue passing a builder — the whole
+  point of the hook — was told by dialyzer that the call "breaks the contract". Adding a
+  capability without widening its spec makes the tool argue against the feature.
+  """
+  @type auth_scheme ::
+          :hmac_sha256
+          | :basic
+          | :bearer
+          | (http_method(), String.t(), body(), map() -> headers())
+
+  @spec build_auth_headers(http_method(), String.t(), body(), map(), auth_scheme()) :: headers()
+
   def build_auth_headers(method, path, body, credentials, auth_type) do
     case auth_type do
       :hmac_sha256 ->
