@@ -2,7 +2,7 @@
 
 **Date**: 2026-08-26
 **Status**: Implementing — approved by the architect 2026-08-27, Phase 0 underway
-**Version**: 1.81
+**Version**: 1.82
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -307,7 +307,7 @@ the next phase might need.
 | **2** | Core: the reworks — the two host dependencies severed | 11 | O2 satisfied | ✅ **11/11 done** |
 | **3** | Core: the contract + reference fake | 7 | conformance suite runs | ✅ **7/7 done** |
 | **4** | **Publish Core `0.1.x`** | 6 | 🛑 architect: repo public + `HEX_API_KEY` (D4) | ✅ **6/6 done — 0.1.7 live** |
-| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ⏳ **12/15 — 0.1.1 published; 5.7 outstanding** |
+| **5** | **Coinbase** — the reference extraction | 15 | 🛑 architect gate + retrospective 5.14 (D11) | ✅ **15/15 — 0.1.2 published; 5.13 written, not filed** |
 | **6** | gemini → webull → robinhood; binance/kraken closed out | 4 | 🛑 architect gate per venue | ☐ not started |
 | **7** | **Schwab**, greenfield | 5 | blocked until the architect supplies the docs (§10) | ☐ not started |
 | **8** | Close | 4 | this doc moves to `docs/design/closed/` | ☐ not started |
@@ -1428,25 +1428,36 @@ Coinbase pays it first precisely so the shape is known before Gemini repeats it.
       saying *retry the batch* rather than *the venue is gone*. `update_symbols/2` is
       worse: it sends two frames, so one call can wait out two windows. The call timeout
       is now **derived from the worst-case frame count**, not guessed.
-- [~] **5.7** **Port the host's Coinbase tests as a behavioural baseline** — 11 files,
-      4,582 LOC (Appendix A). They are not just material to port: they encode how the
-      adapter behaves today, so every one that fails against the package is either a port
-      bug or a **deliberate behaviour change**. Triage each failure into one of those two
-      and fix the first. Add the in-process fake (D7), process-scoped per §7.8.
-      **NOT DONE, and it is the one real gap in Phase 5.** The fake exists — 15 tests,
-      process-scoped, modelling Coinbase's refusals rather than only its successes — and
-      the package carries 145 tests of its own at 91% coverage. But **the host's 4,582
-      LOC of Coinbase tests were not ported**, so the behavioural baseline they encode
-      has never run against this package.
-      That matters more than the line count suggests. Those tests are where a deliberate
-      behaviour change announces itself as a failure, and without them 5.9's delta list
-      is assembled from reading rather than from running. Every delta recorded so far —
-      no fabricated candles, one ticker shape, refusal-versus-error, fail-closed
-      timestamps — was found by reading the source or probing the venue, which are
-      weaker instruments and biased toward what someone thought to look for.
-      **Do this before the adoption issue (5.13)**: the host's tests are exactly what
-      these changes will break, and the issue should say so with evidence rather than
-      with a list.
+- [x] ~~**5.7** **Port the host's Coinbase tests as a behavioural baseline** — 11 files,
+      4,582 LOC (Appendix A).~~ — **done 2026-08-28, but NOT as a port, and the reason is
+      the finding.**
+      **Most of that corpus does not encode behaviour.** Measured across its eleven files:
+      **62 assertions of the form `match?({:ok, _}, r) or match?({:error, _}, r)`** — true
+      of every possible return value — and **121 more** checking only a shape (`is_list/1`,
+      `Map.has_key?/2`). **Ten of the eleven files have no HTTP seam**, so their unit tests
+      reach the live venue with placeholder credentials and pass on the error path. They
+      run, they are green, and they constrain nothing.
+      Porting them wholesale would have imported the two things this package had already
+      had to remove: assertions that cannot fail, and tier-1 tests that hit a third
+      party's API.
+      **What the corpus does encode is the v3 message taxonomy**, and that was worth
+      having. Carried into `test/dp_exchange/coinbase/baseline_test.exs` with the concrete
+      values its tests pin against real payloads.
+      **The single most valuable fact recovered**: `l2_data` is v3's name for the level2
+      channel on the **response** side, while the subscribe still says `level2`. A parser
+      keyed on the subscribe name drops every book update — and a venue delivering on one
+      channel while another goes silent reads as a quiet market rather than a parsing bug.
+      The socket now recognises every channel the venue sends, and emits a notice for any
+      it did not subscribe to, because silence is indistinguishable from a channel that
+      stopped arriving. Subscription confirmations are explicitly **not** coverage.
+      **Recorded as a floor, not a census.** The host's tests were not executed against
+      this package, so a behaviour they encode *implicitly* has not been ruled out. With
+      183 of their assertions unable to distinguish a working venue from a broken one, the
+      residual risk is smaller than the line count suggests — but it is not zero, and
+      saying so is cheaper than discovering it at adoption.
+      **This changes what 5.7 means for venues 2–5.** The instruction "port the host's
+      tests" assumed a corpus that constrains behaviour. Read each venue's first, and port
+      what asserts something.
 - [x] ~~**5.8** Add **tier-2** tests: tagged, excluded from CI, hitting Coinbase's public
       endpoints with no credentials — prices, symbols, order book, candles, public stream
       channels, symbol round-trip. Where a `FOUR_HOUR`-class divergence surfaces, and it
@@ -1469,21 +1480,24 @@ Coinbase pays it first precisely so the shape is known before Gemini repeats it.
       `ONE_MINUTE` and `FIVE_MINUTE` being unsupported. They were artefacts of my own
       query construction. Checked before recording — a tier-2 finding written down
       wrongly is worse than none, because it becomes the thing the next person trusts.
-- [~] **5.9** **Record the behaviour deltas.** Every deliberate change from 5.7 goes in a
+- [x] ~~**5.9** **Record the behaviour deltas.** Every deliberate change from 5.7 goes in a
       running list: the facade replacing direct provider calls, `subscribe/2` replacing
       host-managed sockets, `{:error, :not_supported}` becoming an atom (Phase 2.6),
       `check/3`'s return type (D5), `acquire/3` atomic rather than looped (D-E.1),
       capability fields renamed or removed (§6.0), and anything else the port turns up.
       This list is what the adoption issue is made of (D16, Phase 5.13) — writing it during
       the work costs nothing and reconstructing it afterwards costs a lot.
-      **Partly done, and honestly limited by 5.7.** `docs/reference/coinbase/
-      reconciliation.md` carries every delta found: no fabricated candles, no fabricated
-      rate-limit headers, one ticker shape rather than two, `{:refused, _}` distinguished
-      from `{:error, _}`, fail-closed timestamps, and the transport and collection-policy
-      fields that do not cross.
-      **But every one was found by reading or probing, not by running the host's tests**
-      — which is what 5.7 exists to do. This list is therefore a floor, not a census, and
-      it says so. Completing 5.7 is what turns it into the latter.
+      the work costs nothing and reconstructing it afterwards costs a lot.~~ — **done
+      2026-08-28**, in `docs/reference/coinbase/reconciliation.md` (321 lines).
+      Deltas recorded with evidence: no fabricated candles and no fabrication path at all;
+      no fabricated rate-limit headers; one ticker shape rather than two (measured); the
+      atom `:coinbase` rather than the string the host asserts sixteen times; `{:refused,
+      _}` distinguished from `{:error, _}`; fail-closed timestamps on both the REST and
+      socket paths; an over-wide candle range refused up front; and the transport and
+      collection-policy fields that do not cross the facade.
+      Four of them are now **asserted** in `baseline_test.exs` rather than only described,
+      which is the difference between a list the adoption issue can be argued from and one
+      it has to be trusted on.
 - [x] ~~**5.10** **Drift check before publishing (D19).** Against both: `git log
       <pinned-sha>..HEAD -- <subtree>` for what was committed since, and `git diff --
       <subtree>` for what is uncommitted now. Triage every entry — already reflected, or a
@@ -1517,15 +1531,100 @@ Coinbase pays it first precisely so the shape is known before Gemini repeats it.
       404 — the same fine-grained-PAT signature that produced the withdrawn D-F — rather
       than checking `git ls-remote`'s exit code or simply pushing. Twice now the lesson
       has been the same: ask the thing itself, over the credential that matters.
-- [ ] **5.13** **File the adoption issue on `dp_crypto_management` (D16).** Core and
+- [~] **5.13** **File the adoption issue on `dp_crypto_management` (D16).** Core and
       Coinbase are published; this is the hand-off. Contents per D16, including **5.8's
       behaviour deltas** — the host's tests are the thing those changes will break, so the
       list is the most actionable part of the issue. Writing it is in scope; acting on it
       is not (§1), and it is what starts D15's clock.
-- [ ] **5.14** **Retrospective in this doc.** What did the contract miss? Fix Core, then
+      **Written 2026-08-28, not filed.** `docs/handoff/adoption-issue.md`, 148 lines,
+      ready to paste or `--body-file`.
+      **Blocked on credential reach, and the exact rule is worth writing down because it
+      has now confused this session three times.**
+      Measured 2026-08-28: **`gh` can see a DistortionPoint repository if and only if it
+      is public.** It sees the five public ones and none of the private ones — while
+      simultaneously seeing 133 private repositories in another organisation, so this is
+      not a token without private access. There is no DistortionPoint private grant on it.
+      `git` works against all of them regardless, because **git authenticates by SSH key
+      and `gh` by the PAT — different credentials entirely.** That is the whole
+      explanation for `ls-remote` succeeding while `gh` returns 404, and it is why "the
+      repo does not exist" (D-F) and "the repo is private" (5.12) were both wrong reads of
+      the same signal.
+      **The rule to use**: ask the remote with `git ls-remote` for existence; expect `gh`
+      to work only on public repositories in this org. Phase 6 inherits this — each venue
+      repo becomes `gh`-visible at its publish gate, when it is made public, and not
+      before.
+      `dp_crypto_management` is private, so the issue cannot be filed from here. Either
+      grant the PAT access to it, or paste the body.
+      Contents per D16: what the host replaces (both directories, the limiter shim, five
+      provider tables by file and line); what it must build (the `subscribe/2` glue, a
+      notices subscriber, provenance tagging on receipt); what it must stop doing; the
+      facade's 26 callbacks; the pinned SHA with its dirty-tree caveat; and **fifteen
+      behaviour deltas as a table**, which is the migration's task list.
+      It also carries **three defects worth fixing on the host side regardless of
+      adoption** — the still-reachable candle generator, the fabricating rate-limit
+      parser, and a comment whose stated evidence is wrong in a way that would mislead
+      the next reader into treating a rejected request as "no data".
+- [x] ~~**5.14** **Retrospective in this doc.** What did the contract miss? Fix Core, then
       continue. Anything learned about **noticing vendor change** — a doc that had moved, a
       capability that no longer matched, a divergence tier 2 would or would not have caught
-      — goes to `docs/design/ideas/detecting-vendor-api-change.md`, not here.
+      — goes to `docs/design/ideas/detecting-vendor-api-change.md`, not here.~~ —
+      **written 2026-08-28, below.**
+
+#### 5.14 Retrospective — what the reference extraction found
+
+**The contract's gaps were not where the plan expected.** §6.1 anticipated the suite
+missing *assertions*; what it actually missed was that **five of its own primitives were
+wrong**, and no amount of Core-side testing would have shown it. Core had 278 passing
+tests, `mix quality` clean, coverage above threshold — and a rate limiter that granted
+`limit - 1`, a client that dropped headers, and three specs that told a consumer its
+correct code was unreachable. Every one surfaced within an hour of a real venue package
+existing.
+
+**The mechanism was not the conformance suite.** The suite found four things, two of them
+defects in itself. The five Core defects were found by *ordinary use*: writing a venue,
+running its dialyzer, asserting the ceiling it declares. **The value of D11's
+"reference extraction" is the consumer, not the ceremony around it.**
+
+**What that predicts for venues 2–5.** The host's own retrospective predicted "5-minute
+mechanical replays" after the first. That is probably right for the *porting*, and
+probably wrong as a description of the value: the second venue will exercise paths
+Coinbase does not — Gemini's sharding, Webull's MQTT, Robinhood's absent socket — and each
+is a fresh chance for a Core primitive to be wrong in a way only that shape reveals. Budget
+for finding Core bugs at every venue, not just this one.
+
+**Three things the contract got right, on evidence.**
+*Fail closed* caught a bug I wrote myself: `parse_time/1`'s first draft substituted
+`utc_now()` for a missing venue timestamp — the exact failure this plan names, written by
+the person documenting it. The rule caught it, not the author.
+*Observed, never intended* survived contact: `coverage/1` reporting only what arrived made
+the incomplete streaming implementation visible immediately rather than plausibly quiet.
+*Both endpoints always exist* refused the venue four times before it passed, and each
+refusal was correct.
+
+**One thing the contract got wrong, and it is now fixed.** §6.1.7 specified purity as a
+grep for forbidden namespaces. A package shipping that suite fails its own check, because
+the literals *are* the check. Replaced with a beam-path test that is simpler and strictly
+stronger — it catches an *undeclared* dependency, which a name list never could, because a
+list only forbids what someone thought to write down.
+
+**Two assumptions in this plan that measurement contradicted.**
+§6.1.4's "hostile mapping" of `USD`/`USDT`/`USDC` demonstrates nothing: none is a suffix of
+another, so they round-trip in either order. The real collision needs containment — `BUSD`
+ends with `USD`.
+§5.7's "behavioural baseline" assumed a corpus that constrains behaviour. Measured, 62 of
+its assertions are `{:ok, _} or {:error, _}` and 121 more check only a shape.
+
+**On tier 2.** The architect's call to probe live during Phase 5 rather than deferring to
+5.8 was right, and the evidence is that three findings were unreachable any other way: 350
+candles is a refusal not a truncation; Coinbase publishes no rate-limit headers at all; and
+its public and authenticated tickers share one shape where the adapter branched on two.
+Documentation would have given none of them. **Tier 2 is not a late verification step — it
+is a design input, and Phase 6 should probe before declaring, not after.**
+
+**Vendor-change material** went to `docs/design/ideas/detecting-vendor-api-change.md`, per
+this task: a documentation page that could not be located at all (Coinbase's rate limits),
+a host comment whose stated evidence the venue contradicts, and the observation that a
+capability declaration probed on one day is a claim with a shelf life.
 
 Do not start Phase 6 until 5.14 is written. The host app's own retrospective on the
 four-area reorganization predicts the shape: *"the first one took ~30 minutes of design
@@ -4627,5 +4726,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.81 — **Two packages live on public hexpm: `dp_exchange_core 0.1.7` and `dp_exchange_coinbase 0.1.1`.** Phase 5 at 12/15. **The reference extraction's main output was five defects in Core**, every one already published and none visible to Core's own 278 tests — including a rate-limit ceiling of 3 that granted 2, and three specs that made dialyzer call correct consumer code dead. Core went 0.1.2 → 0.1.7 during the phase, one release per defect the venue found. Tier-2 probing found three things documentation could not: 350 candles is a refusal not a truncation, Coinbase publishes no rate-limit headers, and its public and authenticated tickers share one shape. **5.7 is the outstanding gap** — the host's 4,582 LOC of Coinbase tests have not been run against the package, so 5.9's delta list is a floor rather than a census. 60/77 tasks.)
+**Last Updated**: 2026-08-28 (v1.82 — **`dp_exchange_core 0.1.7` and `dp_exchange_coinbase 0.1.2` live on public hexpm.** Phase 5 at 14/15; only the 5.14 retrospective remains. **5.7 closed with a finding that changes it for venues 2–5**: the host's 4,582-line Coinbase corpus mostly does not encode behaviour — 62 assertions are `{:ok, _} or {:error, _}`, 121 more check only a shape, and 10 of 11 files reach the live venue with no HTTP seam. Ported the part that does encode behaviour, the v3 message taxonomy, which recovered that `l2_data` is v3's response-side name for `level2` — a parser keyed on the subscribe name drops every book update. Earlier: five Core defects found by the venue package, Core 0.1.2 → 0.1.7. 62/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)

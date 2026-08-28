@@ -82,3 +82,36 @@ lands here rather than in the plan. Six extractions against six vendors' documen
 a good sample, and it is being gathered anyway.
 
 Delete this file when the work lands.
+
+---
+
+## Material from Phase 5 (Coinbase), 2026-08-28
+
+Fed by 5.14's retrospective, per that task.
+
+**A documentation page that could not be located at all.** Coinbase's rate limits are not
+findable from the API reference index or from `llms.txt`; three URL guesses returned 404.
+So the venue package declares its ceilings at rank 3 of D13's hierarchy — inherited from a
+prior implementation — and says so in `measured_against`. **The detector question this
+raises**: how would anyone notice if a vendor's documentation *moved* rather than changed?
+A link check catches a 404. Nothing catches a page that still resolves and no longer says
+what it said.
+
+**A host comment whose stated evidence the venue contradicts.** `coinbase/provider.ex`
+justifies a fix with *"an unrecognised enum returns EMPTY"*; the venue returns an explicit
+parse error. The conclusion held, the evidence did not. **This is the interesting shape**:
+the code was right and its recorded reason was wrong, so nothing failed and nothing would
+have. A test asserting the *venue's* behaviour rather than ours would have caught it, and
+that is what a tier-2 assertion is.
+
+**A capability declaration is a claim with a shelf life.** `measured_at` and
+`measured_against` exist now, so a declaration carries its own age. Nothing yet *reads*
+that age. The obvious next step is a check that fails, or at least warns, when a `:proven`
+or measured claim is older than some window and the venue has not been probed since —
+which turns provenance from documentation into a mechanism.
+
+**What tier 2 caught that nothing else could.** Three findings, none available from
+documentation: 350 candles is a refusal rather than a truncation; no rate-limit headers are
+published at all; the public and authenticated tickers share one shape where the adapter
+assumed two. **All three are venue behaviour that changed or was never documented** — which
+is exactly the class this doc is about, found by the cheapest instrument available.
