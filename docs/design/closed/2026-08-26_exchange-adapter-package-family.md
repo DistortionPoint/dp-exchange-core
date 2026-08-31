@@ -10,6 +10,17 @@
 
 ## 0. Read This First — Session Bootstrap
 
+> **ARCHIVED — this section describes 2026-08-26, not today.** The plan is `Implemented`
+> and lives in `docs/design/closed/`. Everything below in this section is the state of the
+> world when the plan was written: nine empty repositories and a host with the code still
+> in it. **Do not follow it as instructions.** Six packages are published, the repos are
+> not empty, and binance and kraken were removed from scope by D21 and never built.
+>
+> It is kept rather than trimmed because the bootstrap *is* part of the record — it shows
+> what was known on day one, which is what the retrospective in §11 is measured against.
+> For current state, read §11.
+
+
 This document is the **complete context handoff**. It was written from a session that
 had read the whole source tree; that session ends when this file is saved. Everything
 needed to start work is below or reachable from the paths below.
@@ -2360,6 +2371,11 @@ migration task — deciding the host's collection strategy remains out of scope 
       which is D13 arrived at from the other direction.
 - [x] **8.4** ~~`git mv` this doc to `docs/design/closed/`~~ — **done 2026-08-31, on the
       second attempt.**
+      **77/77 tasks and all six objectives — 83 checklist items, zero unchecked**, verified
+      by count rather than asserted. `closed/README.md` written, `.gitkeep` retired now that
+      the directory holds real content, and §0's session bootstrap given an archive banner:
+      it describes nine empty repositories and reads as instructions to anyone who opens
+      the file without context.
       Closed once prematurely: 7.5 had recorded seven contract gaps and deferred them, and
       a recorded gap is not a completed task. Reopened, all seven implemented, and closed
       again with nothing outstanding.
@@ -5084,10 +5100,13 @@ carries the reasoning. Retired numbers are not reused:
 | OQ26 | **D21** — *dissolved*, not answered: binance is out of scope, so there is no package whose entity to pick |
 | OQ18 | *withdrawn* to `docs/design/ideas/external-experimental-feedback.md` |
 
-**Nothing in Phases 0–6 is blocked.** The one remaining prerequisite is not a question
-this plan can answer:
+**Nothing was left blocked.** The one prerequisite this plan could not answer itself was:
 
-- **Blocking Phase 7**: Schwab API documentation, which the architect supplies (§10, D13).
+
+- **Blocked Phase 7**: Schwab API documentation, which only the architect could supply
+  (§10, D13). **Supplied 2026-08-31** — the architect signed the browser into the developer
+  portal, and both OpenAPI documents are committed under
+  `dp-exchange-schwab/docs/reference/schwab/`. Phase 7 closed on them. See 7.1.
 
 ---
 
@@ -5459,5 +5478,5 @@ was closed on the list.
 
 ---
 
-**Last Updated**: 2026-08-31 (v1.88 — **PLAN COMPLETE, second and final close.** All 84 items done, zero unchecked, retrospective appended, moved to `docs/design/closed/`. Published: core **0.1.13**, coinbase 0.1.3, schwab 0.1.3, gemini/webull/robinhood **0.1.2**. All six repos green — **1,364 tests, 0 failures**, every package above the 90 coverage threshold, credo `--strict` and dialyzer clean, CI green. **It was closed once prematurely**: 7.5 had recorded seven contract gaps and deferred them, and the architect was right that a recorded gap is not a completed task. Reopened; **all seven implemented**. Core gained `ceiling` `:scope` plus a legal zero `:limit` (a limiter keyed by credential silently over-permits a venue counting per account, and a registration granted zero throughput is not `:unsupported`), `supported_sessions` (`[:regular]` alone raises — it says nothing), `supports_order_preview` / `supports_order_replace` / `supports_multi_leg_orders`, `catalog_access`, the `preview_order/3` and `replace_order/4` callbacks — **required, not optional, because the facade is one fixed set** — four order types and eight instrument types. Schwab now implements both new callbacks for real and declares eight order types where it had declared four, and nine instrument types where it had declared `[:spot]` with a comment admitting that understated it. **Not versioned as breaking**: nothing consumes these packages yet and all five venues moved in the same change, so the `0.2.0` signal is deliberately unspent. **The retrospective's strongest finding**: eleven of the thirteen post-freeze contract additions came from **Schwab alone**, the one venue built greenfield — the four extractions each had a host adapter quietly answering questions before they were asked. **The second finding is about this plan**: seven gaps were documented so carefully that the deferral looked like completion. Recording is how work is tracked, not how it finishes. 84/84 tasks.)
+**Last Updated**: 2026-08-31 (v1.88 — **PLAN COMPLETE, second and final close.** All 84 items done, zero unchecked, retrospective appended, moved to `docs/design/closed/`. Published: core **0.1.13**, coinbase 0.1.3, schwab 0.1.3, gemini/webull/robinhood **0.1.2**. All six repos green — **1,364 tests, 0 failures**, every package above the 90 coverage threshold, credo `--strict` and dialyzer clean, CI green. **It was closed once prematurely**: 7.5 had recorded seven contract gaps and deferred them, and the architect was right that a recorded gap is not a completed task. Reopened; **all seven implemented**. Core gained `ceiling` `:scope` plus a legal zero `:limit` (a limiter keyed by credential silently over-permits a venue counting per account, and a registration granted zero throughput is not `:unsupported`), `supported_sessions` (`[:regular]` alone raises — it says nothing), `supports_order_preview` / `supports_order_replace` / `supports_multi_leg_orders`, `catalog_access`, the `preview_order/3` and `replace_order/4` callbacks — **required, not optional, because the facade is one fixed set** — four order types and eight instrument types. Schwab now implements both new callbacks for real and declares eight order types where it had declared four, and nine instrument types where it had declared `[:spot]` with a comment admitting that understated it. **Not versioned as breaking**: nothing consumes these packages yet and all five venues moved in the same change, so the `0.2.0` signal is deliberately unspent. **The retrospective's strongest finding**: eleven of the thirteen post-freeze contract additions came from **Schwab alone**, the one venue built greenfield — the four extractions each had a host adapter quietly answering questions before they were asked. **The second finding is about this plan**: seven gaps were documented so carefully that the deferral looked like completion. Recording is how work is tracked, not how it finishes. **77/77 tasks** (76 numbered plus 5.6a) and all six objectives — 83 checklist items, zero unchecked.)
 **Next Review**: none — this document is closed. Open work lives on: the seven Core gaps at §7.5, and the two idea docs this plan fed.
