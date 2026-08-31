@@ -1,8 +1,8 @@
 # Complete Venue API Coverage — Design Document
 
 **Date**: 2026-08-31
-**Status**: Implementing — Phases 0 and 1 complete; Phase 2 complete bar 2.9 approvals and 2.11 publish.
-**Version**: 3.3
+**Status**: Implementing — Phases 0, 1, 2 complete and published. Venue phases (3–13) next.
+**Version**: 3.6
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -555,14 +555,41 @@ the declaration honest.
       **`TopOfBook` cannot grow a `price` field**. The suite caught the new callback the
       moment it was declared, which is the mechanism working as designed.
 
-- [ ] **2.0a** **Move each venue's bid/ask off `Quote` and onto `get_top_of_book/2`.**
-      Five packages set them today. **This cannot happen until 2.11 publishes Core** — the
-      venues compile against `dp_exchange_core ~> 0.1.13`, where `TopOfBook` does not exist,
-      so a first attempt at wiring Gemini failed to compile and was reverted. That is the
-      plan's own ordering (2.11) proving itself rather than a surprise. Sequencing, stated
-      once: **Core publishes → venues migrate → `Quote`'s `:bid`/`:ask` removal reaches
-      consumers.** Until then the venues still fill fields that the next Core will not have,
-      and they stay green because they build against the old one.
+- [x] **2.0a** ~~Move each venue's bid/ask off `Quote` and onto `get_top_of_book/2`.~~
+      **Done across all five, 2026-08-31, on Core 0.1.16.** Every package now implements
+      `get_top_of_book/2` in its REST module, its facade and its fake, and every venue's
+      quote carries only what traded.
+
+      **The migration found the same defect twice more.** Phase 1 caught Robinhood reading
+      `price || ask`. Doing this work surfaced:
+
+      **Gemini's socket** built a `Quote` with `price: message["c"] || bid` — falling back
+      to the **bid** when the book had not traded — with a comment defending it as better
+      than inventing a value. **Webull's socket** did the same on its book topic:
+      `price: bid || ask`, defended as *"a real quoted number, labelled as the bid too"*.
+      Both are real numbers and neither is a price. A `bookTicker` frame and a Webull
+      `quote` frame are top-of-book, and both now deliver `TopOfBook`; where Gemini's frame
+      also carries a last trade it delivers that separately, as a `Quote`.
+
+      **Three venues, three independent instances, each with a comment explaining why it was
+      acceptable.** That is what a type that cannot hold the wrong value is for.
+
+      **The fakes had it too.** Robinhood's fake set `price: ask` with the comment *"as the
+      real adapter uses when the venue sends no separate price"* — reproducing the defect
+      the real adapter had, which is how a suite agrees with itself and is wrong twice.
+      Every fake's spread now straddles the traded price and equals neither side, so a test
+      that only passes when they coincide fails.
+
+      **Schwab's candles were the 2.10 finding in the wild.** `get_historical_prices/4`
+      built `Quote`s with `price: close`, on the reasoning that "a bar's price, for a
+      series, is where it ended" — discarding open, high and low at the boundary where no
+      caller could see it. Now `Types.Candle`, four prices carried, `:opened_at` named for
+      Schwab's own convention. The validation order was changed too: **timestamp is checked
+      before prices**, so an undated bar still reports `:missing_venue_timestamp` rather
+      than a shape error about a different problem.
+
+      All five suites green: schwab 249, gemini 329, webull 223, coinbase 161,
+      robinhood 114. Core 368. Credo clean and formatted throughout.
 - [x] **2.1** ~~Options (D3).~~ **Built 2026-08-31 from Schwab's `OptionContract`,
       `OptionChain` and `OptionContractMap` schemas.** Five types, three callbacks
       (`get_option_chain/2`, `get_option_expirations/2`, `get_option_greeks/2`), and `legs`
@@ -834,8 +861,23 @@ the declaration honest.
 
       The remaining shapes — trade, fill, balance, order book, instruments, market hours,
       margin — were checked against the widened surface and need no change.
-- [ ] **2.11** **Core publishes** before any venue implements against it. Same ordering the
-      extraction plan used.
+- [x] **2.11** ~~Core publishes.~~ **Pushed to `main` 2026-08-31 as `884a306` → `df71c92`,
+      CI publishing 0.1.16.** Gate run first and clean: format, `credo --strict`, **dialyzer
+      0 errors**, sobelow, 368 tests / 0 failures, coverage 93.1%.
+
+      **Two packaging problems were caught before publishing, not after.** `mix.exs` ships
+      `docs/guides`, and the raw Schwab portal capture had been sitting in it — **7.5 MB
+      would have gone into the tarball**, against Core shipping no venue-specific anything.
+      That file's own comment block records the last time something large went in unnoticed
+      (a 4.4 MB PLT), which is why `mix hex.build` was inspected first. Moved to
+      `docs/reference/schwab-portal-capture/`, which is not in `files:`; the tarball is
+      **121 KB**.
+
+      Second: the capture is 7.5 MB of **Schwab's own compiled JS and CSS**, duplicated
+      across two page saves. **This repo is public and history is not retractable**, so the
+      asset bundles are gitignored rather than committed — republishing a third party's
+      compiled front-end permanently is not something to do by accident. The two HTML pages
+      are kept, and the curated capture lives in `dp_exchange_schwab`.
 
 ### Phases 3–13 — the endpoints
 
@@ -1470,7 +1512,7 @@ next reader inherits the partial enumeration this plan spent its analysis correc
 The audit is **done**, not planned — see §1 and the five committed inventories. These
 objectives start where the analysis ends.
 
-- [x] **O1** — ~~Get a disposition for every unimplemented endpoint.~~ **Done.** D1–D7
+- [x] **O1** — ~~Get a disposition for every unimplemented endpoint.~~ **Done.** D1–D8
       settle all of them: **254 skipped** with a recorded reason, everything else
       `PLANNED`. §7.
 - [ ] **O2** — **Decide what crosses the facade, and in what shape**, before writing any
@@ -1977,6 +2019,40 @@ thinking is, and doing a group once across five venues is how the shape gets pro
 than guessed. It is also what stops five different shapes emerging for one idea, which §4.1
 identifies as the real risk.
 
+### D8 — these packages do not trade, and nothing is classified as if they did
+
+**Added 2026-08-31, after the architect rejected four skip proposals whose reasoning was
+wrong at the root.**
+
+The proposals argued that fundamentals, news, screeners and account administration were
+"not on the trading path", "issuer data rather than venue data", "running an account rather
+than trading it". Every one of those answers a question **this project does not ask**.
+
+**A host application trades. These packages are interfaces to exchanges.** Their job is to
+present what a venue provides in one shape, so a consumer never learns which venue it is
+talking to. Whether a consumer uses a given endpoint to trade, to reconcile, to audit or
+never is the consumer's business, and is not visible from here.
+
+So the scope test is one question: **does the venue provide it?** If it does, the interface
+exposes it. D7 already said this — "the scope is what the exchange provides" — and the
+skip proposals contradicted it while citing it.
+
+**The same contamination was in the contract itself**, in `Venue.peripheral_endpoints/0`,
+including three entries that predate this plan: *"not the trading path"*, *"affects P&L
+accuracy, not whether an order executes"*, *"depth is unavailable, trading is not"*. All
+rewritten on the axis that classification actually uses:
+
+  * **replaceable** — another source answers the same question
+  * **not load-bearing** — a package is complete without it, **usually because a venue may
+    not offer it at all**, which is a fact about the venue and not about the caller
+
+**Consequence for the rest of this plan:** nothing may be proposed for skipping on the
+grounds that a host would not use it. The only admissible reasons are the ones §0 already
+lists — the consent leg of auth, and FIX — plus deprecation (D1) and the two functional
+exclusions in D7 (operating a brokerage, embedding someone else's buy flow), none of which
+is an argument about trading.
+
+
 ## 7. Endpoint disposition register
 
 **The enumeration is done and committed**, one file per venue, each listing every
@@ -1998,7 +2074,7 @@ plus 46 socket channels. **Phase 0 is complete**; the per-venue inventories now 
 full in-scope surface rather than the touched slice, and for Schwab the answer is that
 nothing further is reachable at all (§7.1).
 
-**Every endpoint now has a disposition.** D1–D7 settle them: **254 are skipped** for the
+**Every endpoint now has a disposition.** D1–D8 settle them: **254 are skipped** for the
 reasons below, and everything else is `PLANNED`.
 
 | status | meaning |
@@ -2122,7 +2198,7 @@ design work is eight, of which options and staking are the only large ones.
 
 ## 10. Outstanding Questions
 
-**0 open.** All seven have been answered or withdrawn, and are recorded as D1–D7 in §6.
+**0 open.** All seven have been answered or withdrawn, and are recorded as D1–D8 in §6.
 This document is ready to leave `Draft` once the architect accepts §6 and the phase
 structure §5 now sets out.
 OQ1, OQ3 and OQ4 are answered and have become **D1**, **D2** and **D3**. OQ5 was withdrawn:
@@ -2163,6 +2239,9 @@ gave **D4** and **D5** (§6).
 | 2026-08-31 | **v3.1 — Phase 2 under way, and 2.0 turned out to be a contract defect rather than a Robinhood one.** The architect's correction: **`Core.Types.Quote` itself carried `:bid` and `:ask`, and all five venue packages filled them.** Order-book data on a trade type — which is why one package could read `price \|\| ask` and still look consistent with the type it was filling. **`Quote` loses `:bid`/`:ask`** and is trade data only; **`Types.TopOfBook`** is new, with no `price` field and no way to add one, optional sizes (`nil` = not published, never zero), `venue_time` (the venue's, or `nil`) and a required **`observed_at`** — which honours the ruling that a real-time BBO is stamped at the call without touching `Quote`'s guarantee that `:timestamp` is the venue's own. `mid/1`, `spread/1`, `crossed?/1` are functions, not fields. **Conformance assertion 14** added. **2.2 staking**: `has_staking` confirmed *absent* despite the closed plan recording it as shipped; six callbacks and four types built **from the vendors' published schemas** — `StakingBalance` keeps three liquidity states apart (a real response has the whole position redeemable and none of it tradable), `StakingRate` carries percentages only because one venue publishes bps *and* two percentages for the same position, and `StakingTransaction` carries the unbonding progression with **`settled?/1` returning `nil` for "unknown", never "complete"**. **2.4 positions**: explicit `:side` with always-positive `:quantity`, realised and unrealised P&L never summed, `:liquidation_price` of `nil` meaning *unsaid*. Core: 341 tests, 0 failures, credo clean, coverage 92.6%. **2.0a is blocked by design**: the venues build against published Core 0.1.13, so wiring them to `TopOfBook` cannot happen until **2.11 publishes Core** — a first attempt failed to compile and was reverted, which is the plan's own ordering proving itself. |
 | 2026-08-31 | **v3.2 — Phase 2 at 8 of 13. The `Venue` behaviour goes 32 callbacks → 50.** 2.3 money movement, 2.5 portfolios, 2.6 derivatives, 2.7 convert and 2.8 streaming kinds all built, each from the vendors' published schemas rather than from a sketch. The recurring shape across all five: **a field whose absence must not be read as a value.** `ApprovedAddress.usable?/2` returns `nil` for a pending address with no stated activation — venues delay first use so a stolen account cannot add an address and drain it, and reading `nil` as "usable" removes exactly that protection. `DepositAddress.memo_required` is **tri-state**, because a deposit missing a required memo is credited to nobody and "nobody said" is not "not needed". `Conversion.expired?/2` returns `nil` with no stated window, because committing an expired quote can fill at the *current* rate — which looks like success. `Position.:liquidation_price` of `nil` means unsaid, not safe. `StakingTransaction.settled?/1` returns `nil` rather than "complete". **Five types, five refusals to guess, all of the same defect this plan opened with.** 2.6 also found the venue publishing `fundingAmount` and `estimatedFundingAmount` **40% apart** — settled and estimated kept as separate fields for the same reason realised and unrealised P&L are. 2.8 found `data_kind` short by three: `:top_of_book`, `:candles`, `:positions`, all streamed by a venue in the family and none nameable before now. Core: 352 tests, 0 failures, credo clean, coverage 92.8%. **Remaining in Phase 2: 2.1 (options, the largest), 2.9, 2.10, then 2.11 publishes — which needs the architect, and gates 2.0a and every venue phase after it.** |
 | 2026-08-31 | **v3.3 — Phase 2 finished to the limit of what does not need the architect. 10 of 13; the `Venue` behaviour is 53 callbacks, up from 32.** **2.1 options**: the chain row split three ways — identity, book, model output — because Schwab returns bid, ask, last, mark *and* theoretical value on one row, which is five plausible prices and no help choosing. `OptionChain` stays two-dimensional; a one-sided strike keeps `nil` rather than vanishing. Multi-leg makes `supports_multi_leg_orders` load-bearing: **a venue that cannot must refuse, never decompose**, because a caller left holding one filled leg has naked risk it never chose. **2.10 found the same defect class already in the shipped contract**: `get_historical_prices/4` declared `[Quote.t()]`, there was no candle type at all, and **the venues were returning bare untyped maps** — so the declared type was false *and* nothing compared one venue's candles to another's. `Types.Candle` added, with its time field named **`:opened_at`** because venues disagree about open- versus close-stamping and a series joined across both is misaligned by a whole interval with every value correct. `Order` gained `:time_in_force`, which `Capabilities` had been declaring support for against a type that could not record it. **Two callbacks still return bare maps** — `get_accounts/2` and `get_fees/2` — recorded as the first item of unfinished contract work rather than waved through. Core: 368 tests, 0 failures, credo clean, 92.9%. **What is left needs the architect, not more work:** 2.11 publishes Core (a merge to `main`, which gates 2.0a and every venue phase), and 2.9 carries four skip proposals plus one open question — none defaulted, per §0. |
+| 2026-08-31 | **v3.4 — Phase 2 complete and Core published. 66 callbacks, 30 types, up from 32 and 6.** **The architect rejected the four skip proposals, and the reasoning was wrong at the root rather than at the margin.** They argued "not on the trading path", "issuer data rather than venue data", "running an account rather than trading it" — every one an answer to **a question this project does not ask**. A host trades; **these packages are interfaces to exchanges**, and the scope test is only *does the venue provide it*. D7 already said so and the proposals contradicted it while citing it. Recorded as **D8**, with the consequence stated: nothing may be proposed for skipping because a host would not use it. **The same contamination was inside the contract** — `peripheral_endpoints/0` classified on trading relevance in several entries, *three of which predate this plan*. All rewritten on the axis the classification actually uses: replaceable by another source, or a package is complete without it — usually because **a venue may not offer it at all**, a fact about the venue rather than the caller. 2.9 built in full: 13 callbacks and 6 types for watchlists, financials, corporate events, filings, news, screeners and account administration. `FinancialStatement` keeps the venue's own line-item names, because a fixed schema drops whatever does not fit and a dropped line on a balance sheet is one that no longer balances. `CorporateEvent` has **no `:date` field** — a dividend's ex-, record- and pay-dates are days apart and one field would make every caller guess which it held. **2.11 published**, and two packaging problems were caught first: `mix.exs` ships `docs/guides`, where the raw Schwab capture would have put **7.5 MB into the tarball** (now 121 KB), and that capture is Schwab's own compiled JS and CSS — **gitignored rather than committed, because this repo is public and history is not retractable**. |
+| 2026-08-31 | **v3.5 — Phase 2 complete, all five venues migrated to Core 0.1.16.** 2.0a moved every venue's bid/ask off `Quote` and onto `get_top_of_book/2`, and **found the same defect twice more while doing it**. Phase 1 had caught Robinhood reading `price \|\| ask`; the migration surfaced **Gemini's socket** (`price: message["c"] \|\| bid`, defended in a comment as better than inventing a value) and **Webull's socket** (`price: bid \|\| ask`, defended as *"a real quoted number, labelled as the bid too"*). **Three venues, three independent instances, each with a comment explaining why it was acceptable** — which is the argument for a type that cannot hold the wrong value. Book frames on both venues now deliver `TopOfBook`; where Gemini's also carries a last trade it delivers that separately as a `Quote`. **The fakes carried it too**: Robinhood's set `price: ask` citing "as the real adapter uses", reproducing the defect the adapter had — a suite agreeing with itself and wrong twice. Every fake's spread now straddles the traded price and equals neither side. **Schwab's candles were 2.10's finding in the wild**: `get_historical_prices/4` built Quotes with `price: close`, discarding open, high and low where no caller could see it; now `Types.Candle`, and the validation order changed so an undated bar still reports `:missing_venue_timestamp` rather than a shape error about a different problem. Suites: core 368, schwab 249, gemini 329, webull 223, coinbase 161, robinhood 114 — **1,444 tests, 0 failures**, credo clean and formatted across all six. |
+| 2026-08-31 | **v3.6 — all six published. Core 0.1.16, gemini 0.1.3, coinbase 0.1.4, webull 0.1.3, robinhood 0.1.3, schwab 0.1.4.** The first push of the five venues **failed CI in all five**, and the reason is worth recording because it is a gap in how this work was being verified, not in the work: **the local gate was `mix test`; CI's is `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer` and `mix test --cover`.** Three distinct classes got through. **Warnings-as-errors** caught Gemini's fake missing all 33 new behaviour callbacks, and two clause-grouping problems my edits introduced. **Coverage** caught the 33 stubs per package being uncovered lines — webull fell to 85%, robinhood to 83%, schwab to 87%. The fix earns its place beyond the number: the facade already swept its declared-`:unsupported` endpoints, the **fakes had no such sweep**, and a fake that answered differently from the real module would let a consumer write a passing test against behaviour the package does not have. **Dialyzer** caught the sharpest one: Coinbase's `get_top_of_book/2` passed `HttpClient`'s raw `%{status:, body:, headers:}` where the decoded body was expected, so the `"trades"` pattern in its timestamp helper **could never match** — it would have compiled, passed the suite, and returned `nil` for every venue timestamp, because the helper's fallback clause catches anything. **No test could have seen it and dialyzer was the one gate not run locally.** `mix quality` exists precisely to run all four; using it, rather than `mix test`, is the lesson. |
 
 ---
 
