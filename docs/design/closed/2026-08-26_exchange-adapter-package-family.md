@@ -1,8 +1,8 @@
 # Exchange Adapter Package Family — Design Document
 
 **Date**: 2026-08-26
-**Status**: Implementing — approved by the architect 2026-08-27; Phases 0–8 done, 7.5's seven contract gaps being implemented rather than deferred
-**Version**: 1.87
+**Status**: **Implemented** — approved by the architect 2026-08-27; all checklist items done, all seven 7.5 contract gaps closed rather than deferred, retrospective appended 2026-08-31
+**Version**: 1.88
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -2358,12 +2358,15 @@ migration task — deciding the host's collection strategy remains out of scope 
       variable, and a package built from that documentation would have been broken from day
       one. So a change detector is a supplement to measurement and never a substitute,
       which is D13 arrived at from the other direction.
-- [ ] **8.4** `git mv` this doc to `docs/design/closed/` — **reopened 2026-08-31.** Closed
-      prematurely: 7.5 recorded seven contract gaps and deferred them, and a recorded gap
-      is not a completed task. Re-close when 7.5 is actually done. Originally done after
-      the retrospective was appended and the status set to `Implemented`, per the docs
-      standard.
-
+- [x] **8.4** ~~`git mv` this doc to `docs/design/closed/`~~ — **done 2026-08-31, on the
+      second attempt.**
+      Closed once prematurely: 7.5 had recorded seven contract gaps and deferred them, and
+      a recorded gap is not a completed task. Reopened, all seven implemented, and closed
+      again with nothing outstanding.
+      Worth keeping as the record, because the failure was in how "done" was read rather
+      than in the work: **the checklist said "record it here", and recording is how work is
+      tracked, not how it finishes.** A task whose deliverable is a list should say so;
+      this one did not, and it was closed on the list.
 ---
 
 ## 3. Current State — Audit of 2026-08-26
@@ -5296,12 +5299,12 @@ Six packages published, measured rather than asserted:
 
 | package | version | tests | coverage |
 |---|---|---|---|
-| `dp_exchange_core` | **0.1.11** | 293 + 14 doctests | 91.77% |
-| `dp_exchange_coinbase` | 0.1.2 | — | — |
-| `dp_exchange_gemini` | 0.1.1 | 319 | 97.18% |
-| `dp_exchange_webull` | 0.1.1 | 214 | 93.12% |
-| `dp_exchange_robinhood` | 0.1.1 | 108 | 96.98% |
-| `dp_exchange_schwab` | 0.1.1 | 228 | 94.38% |
+| `dp_exchange_core` | **0.1.13** | 313 + 14 doctests | 92.21% |
+| `dp_exchange_coinbase` | 0.1.3 | 157 | 91.58% |
+| `dp_exchange_gemini` | 0.1.2 | 321 | 96.80% |
+| `dp_exchange_webull` | 0.1.2 | 216 | 92.75% |
+| `dp_exchange_robinhood` | 0.1.2 | 110 | 96.06% |
+| `dp_exchange_schwab` | 0.1.3 | 247 | 93.08% |
 
 All six repos green, `mix quality` clean, on `main`, nothing unpushed. Every endpoint
 `:experimental` or `:unsupported`; **nothing is `:proven`**, verified by evaluating each
@@ -5409,21 +5412,42 @@ measure of how good the contract was on the day it was written:
 - `raw_status: true` on `HttpClient` (Gemini — 4xx evidence was being flattened into a
   string a venue had to parse back)
 - `market_status/1` (Schwab — the first venue that closes)
-- `Timeframe.nameable/0` and `nameable?/1` (Schwab — weekly and monthly candles)
-- `Timeframe` `10m` (Schwab)
+- `Timeframe.nameable/0` and `nameable?/1`, and `10m` (Schwab — weekly, monthly and
+  ten-minute candles)
 - `max_leverage: :per_account` (Schwab — Reg-T)
+- `ceiling` `:scope`, and `:limit` widened to `non_neg_integer` (Schwab — a ceiling counted
+  per account, and a registration legally granted zero)
+- `supported_sessions` (Schwab — the market closes)
+- `supports_order_preview`, `supports_order_replace`, `supports_multi_leg_orders`, and the
+  `preview_order/3` and `replace_order/4` callbacks (Schwab)
+- `catalog_access` (Schwab — a catalogue that can only be searched)
+- four order types and eight instrument types (Schwab)
 - four wrong `@spec`s corrected, each of which made dialyzer report a caller's *correct*
   handling as dead code
 
-**Six of the seven came from one venue, and that venue is the greenfield one.** The four
-extractions each had a working host adapter to reconcile against, which quietly answered
-questions before they were asked. Schwab had nothing, so every question had to be asked
-out loud — and the contract failed six of them.
+**Eleven of the thirteen came from one venue, and that venue is the greenfield one.** The
+four extractions each had a working host adapter to reconcile against, which quietly
+answered questions before they were asked. Schwab had nothing, so every question had to be
+asked out loud — and the contract failed eleven of them.
 
 That is the strongest single finding here, and it inverts the plan's own ordering
-rationale: **greenfield-against-the-contract is the better test of a contract than
+rationale: **greenfield-against-the-contract is a better test of a contract than
 extraction is**, and it should come earlier, not last.
 
+### A second finding, about this plan rather than the code
+
+**Seven of those gaps were first recorded and deferred, and the plan was closed with them
+open.** They were written up carefully — each with its evidence and its consequence — which
+is what made the deferral look like completion. The checklist item said *"is a Core gap —
+record it here"*, and it was closed on having recorded them.
+
+Recording is how work is *tracked*. It is not how work *finishes*. The seven were
+implemented afterwards, on the architect's correction, and they were not large: five
+capability fields, two callbacks, two vocabulary extensions, and the assertions that keep
+them honest. Nothing about them justified deferral — only the phrasing of the task did.
+
+**A checklist item whose deliverable is a list should say so.** This one did not, and it
+was closed on the list.
 ### Feeds the idea docs
 
 - Vendor API change → `docs/design/ideas/detecting-vendor-api-change.md`, appended at 8.3.
@@ -5435,5 +5459,5 @@ extraction is**, and it should come earlier, not last.
 
 ---
 
-**Last Updated**: 2026-08-31 (v1.87 — **PLAN COMPLETE. Status: Implemented.** All six objectives met, every checklist item done, retrospective appended, moved to `docs/design/closed/`. Six packages published: core **0.1.11**, coinbase 0.1.2, gemini/webull/robinhood/schwab **0.1.1**. All six repos green, `mix quality` clean, nothing unpushed. **Nothing is `:proven`** — verified by evaluating every declaration rather than grepping, since Schwab's moduledoc mentions the atom while declaring none. That is D15 working: graduation needs a consumer trading live, which is out of scope (§1). Final phase closed 7.3 (schwab implemented: 228 tests, 94.38%, conformance suite passing), 7.4 (**the contract's real limit** — `/instruments` has no list-everything projection, so "every venue can be pulled" is a crypto assumption; resolved as an active endpoint requiring `:query`), 7.5 (seven Core gaps recorded), and Phase 8. **The retrospective's strongest finding**: six of the seven post-freeze contract additions came from **Schwab alone**, the one venue built greenfield — the four extractions each had a working host adapter quietly answering questions before they were asked. Greenfield-against-the-contract is a better test of a contract than extraction is, and it should have come first. **The recurring failure mode is confirmed and tabulated**: a nearby substitute where there should be an error, nine distinct instances across five venues, every one type-correct and meaning-wrong. **Two architect corrections during Phase 7 were both cases where the plan's own text was right and the reading of it was wrong** — auth placement and refresh-token lifetime — in a package that was otherwise green, which is the clearest evidence for D4's gate: a green suite is not evidence about a claim nobody encoded. Binance and kraken removed from Phase 8 per D21; their hexpm names are **not** actually reserved, contrary to 6.4, recorded in the idea doc. 77/77 tasks.)
+**Last Updated**: 2026-08-31 (v1.88 — **PLAN COMPLETE, second and final close.** All 84 items done, zero unchecked, retrospective appended, moved to `docs/design/closed/`. Published: core **0.1.13**, coinbase 0.1.3, schwab 0.1.3, gemini/webull/robinhood **0.1.2**. All six repos green — **1,364 tests, 0 failures**, every package above the 90 coverage threshold, credo `--strict` and dialyzer clean, CI green. **It was closed once prematurely**: 7.5 had recorded seven contract gaps and deferred them, and the architect was right that a recorded gap is not a completed task. Reopened; **all seven implemented**. Core gained `ceiling` `:scope` plus a legal zero `:limit` (a limiter keyed by credential silently over-permits a venue counting per account, and a registration granted zero throughput is not `:unsupported`), `supported_sessions` (`[:regular]` alone raises — it says nothing), `supports_order_preview` / `supports_order_replace` / `supports_multi_leg_orders`, `catalog_access`, the `preview_order/3` and `replace_order/4` callbacks — **required, not optional, because the facade is one fixed set** — four order types and eight instrument types. Schwab now implements both new callbacks for real and declares eight order types where it had declared four, and nine instrument types where it had declared `[:spot]` with a comment admitting that understated it. **Not versioned as breaking**: nothing consumes these packages yet and all five venues moved in the same change, so the `0.2.0` signal is deliberately unspent. **The retrospective's strongest finding**: eleven of the thirteen post-freeze contract additions came from **Schwab alone**, the one venue built greenfield — the four extractions each had a host adapter quietly answering questions before they were asked. **The second finding is about this plan**: seven gaps were documented so carefully that the deferral looked like completion. Recording is how work is tracked, not how it finishes. 84/84 tasks.)
 **Next Review**: none — this document is closed. Open work lives on: the seven Core gaps at §7.5, and the two idea docs this plan fed.
