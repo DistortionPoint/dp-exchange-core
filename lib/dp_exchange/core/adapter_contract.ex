@@ -291,6 +291,49 @@ defmodule DpExchange.Core.AdapterContract do
       # --- 6, 12. error discipline and agreement ---------------------------
 
       describe "12. capabilities and behaviour agree, in both directions" do
+        test "the order-shape claims match what the facade actually answers" do
+          # `supports_order_preview` and `supports_order_replace` are claims a consumer
+          # routes on. A venue declaring one and refusing the call sends a caller down a
+          # path that cannot run, and a venue serving one without declaring it is invisible
+          # — which on `replace_order/4` costs risk, since the alternative is a window with
+          # no order live.
+          caps = @venue.capabilities()
+          credentials = @credentials
+
+          for {field, {name, arity}, args} <- [
+                {:supports_order_preview, {:preview_order, 3}, [credentials, %{}, []]},
+                {:supports_order_replace, {:replace_order, 4}, [credentials, "id", %{}, []]}
+              ] do
+            declared = Map.fetch!(caps, field)
+            answers? = apply(@venue, name, args) != {:error, :not_supported}
+
+            assert declared == answers?,
+                   "#{field} is #{inspect(declared)} but #{name}/#{arity} " <>
+                     "#{if answers?, do: "answers", else: "returns :not_supported"}"
+          end
+        end
+
+        test "catalog_access matches how get_symbols/1 behaves without a query" do
+          # `:query_only` is only true if the venue actually demands a term. A venue
+          # declaring it and then returning a list has declared a restriction it does not
+          # have, which is as misleading as the reverse.
+          caps = @venue.capabilities()
+
+          if Capabilities.active?(caps, {:get_symbols, 1}) do
+            result = @venue.get_symbols(credentials: @credentials)
+
+            case caps.catalog_access do
+              :query_only ->
+                assert match?({:error, _reason}, result),
+                       "catalog_access is :query_only but get_symbols/1 answered without a query"
+
+              :enumerable ->
+                refute match?({:error, {:query_required, _venue}}, result),
+                       "get_symbols/1 demands a query but catalog_access says :enumerable"
+            end
+          end
+        end
+
         test "every declared endpoint is a real facade callback" do
           caps = @venue.capabilities()
           callbacks = Venue.behaviour_info(:callbacks)

@@ -1,7 +1,7 @@
 # Exchange Adapter Package Family — Design Document
 
 **Date**: 2026-08-26
-**Status**: **Implemented** — approved by the architect 2026-08-27; all checklist items done and retrospective appended 2026-08-31
+**Status**: Implementing — approved by the architect 2026-08-27; Phases 0–8 done, 7.5's seven contract gaps being implemented rather than deferred
 **Version**: 1.87
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
@@ -2222,59 +2222,71 @@ migration task — deciding the host's collection strategy remains out of scope 
       **Recorded as a Core gap at 7.5**: the contract has no way to say "pullable, but only
       by query". Today that is expressed by an error atom a consumer must know to expect.
 - [x] **7.5** ~~Whatever else Schwab needs that the contract cannot express is a Core gap —
-      record it here. (Equities are *not* new ground: Webull already declares
-      `asset_classes: [:crypto, :equity]` and lands in Phase 6.2, before this.)~~
-      — **done 2026-08-31. Seven gaps recorded; the register is the deliverable, and it
-      stays open as a register after this plan closes.** Four defects found alongside them
-      were *fixed* rather than recorded, and are written up under 7.2 and 7.3:
-      `Timeframe` missing `10m`, `Capabilities` **and** the conformance suite both refusing
-      `1w`/`1M` (two sites, one defect), and `max_leverage` admitting no answer for a Reg-T
-      account. What follows is what the contract still cannot say. None of it blocked 7.3;
-      each is a decision, not a defect.
-      1. **`ceiling` has no per-account dimension.** Schwab's documented order limit is
-         `0..120` per minute **per account**, set **per application at registration**.
-         Every other venue in the family limits by credential, so `%{limit:, per_ms:,
-         burst:}` was enough. Here there is no venue constant to declare at all, and a
-         host running several accounts through one application shares one budget across
-         them. Also: **a ceiling of zero is legal and is not `:unsupported`** — the
-         endpoint exists, it is the registration that cannot use it, and the contract
-         cannot currently tell those apart.
-      2. **`supported_instrument_types` is `[:spot, :perp]`, which is a crypto
-         vocabulary.** Schwab's `assetType` admits `EQUITY`, `OPTION`, `FUTURE`, `FOREX`,
-         `INDEX`, `MUTUAL_FUND`, `FIXED_INCOME`, `CASH_EQUIVALENT`, `COLLECTIVE_INVESTMENT`
-         and more. The declaration says `[:spot]` because that is the closest atom, and it
-         *understates the venue* — which is recorded in the moduledoc rather than left to
-         be inferred. Webull reached Phase 6.2 without hitting this because its equity
-         surface is cash equities only.
-      3. **Four real order types have no Core atom**: `TRAILING_STOP`,
-         `TRAILING_STOP_LIMIT`, `MARKET_ON_CLOSE`, `LIMIT_ON_CLOSE`. The declaration lists
-         only what Core can name, so a consumer reading it sees fewer order types than the
-         venue accepts. Under-declaring is the safe direction, and it is still a gap.
-      4. **`session` has no slot at all.** A Schwab order carries which trading session it
-         is for — `NORMAL`, `AM`, `PM`, `SEAMLESS` — and it is part of an order rather than
-         an option on one. Every crypto venue trades continuously, so nothing in
-         `place_order/3`'s shape anticipates it. This is the clearest case in the family of
-         a field that exists because the market closes.
-      5. **`previewOrder` and atomic replacement still have no expression** (carried
-         forward from 7.1, now confirmed against the specs). Replacement is the sharper of
-         the two: expressing it as cancel-then-place is *not equivalent on this venue*,
-         because it opens a window in which no order is live.
-      6. **The contract cannot say "pullable, but only by query"** (from 7.4). Core's
-         conformance suite asserts every venue can be pulled, on the crypto-venue
-         assumption that a full catalogue is one cheap call. Schwab's `/instruments` has
-         no list-everything projection at all. Today that is expressed as an active
-         endpoint returning `{:error, {:query_required, :schwab}}`, which works and which
-         a consumer has to know to expect. A first-class way to declare it — a capability
-         field, or a distinct error the contract names — would let a caller discover the
-         requirement instead of learning it from a refusal.
-      7. **Multi-leg, conditional and `previewOrder` shapes have no request vocabulary**
-         (from 7.3). `place_order/3` takes a flat request — one symbol, one side, one
-         quantity — while Schwab's `TRIGGER`, `OCO` and net-priced spreads nest whole
-         orders in `childOrderStrategies`. This package builds the single-leg `SINGLE`
-         strategy and nothing else, which is the honest boundary rather than a workaround:
-         inventing a request shape here would put venue vocabulary into consumer code,
-         which is what the facade exists to prevent (D12).
-
+      record it here.~~ — **done 2026-08-31. All seven CLOSED, not deferred.**
+      An earlier pass marked this done on the reading that recording the gaps *was* the
+      deliverable. It was not. A recorded gap is how work is tracked, not how it finishes,
+      and the plan was closed with seven contract limitations still in it. Reopened and
+      each one resolved below. Core **0.1.12**; all six repos green, 1,364 tests, 0
+      failures, credo and dialyzer clean.
+      1. **`ceiling` had no per-account dimension, and could not express zero.** — **fixed.**
+         `ceiling` gained an optional `:scope` (`:credential | :account | :application`),
+         and `:limit` became `non_neg_integer`. Both halves matter: a limiter keyed by
+         credential **silently over-permits** a venue that counts per account, and a
+         registration granted zero order throughput is legal and is *not* `:unsupported` —
+         the endpoint exists and the venue serves it; this application cannot use it, and
+         the remedies differ entirely. Schwab's supervisor now builds
+         `%{limit:, per_ms:, burst:, scope: :account}`. The *number* stays out of
+         `capabilities/0` deliberately: it is a property of the consumer's own
+         registration, so a value there would be a claim about somebody else's.
+      2. **`supported_instrument_types` was a crypto vocabulary.** — **fixed.** Extended
+         from `[:spot, :perp]` with `:option, :future, :future_option, :index,
+         :mutual_fund, :bond, :forex, :cash_equivalent`. Schwab now declares nine instead
+         of `[:spot]`-plus-a-comment-saying-that-understates-it. **A declaration that needs
+         a comment to be true is the thing the struct exists to prevent.**
+      3. **Four real order types had no Core atom.** — **fixed.** `:trailing_stop`,
+         `:trailing_stop_limit`, `:market_on_close`, `:limit_on_close` added, and
+         `Schwab.Orders` builds all four. A trailing stop needs three fields Core does not
+         name (`stopPriceLinkBasis`, `stopPriceLinkType`, `stopPriceOffset`), taken under
+         the venue's own names through the request map, and **the offset is required** —
+         a trailing stop without one is not a trailing stop, and sending it spends a
+         throttled write to learn something knowable locally. Schwab's declaration went
+         from four order types to eight.
+      4. **`session` had no slot at all.** — **fixed.** `supported_sessions` added, with
+         `[:pre_market, :regular, :post_market, :extended]`. `[]` is the continuous-market
+         case and stays the default for every crypto venue. **`[:regular]` alone now
+         raises**, because it says nothing — a consumer would build a session selector
+         with one option, which is the continuous case dressed up as a choice.
+      5. **`previewOrder` and atomic replacement had no expression.** — **fixed.**
+         `preview_order/3` and `replace_order/4` are now **required** facade callbacks —
+         required, not optional, because §6.1's rule is that the facade is one fixed set
+         and optionality is for ceremony. Both are classified peripheral, and
+         `replace_order/4`'s reason states the risk: absence means cancel-then-place,
+         which *works* and opens a window in which no order is live.
+         Schwab implements both for real (`POST .../previewOrder`, `PUT .../orders/{id}`);
+         the four crypto venues refuse both and declare `false`. `replace_order/4` returns
+         the **new** order id, because Schwab treats a replacement as a new order and a
+         caller still holding the old one would be tracking something that no longer
+         exists.
+      6. **The contract could not say "pullable, but only by query".** — **fixed.**
+         `catalog_access: :enumerable | :query_only`. `:enumerable` is the default and the
+         crypto shape; Schwab declares `:query_only`. The conformance suite now asserts
+         the declaration against actual behaviour in both directions, so a venue cannot
+         claim a restriction it does not have, nor demand a query while declaring itself
+         enumerable.
+      7. **Multi-leg and conditional orders had no request vocabulary.** — **closed as a
+         declared boundary, which is the honest resolution rather than a deferral.**
+         `supports_multi_leg_orders` added, defaulting `false`, and **Schwab declares
+         `false`** even though the venue has `TRIGGER`, `OCO` and net-priced spreads.
+         Growing `place_order/3` a `:legs` key would put venue vocabulary into consumer
+         code, which is what the facade exists to prevent (D12) — and no venue in scope
+         would use it. The field makes the boundary *visible* instead of implicit: a
+         consumer can now see the venue is richer than the contract, rather than
+         discovering it.
+      **All five new fields are enforced, not decorative.** `Capabilities` raises when
+      preview, replace or multi-leg is claimed while `place_order/3` is `:unsupported`,
+      and when `catalog_access: :query_only` is claimed while `get_symbols/1` is — because
+      "searchable only" and "not served at all" are different facts a caller acts on
+      differently. The conformance suite checks both against real behaviour.
 ### Phase 8 — Close
 
 - [x] **8.1** ~~All six in-scope repos green, published, `mix quality` clean.~~ — **done
@@ -2346,7 +2358,9 @@ migration task — deciding the host's collection strategy remains out of scope 
       variable, and a package built from that documentation would have been broken from day
       one. So a change detector is a supplement to measurement and never a substitute,
       which is D13 arrived at from the other direction.
-- [x] **8.4** ~~`git mv` this doc to `docs/design/closed/`~~ — **done 2026-08-31**, after
+- [ ] **8.4** `git mv` this doc to `docs/design/closed/` — **reopened 2026-08-31.** Closed
+      prematurely: 7.5 recorded seven contract gaps and deferred them, and a recorded gap
+      is not a completed task. Re-close when 7.5 is actually done. Originally done after
       the retrospective was appended and the status set to `Implemented`, per the docs
       standard.
 

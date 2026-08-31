@@ -203,8 +203,26 @@ defmodule DpExchange.Core.CapabilitiesTest do
 
     test "an order type outside the contract's vocabulary is refused" do
       assert_raise ArgumentError, ~r/supported_order_types/, fn ->
-        caps(supported_order_types: [:trailing_stop])
+        caps(supported_order_types: [:iceberg])
       end
+    end
+
+    test "the four equity order types Core learned from Schwab are accepted" do
+      # These are real order types Schwab serves and Core had no word for, so a venue
+      # serving them had to under-declare — safe, and still a lie about the venue.
+      types = [:trailing_stop, :trailing_stop_limit, :market_on_close, :limit_on_close]
+
+      assert caps(supported_order_types: types).supported_order_types == types
+    end
+
+    test "instrument types beyond spot and perp are accepted" do
+      # `[:spot, :perp]` was the whole vocabulary while every venue was crypto. An option
+      # is not a spot instrument, so an equities broker had to declare `[:spot]` and add a
+      # comment saying the declaration understated it — and a declaration needing a
+      # comment to be true is what this struct exists to prevent.
+      types = [:option, :future, :index, :mutual_fund, :bond, :forex, :cash_equivalent]
+
+      assert caps(supported_instrument_types: types).supported_instrument_types == types
     end
 
     test "short selling is a domain constraint on side, not a data semantic" do
@@ -216,6 +234,132 @@ defmodule DpExchange.Core.CapabilitiesTest do
 
       assert caps(supported_instrument_types: [:spot, :perp]).supported_instrument_types ==
                [:spot, :perp]
+    end
+  end
+
+  describe "ceilings: zero is a value, and scope changes what a caller must do" do
+    test "a limit of zero is legal, and is NOT the same as :unsupported" do
+      # Schwab registers applications with an order throughput anywhere in 0..120 per
+      # minute, and zero is a legal registration. The endpoint exists and the venue serves
+      # it; this application was granted none of it. A consumer's remedy differs entirely
+      # from "the venue has no such endpoint", so the two must not collapse.
+      declaration = caps(authenticated_ceiling: %{limit: 0, per_ms: 60_000})
+
+      assert declaration.authenticated_ceiling.limit == 0
+      assert Capabilities.active?(declaration, {:place_order, 3})
+    end
+
+    test "a per_ms of zero is still refused — that is a broken ceiling, not a real one" do
+      assert_raise ArgumentError, ~r/per_ms/, fn ->
+        caps(public_ceiling: %{limit: 10, per_ms: 0})
+      end
+    end
+
+    test "scope is optional and defaults to nothing declared" do
+      declaration = caps(public_ceiling: %{limit: 10, per_ms: 1_000})
+
+      refute Map.has_key?(declaration.public_ceiling, :scope)
+    end
+
+    test "each scope is accepted, because each means a different limiter key" do
+      # A limiter keyed by credential silently over-permits a venue that counts by
+      # account, which is why this is declared rather than left implicit.
+      for scope <- [:credential, :account, :application] do
+        declaration = caps(public_ceiling: %{limit: 10, per_ms: 1_000, scope: scope})
+
+        assert declaration.public_ceiling.scope == scope
+      end
+    end
+
+    test "a scope outside the vocabulary is refused" do
+      assert_raise ArgumentError, ~r/:scope must be one of/, fn ->
+        caps(public_ceiling: %{limit: 10, per_ms: 1_000, scope: :per_ip})
+      end
+    end
+  end
+
+  describe "sessions: declared only where the market closes" do
+    test "empty is the continuous-market case, and it is the default" do
+      assert caps([]).supported_sessions == []
+    end
+
+    test "the extended sessions are accepted" do
+      sessions = [:pre_market, :regular, :post_market]
+
+      assert caps(supported_sessions: sessions).supported_sessions == sessions
+    end
+
+    test "[:regular] alone is refused, because it says nothing" do
+      # A consumer would build a session selector with exactly one option. That is the
+      # continuous-market case dressed up as a choice.
+      assert_raise ArgumentError, ~r/says nothing/, fn ->
+        caps(supported_sessions: [:regular])
+      end
+    end
+
+    test "a session outside the vocabulary is refused" do
+      assert_raise ArgumentError, ~r/supported_sessions/, fn ->
+        caps(supported_sessions: [:overnight])
+      end
+    end
+  end
+
+  @order_shape_fields [
+    :supports_order_preview,
+    :supports_order_replace,
+    :supports_multi_leg_orders
+  ]
+
+  describe "order shape: preview, replace and legs must agree with the endpoint map" do
+    test "all three default to false" do
+      declaration = caps([])
+
+      refute declaration.supports_order_preview
+      refute declaration.supports_order_replace
+      refute declaration.supports_multi_leg_orders
+    end
+
+    test "each is accepted when the venue can place an order" do
+      for field <- @order_shape_fields do
+        assert caps([{field, true}]) |> Map.fetch!(field)
+      end
+    end
+
+    test "none may be true when place_order/3 is unsupported" do
+      # A venue that cannot place an order cannot preview, replace or leg one, and a
+      # consumer reading the field alone would build a path that cannot run.
+      for field <- @order_shape_fields do
+        assert_raise ArgumentError, ~r/place_order\/3 is :unsupported/, fn ->
+          caps([{field, true}, {:endpoints, %{{:place_order, 3} => :unsupported}}])
+        end
+      end
+    end
+  end
+
+  describe "catalog_access: how the catalogue can be reached at all" do
+    test ":enumerable is the default, which is the crypto shape" do
+      assert caps([]).catalog_access == :enumerable
+    end
+
+    test ":query_only is accepted when get_symbols/1 is active" do
+      assert caps(catalog_access: :query_only).catalog_access == :query_only
+    end
+
+    test ":query_only with an unsupported get_symbols/1 is refused" do
+      # "Searchable only" and "not served at all" are different facts, and a caller acts
+      # differently on each.
+      assert_raise ArgumentError, ~r/'searchable only' and 'not served at all'/, fn ->
+        caps(
+          catalog_access: :query_only,
+          endpoints: %{{:get_symbols, 1} => :unsupported}
+        )
+      end
+    end
+
+    test "a value outside the vocabulary is refused" do
+      assert_raise ArgumentError, ~r/catalog_access/, fn ->
+        caps(catalog_access: :paginated)
+      end
     end
   end
 

@@ -92,6 +92,37 @@ Reading these as "not set" loses the whole point of declaring them:
   did not check": a venue that serves candles must name the widths, and `Capabilities`
   raises if it claims history without them.
 
+### Five fields that say what the venue can do with an order
+
+- **`supported_sessions`** — which trading session an order may name. `[]` means the
+  venue trades continuously and a caller never names one; that is every crypto venue.
+  Non-empty means the market closes, and an order carries which window it is for.
+- **`supports_order_preview`** — the venue will validate an order and estimate its cost
+  **without placing it**. Where it is true, use it: on a venue that throttles writes and
+  not reads, a rejection found by previewing costs nothing and one found by placing costs
+  a scarce write.
+- **`supports_order_replace`** — the venue amends atomically. Where it is `false`, your
+  only route is cancel-then-place, which is **not equivalent**: it opens a window in which
+  no order is live. Treat this as a risk property, not a convenience.
+- **`supports_multi_leg_orders`** — `false` on every venue in the family today, including
+  ones whose *venue* supports spreads. `place_order/3` takes a flat request; the field
+  tells you the venue is richer than the contract rather than letting you discover it.
+- **`catalog_access`** — `:enumerable` means `get_symbols/1` returns everything.
+  **`:query_only` means there is no list-everything call**, so you must pass a search
+  term and will get `{:error, {:query_required, venue}}` without one. That is *not*
+  `:not_supported` — the endpoint works.
+
+### Rate ceilings: read `:scope`, and do not treat zero as absent
+
+A `ceiling` may carry **`:scope`** — `:credential`, `:account` or `:application`. It
+changes what you must key your limiter by: a limiter keyed by credential **silently
+over-permits** a venue that counts per account, and you will find out by being throttled.
+
+**`limit: 0` is a legal value and is not `nil`.** It means this registration was granted
+no throughput on that path. The endpoint exists and the venue serves it — your application
+cannot use it. That is a different problem from `:unsupported`, with a different remedy:
+one is a conversation with the venue, the other is not.
+
 ### Timeframes: nameable is wider than bucketable
 
 `Timeframe.known/0` is what Core can **bucket** — `aligned?/2` and `boundary/2` answer for

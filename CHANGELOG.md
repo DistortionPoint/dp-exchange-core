@@ -21,7 +21,54 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+- **`preview_order/3` and `replace_order/4` are now `Venue` callbacks**, and required
+  rather than optional. §6.1's rule is that the facade is one fixed set, never extended
+  per venue, and optionality is reserved for callbacks where requiring them would be pure
+  ceremony. These two are not: whether a venue can preview an order, and whether it can
+  amend one atomically, are things a consumer routes on — and `replace_order/4` is a claim
+  about **risk**, since its absence means cancel-then-place, which opens a window in which
+  no order is live.
+
+  **Not a breaking change, because there is nothing to break yet.** No consumer implements
+  this behaviour outside the family, and all five venue packages were updated in the same
+  change. A venue that serves neither returns `Venue.not_supported()` and declares
+  `supports_order_preview: false` / `supports_order_replace: false`. Once the host adopts
+  these packages, adding a required callback *would* be breaking and would take the
+  `0.2.0` seed §7.2 describes — that signal is deliberately not spent here.
+
+### Added
+- **Five capability fields and two facade callbacks**, closing every contract gap Schwab
+  found. Each existed because a venue could not say something true about itself.
+  - `ceiling` gained an optional **`:scope`** (`:credential | :account | :application`),
+    and `:limit` became `non_neg_integer`. Both matter: a limiter keyed by credential
+    **silently over-permits** a venue that counts per account, and a registration granted
+    zero throughput is legal and is **not** `:unsupported` — the endpoint exists and the
+    venue serves it; that application cannot use it, and the remedies differ.
+  - **`supported_sessions`** — which trading session an order may name. `[]` is the
+    continuous-market case and stays the default. `[:regular]` alone **raises**: it says
+    nothing, and a consumer would build a session selector with one option.
+  - **`supports_order_preview`**, **`supports_order_replace`**, **`supports_multi_leg_orders`**
+    — all raise if claimed while `place_order/3` is `:unsupported`.
+  - **`catalog_access`** (`:enumerable | :query_only`) — whether the catalogue can be
+    listed at all. `:query_only` raises if `get_symbols/1` is `:unsupported`, because
+    "searchable only" and "not served at all" are different facts.
+  - **`preview_order/3`** and **`replace_order/4`** as **required** facade callbacks.
+    Required rather than optional: the facade is one fixed set, and optionality is for
+    ceremony. Both are peripheral, and `replace_order/4`'s reason states the risk —
+    absence means cancel-then-place, which works and opens a window with no order live.
+- **Four order types**: `:trailing_stop`, `:trailing_stop_limit`, `:market_on_close`,
+  `:limit_on_close`. Real types Schwab accepts that Core had no word for, so a venue
+  serving them had to under-declare — the safe direction, and still a lie.
+- **Eight instrument types**: `:option`, `:future`, `:future_option`, `:index`,
+  `:mutual_fund`, `:bond`, `:forex`, `:cash_equivalent`. `[:spot, :perp]` was the whole
+  vocabulary while every venue was crypto; an option is not a spot instrument, so an
+  equities broker declared `[:spot]` plus a comment saying that understated it. **A
+  declaration that needs a comment to be true is what this struct exists to prevent.**
+- Two conformance assertions: the order-shape claims must match what the facade answers,
+  and `catalog_access` must match how `get_symbols/1` behaves without a query.
+
+
 
 ## [0.1.11] - 2026-08-31
 

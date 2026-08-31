@@ -211,6 +211,31 @@ defmodule DpExchange.Core.Venue do
   @doc "Cancels an order."
   @callback cancel_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
 
+  @doc """
+  Validates an order **without placing it**, returning the venue's own estimate of what
+  it would cost.
+
+  Optional, and only Schwab serves it. It is the one call in the family that checks an
+  order against the venue's rules before committing to it — which matters most exactly
+  where order writes are rate-limited and reads are not.
+
+  Declared through `supports_order_preview`, so a caller can tell "this venue has no
+  preview" from "this package has not implemented one".
+  """
+  @callback preview_order(credentials(), map(), keyword()) :: result(map())
+
+  @doc """
+  Replaces an open order **atomically**.
+
+  Optional. Every crypto venue in the family cancels and re-places, and on a venue that
+  supports replacement those two calls are **not equivalent**: cancel-then-place opens a
+  window in which no order is live, and on a moving market that window is the risk.
+
+  So this is a claim about risk rather than convenience, and it is declared through
+  `supports_order_replace` rather than being inferred from the callback existing.
+  """
+  @callback replace_order(credentials(), String.t(), map(), keyword()) :: result(Types.Order.t())
+
   @doc "One order's current state."
   @callback get_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
 
@@ -410,6 +435,12 @@ defmodule DpExchange.Core.Venue do
         "not load-bearing — an optimisation over unsubscribe/2 + subscribe/2, both core",
       {:market_status, 1} =>
         "not load-bearing — a venue that cannot say is treated as open, which is the crypto answer",
+      {:preview_order, 3} =>
+        "not load-bearing — absence means placing without a dry run, which is how every " <>
+          "other venue in the family works",
+      {:replace_order, 4} =>
+        "not load-bearing, but it is RISK-bearing — absence means cancel-then-place, " <>
+          "which works and opens a window in which no order is live",
       {:subscribe_notices, 1} =>
         "not load-bearing — losing notices costs visibility, not the trading path"
     }

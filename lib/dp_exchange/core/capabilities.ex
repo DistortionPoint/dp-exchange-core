@@ -125,11 +125,30 @@ defmodule DpExchange.Core.Capabilities do
   """
   @type ceiling ::
           %{
-            required(:limit) => pos_integer(),
+            required(:limit) => non_neg_integer(),
             required(:per_ms) => pos_integer(),
-            optional(:burst) => pos_integer()
+            optional(:burst) => pos_integer(),
+            optional(:scope) => ceiling_scope()
           }
           | nil
+
+  @typedoc """
+  What a ceiling is counted against.
+
+  `:credential` is the default and was the only case while every venue was crypto: one
+  key, one budget. The others exist because Schwab's is neither.
+
+  - `:credential` — per API key. One key, one bucket.
+  - `:account` — per **account**, so a host running several accounts through one
+    registration shares nothing between them and cannot infer one budget from another.
+  - `:application` — per registered application, shared across every credential and
+    account it issues. A ceiling a host cannot raise by adding keys.
+
+  This changes what a *caller* must do, which is why it is declared rather than left
+  implicit: a limiter keyed by credential silently over-permits a venue that counts by
+  account.
+  """
+  @type ceiling_scope :: :credential | :account | :application
 
   @typedoc """
   Roughly how many instruments the venue lists.
@@ -155,6 +174,22 @@ defmodule DpExchange.Core.Capabilities do
             # see `validate_margin!/1`), `nil` only when it does not margin at all.
             max_leverage: nil,
             supports_fractional_shares: false,
+            # Which trading sessions an order may name. `[]` for a venue that trades
+            # continuously — every crypto venue — and non-empty only where the market
+            # closes, which is why nothing needed it until an equities broker arrived.
+            supported_sessions: [],
+            # Whether the venue can validate an order *without placing it*, returning
+            # estimated cost. Only Schwab does, and it is the only way in the family to
+            # check an order against the venue's own rules before committing.
+            supports_order_preview: false,
+            # Whether an order can be amended atomically. `false` means a caller must
+            # cancel and re-place, which has a window in which no order is live — so this
+            # is a claim about risk, not convenience.
+            supports_order_replace: false,
+            # Whether `place_order/3` can express more than one leg. `false` on every
+            # venue in the family today; a venue with spreads declares `true` and the
+            # request grows a `:legs` key.
+            supports_multi_leg_orders: false,
             streamable: [],
             authenticated_streamable: [],
             historical_timeframes: [],
@@ -165,6 +200,11 @@ defmodule DpExchange.Core.Capabilities do
             max_candles_per_request: nil,
             reports_trade_volume: false,
             catalog_size: :unknown,
+            # How the catalogue can be reached. `:enumerable` — `get_symbols/1` returns
+            # everything, which is the crypto shape and the one the contract used to
+            # assume. `:query_only` — every lookup is a search and there is no
+            # list-everything call, so `get_symbols/1` requires a term.
+            catalog_access: :enumerable,
             # --- provenance ------------------------------------------------------
             measured_at: nil,
             measured_against: nil
@@ -179,6 +219,10 @@ defmodule DpExchange.Core.Capabilities do
           supports_margin: boolean(),
           max_leverage: Decimal.t() | :per_account | nil,
           supports_fractional_shares: boolean(),
+          supported_sessions: [session()],
+          supports_order_preview: boolean(),
+          supports_order_replace: boolean(),
+          supports_multi_leg_orders: boolean(),
           streamable: [data_kind()],
           authenticated_streamable: [data_kind()],
           historical_timeframes: [String.t()],
@@ -188,15 +232,75 @@ defmodule DpExchange.Core.Capabilities do
           max_candles_per_request: pos_integer() | nil,
           reports_trade_volume: boolean(),
           catalog_size: catalog_size(),
+          catalog_access: catalog_access(),
           measured_at: Date.t() | nil,
           measured_against: String.t() | nil
         }
 
+  @typedoc "Which trading session an order names, on a venue whose market closes."
+  @type session :: :pre_market | :regular | :post_market | :extended
+
+  @typedoc """
+  How the venue's catalogue can be reached.
+
+  `:enumerable` — `get_symbols/1` returns the whole list. `:query_only` — there is no
+  list-everything call and `get_symbols/1` requires a search term.
+  """
+  @type catalog_access :: :enumerable | :query_only
+
   @maturities [:proven, :experimental, :unsupported]
   @data_kinds [:quotes, :order_book, :trades, :orders, :fills, :balances]
-  @order_types [:market, :limit, :stop, :stop_limit, :post_only, :ioc, :fok]
+
+  # `:market` through `:fok` are the original seven, written for crypto venues. The four
+  # that follow are real order types Schwab accepts and Core had no word for, so a venue
+  # serving them had to under-declare — which is the safe direction and still a lie about
+  # the venue.
+  #
+  # `:trailing_stop` and `:trailing_stop_limit` need offset fields no crypto venue has
+  # (`stopPriceLinkBasis`, `stopPriceLinkType`, `stopPriceOffset` on Schwab). Declaring
+  # them says the venue accepts the type; it does not promise Core can express every
+  # parameter, which is what `place_order/3`'s request map is for.
+  @order_types [
+    :market,
+    :limit,
+    :stop,
+    :stop_limit,
+    :post_only,
+    :ioc,
+    :fok,
+    :trailing_stop,
+    :trailing_stop_limit,
+    :market_on_close,
+    :limit_on_close
+  ]
+
   @time_in_force [:gtc, :ioc, :fok, :gtd, :day]
-  @instrument_types [:spot, :perp]
+
+  # `:spot` and `:perp` were the whole vocabulary while every venue was crypto. An
+  # equities broker trades none of the rest of this list as "spot" in any meaningful
+  # sense — an option is not a spot instrument — so a venue serving them had to declare
+  # `[:spot]` and add a comment saying the declaration understated it. A declaration that
+  # needs a comment to be true is the thing this struct exists to prevent.
+  @instrument_types [
+    :spot,
+    :perp,
+    :option,
+    :future,
+    :future_option,
+    :index,
+    :mutual_fund,
+    :bond,
+    :forex,
+    :cash_equivalent
+  ]
+
+  # Which trading session an order is for. Empty for a venue that trades continuously,
+  # which is every crypto venue and is why this did not exist until an equities broker
+  # arrived. `:regular` is the session a person placing an order by hand would get.
+  @sessions [:pre_market, :regular, :post_market, :extended]
+
+  @ceiling_scopes [:credential, :account, :application]
+  @catalog_accesses [:enumerable, :query_only]
   @credential_benefits [:no_difference, :higher_ceiling, :required]
   @catalog_sizes [:small, :large, :vast, :unknown]
 
@@ -233,6 +337,8 @@ defmodule DpExchange.Core.Capabilities do
     validate_streaming!(declaration)
     validate_ceilings!(declaration)
     validate_margin!(declaration)
+    validate_orders!(declaration)
+    validate_catalog!(declaration)
 
     declaration
   end
@@ -332,6 +438,24 @@ defmodule DpExchange.Core.Capabilities do
               "#{inspect(@catalog_sizes)}"
     end
 
+    unless declaration.catalog_access in @catalog_accesses do
+      raise ArgumentError,
+            "catalog_access #{inspect(declaration.catalog_access)} must be one of " <>
+              "#{inspect(@catalog_accesses)}"
+    end
+
+    check_subset!(declaration.supported_sessions, @sessions, "supported_sessions")
+
+    # A venue that names sessions must be able to trade outside the regular one, or the
+    # field says nothing. `[:regular]` alone is the continuous-market case dressed up as
+    # a choice, and a consumer would build a session selector that has one option.
+    if declaration.supported_sessions == [:regular] do
+      raise ArgumentError,
+            "supported_sessions [:regular] says nothing — a venue with only one session " <>
+              "declares [] and a caller never names one. Declare the extended sessions " <>
+              "too, or declare none"
+    end
+
     :ok
   end
 
@@ -339,6 +463,41 @@ defmodule DpExchange.Core.Capabilities do
   # list and reports success having written nothing — which reads identically to "already
   # backfilled". And a width outside the shared vocabulary would be requested, come back as
   # something, and be stored under a label nothing else can read.
+  # The order-shape fields are only worth declaring if they agree with the endpoint map.
+  # A venue that cannot place an order at all cannot preview, replace or leg one.
+  defp validate_orders!(declaration) do
+    places? = active?(declaration, {:place_order, 3})
+
+    for {field, value} <- [
+          supports_order_preview: declaration.supports_order_preview,
+          supports_order_replace: declaration.supports_order_replace,
+          supports_multi_leg_orders: declaration.supports_multi_leg_orders
+        ],
+        value and not places? do
+      raise ArgumentError,
+            "#{field} is true but place_order/3 is :unsupported — a venue that cannot " <>
+              "place an order cannot preview, replace or leg one"
+    end
+
+    :ok
+  end
+
+  # `:query_only` is a claim about `get_symbols/1`, so it means nothing if that endpoint
+  # is not active — and `:enumerable` on a venue that cannot enumerate is the default
+  # quietly asserting something false, which is exactly what the field was added to stop.
+  defp validate_catalog!(declaration) do
+    query_only? = declaration.catalog_access == :query_only
+
+    if query_only? and not active?(declaration, {:get_symbols, 1}) do
+      raise ArgumentError,
+            "catalog_access is :query_only but get_symbols/1 is :unsupported — " <>
+              "'searchable only' and 'not served at all' are different facts, and a " <>
+              "caller acts differently on each"
+    end
+
+    :ok
+  end
+
   defp validate_history!(declaration) do
     # Keyed on an EXPLICIT declaration, not on `active?/2`. Undeclared endpoints default
     # to `:experimental`, so `active?` would read silence as a claim of history and
@@ -394,22 +553,7 @@ defmodule DpExchange.Core.Capabilities do
           {"authenticated_ceiling", declaration.authenticated_ceiling}
         ],
         not is_nil(ceiling) do
-      unless match?(%{limit: l, per_ms: p} when is_integer(l) and is_integer(p), ceiling) do
-        raise ArgumentError,
-              "#{name} must be %{limit: pos_integer, per_ms: pos_integer}, got #{inspect(ceiling)}"
-      end
-
-      # `:burst` is optional, but a present one must be a real depth. A burst of zero
-      # would be a limiter that never lets anything through, and a string here would
-      # reach the limiter's arithmetic before anyone noticed.
-      case ceiling do
-        %{burst: burst} when not (is_integer(burst) and burst > 0) ->
-          raise ArgumentError,
-                "#{name} :burst must be a pos_integer when present, got #{inspect(burst)}"
-
-        _no_burst_or_valid ->
-          :ok
-      end
+      validate_one_ceiling!(name, ceiling)
     end
 
     if declaration.credential_benefit == :higher_ceiling and
@@ -421,6 +565,44 @@ defmodule DpExchange.Core.Capabilities do
     end
 
     :ok
+  end
+
+  #  is `non_neg_integer` rather than `pos_integer`, and the zero is deliberate.
+  # Schwab registers applications with an order throughput anywhere in `0..120` per
+  # minute, and **zero is a legal registration**. It is not the same as `:unsupported`:
+  # the endpoint exists and the venue serves it — this application cannot use it. A
+  # consumer must be able to tell "the venue has no such endpoint" from "your
+  # registration was granted none of it", because the remedies differ entirely.
+  defp validate_one_ceiling!(name, ceiling) do
+    unless match?(
+             %{limit: l, per_ms: p} when is_integer(l) and l >= 0 and is_integer(p) and p > 0,
+             ceiling
+           ) do
+      raise ArgumentError,
+            "#{name} must be %{limit: non_neg_integer, per_ms: pos_integer}, " <>
+              "got #{inspect(ceiling)}"
+    end
+
+    case ceiling do
+      %{scope: scope} when scope not in @ceiling_scopes ->
+        raise ArgumentError,
+              "#{name} :scope must be one of #{inspect(@ceiling_scopes)}, got #{inspect(scope)}"
+
+      _no_scope_or_valid ->
+        :ok
+    end
+
+    # `:burst` is optional, but a present one must be a real depth. A burst of zero would
+    # be a limiter that never lets anything through, and a string here would reach the
+    # limiter's arithmetic before anyone noticed.
+    case ceiling do
+      %{burst: burst} when not (is_integer(burst) and burst > 0) ->
+        raise ArgumentError,
+              "#{name} :burst must be a pos_integer when present, got #{inspect(burst)}"
+
+      _no_burst_or_valid ->
+        :ok
+    end
   end
 
   defp validate_margin!(%__MODULE__{supports_margin: false, max_leverage: nil}), do: :ok

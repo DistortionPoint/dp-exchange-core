@@ -90,6 +90,10 @@ defmodule DpExchange.Core.ReferenceVenue do
       supported_order_types: [:market, :limit, :post_only],
       supported_time_in_force: [:gtc, :ioc],
       supported_instrument_types: [:spot],
+      # The reference venue implements both, so it declares both. The conformance suite
+      # asserts these two agree, which is what stops the pair drifting.
+      supports_order_preview: true,
+      supports_order_replace: true,
       supports_short_selling: false,
       streamable: [:quotes, :trades],
       authenticated_streamable: [],
@@ -251,6 +255,21 @@ defmodule DpExchange.Core.ReferenceVenue do
   def cancel_order(credentials, id, opts) do
     with {:ok, order} <- get_order(credentials, id, opts) do
       {:ok, %{order | status: :cancelled}}
+    end
+  end
+
+  # The reference venue implements both, because it exists to be a complete facade — a
+  # venue that genuinely has neither returns `Venue.not_supported()` and declares
+  # `supports_order_preview: false` / `supports_order_replace: false`.
+  @impl true
+  def preview_order(_credentials, request, _opts) do
+    {:ok, %{estimated_commission: Decimal.new("0.00"), request: request}}
+  end
+
+  @impl true
+  def replace_order(credentials, id, _request, opts) do
+    with {:ok, order} <- get_order(credentials, id, opts) do
+      {:ok, %{order | status: :open}}
     end
   end
 

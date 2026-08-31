@@ -60,6 +60,19 @@ The per-repo checklist. Every step exists because skipping it has cost something
       If the contract cannot express your venue's answer, that is a Core gap — record it
       in the plan rather than picking the nearest field that almost fits.
 
+- [ ] **Declare the order-shape fields even when they are all `false`.** `supported_sessions`,
+      `supports_order_preview`, `supports_order_replace`, `supports_multi_leg_orders` and
+      `catalog_access` all default to the crypto answer, which is right for a crypto venue
+      and silently wrong for anything else. `Capabilities` raises if you claim preview,
+      replace or multi-leg while `place_order/3` is `:unsupported`, and if you claim
+      `catalog_access: :query_only` while `get_symbols/1` is — but it cannot catch a venue
+      that quietly accepts the defaults.
+
+- [ ] **Give a `ceiling` a `:scope` unless it really is per-credential.** `:account` and
+      `:application` exist because a limiter keyed the wrong way over-permits, and the
+      symptom is being throttled by the venue rather than by you. `limit: 0` is legal and
+      means a registration with no throughput — not the same as `:unsupported`.
+
 - [ ] **Check `historical_timeframes` against `Timeframe.nameable/0`, not `known/0`.**
       `1w` and `1M` are nameable and deliberately unbucketable. A venue serving them is
       normal; Core just cannot tell you where a weekly bucket starts.
