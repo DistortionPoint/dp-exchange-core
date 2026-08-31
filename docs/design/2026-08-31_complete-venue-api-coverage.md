@@ -899,11 +899,43 @@ venue's own timestamp is the timestamp.
 **This list covers the surface enumerated so far.** Phase 0 widens it to everything D7 puts
 in scope, and the boxes it adds belong under these same headings.
 
+
+#### Phase 3 — what the first endpoint taught
+
+**`POST /api/v3/brokerage/orders` (Coinbase) is done**, and it turned out to be the phase's
+most instructive endpoint rather than its most routine.
+
+**Coinbase names the order type and the time-in-force in a single key**, and the set of
+names is **sparse**. `order_configuration` is a one-key map: `limit_limit_gtc`,
+`market_market_ioc`, `stop_limit_stop_limit_gtd`. The facade carries `:order_type` and
+`:time_in_force` separately, so this is a cross-product — and there is **no
+`limit_limit_ioc`, no `market_market_gtc`, no `stop_limit_stop_limit_ioc`**.
+
+**A pair the venue does not name is an error, not the nearest key.** Sending `{:limit, :ioc}`
+as `limit_limit_fok` would place an order that fills-or-kills where the caller asked for
+immediate-or-cancel, with every field in the request looking correct. That is §0 with money
+behind it, and it is asserted: one test uses a plug that **raises if called**, proving the
+refusal happens before the request is sent rather than being read out of a response.
+
+**Three other refusals came out of the same endpoint**, each a default that would have been
+a different order: a limit without a price, a stop-limit without a stop price, and a market
+order sized in neither base nor quote. **`post_only` is omitted rather than sent as `false`**
+— silence is not a decision to take liquidity.
+
+**A 200 is not a placed order.** The venue answers `success: false` in a 200 for a
+rejection; reading the status code alone would report an order that does not exist.
+
+`client_order_id` is the venue's **idempotency key** — re-sending one returns the original
+order rather than placing a second — so a caller's own id is passed through, and a v4 UUID
+is generated from the VM's CSPRNG when absent.
+
+**This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
+call, it is finding which of the venue's combinations do not exist and refusing them.
 #### Phase 3 · Orders (30)
 
 - [ ] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
 - [ ] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders
+- [x] `coinbase ` POST   /api/v3/brokerage/orders
 - [ ] `coinbase ` POST   /api/v3/brokerage/orders/batch_cancel
 - [ ] `coinbase ` POST   /api/v3/brokerage/orders/close_position
 - [ ] `coinbase ` POST   /api/v3/brokerage/orders/edit
