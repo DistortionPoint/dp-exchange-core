@@ -2144,14 +2144,74 @@ migration task — deciding the host's collection strategy remains out of scope 
       to probe production must never live in this repo.
       **Blocks on nothing. Requires Core to publish** the three changes above before
       `dp-exchange-schwab` can build against Hex rather than a path.
-- [ ] **7.3** Scaffold `dp-exchange-schwab` from the §7 standard (**two restart gates**,
-      §7.1); implement against the
-      contract with no host source
-- [ ] **7.4** Catalog size is the contract's real stress test here. `list_instruments/1`
-      is an optional `DataProvider` callback and `get_symbols/1` is required; confirm
-      both have a defined answer at millions of instruments (paging? streaming? refusal?)
-      rather than assuming the crypto-venue shape, where a full catalog is a single
-      cheap call. If the contract cannot express it, that is a Core gap — record it here.
+- [x] **7.3** ~~Scaffold `dp-exchange-schwab` from the §7 standard; implement against the
+      contract with no host source.~~ — **done 2026-08-31.** 228 tests, 0 failures across
+      8 seeds, **94.38% coverage**, `mix quality` clean (credo --strict 0 issues, dialyzer
+      0 errors). **Core's 28-assertion conformance suite passes.** No host source was
+      read; every claim traces to `docs/reference/schwab/`.
+      Modules: `Auth` (signing **and** refresh), `SymbolFormat`, `Rest` (both servers),
+      `Orders`, `Feed` (a `PollingFeed`), `Supervisor`, `Fake`, and the facade. Plus
+      `README.md`, `usage-rules.md`/`AGENTS.md`, `CHANGELOG.md` and a **written**
+      `CLAUDE.md` — written, not copied: an earlier venue in this family had one
+      blanket-copied and it asserted an MQTT transport for a venue with no socket.
+      **Token refresh is in the package, and the architect's correction is what put it
+      there.** It was first built as signing only, on the reading that OAuth is entirely
+      host-side. That was wrong twice: §6.0 already places "session refresh, token
+      rotation" on the package's side of the line, and **the access token lives 30
+      minutes** — a package that only signed would hand back an expired token twice an
+      hour and be useless unattended. Only the initial three-legged grant, which needs a
+      browser and a person, stays with the host.
+      **The refresh token is one-time use**, and every refresh mints a new one carrying a
+      fresh seven days (Step 4's own response block). So there is **no weekly ceiling on
+      unattended operation** — an earlier draft claimed one, and it was wrong. Three
+      consequences are enforced in code because each failure is unrecoverable without a
+      person: a success with no replacement token is an **error** rather than a token to
+      keep; a refresh is **never retried** (at-most-once — a retry after a timeout
+      re-sends a possibly-spent token while its replacement sits in a response nobody
+      read), with `:retry_attempts` dropped from the caller's options rather than
+      defaulted; and the result must be persisted before use.
+      **`SymbolFormat` had to split.** `Core.SymbolNormalizer` requires
+      `to_exchange_symbol/1` to be **total** — the conformance suite asserts it over
+      arbitrary input — but a caller about to spend a request must refuse first. So
+      translation is total and `validate/1` judges, and `Rest`, `Orders` and `Fake` call
+      the latter. The refusal is not academic: `BTC`, `ETH` and `SOL` are all real listed
+      equity tickers, so a misrouted crypto pair resolves to an ETF quoted in dollars that
+      is indistinguishable downstream from a real price.
+      **The published instruction matrix is enforced before sending.** Schwab documents
+      which instructions each asset type accepts — `BUY`/`SELL`/`SELL_SHORT`/
+      `BUY_TO_COVER` equity-only, the four `_TO_OPEN`/`_TO_CLOSE` forms option-only. Order
+      writes are the throttled operation here and reads are free, so a rejection the
+      documentation already predicted must not cost one of them.
+      **Two defects found by the tests rather than by review**: `decode/1` collapsed every
+      list response to `%{}`, which made `/accounts/accountNumbers` and both order
+      listings come back *silently empty* — an account list emptied by a parser looks
+      exactly like a credential with no linked accounts; and `days_for/2` had two
+      unreachable clauses, replaced with a total lookup so a width added later cannot pick
+      a wrong lookback unnoticed.
+- [x] **7.4** ~~Catalog size is the contract's real stress test here.~~ — **done
+      2026-08-31, and the contract failed the test, which is what the task was for.**
+      **`get_symbols/1` cannot be answered on this venue as the contract assumes.**
+      `GET /instruments` takes a `projection` — `symbol-search`, `symbol-regex`,
+      `desc-search`, `desc-regex`, `search`, `fundamental` — and **every one of them
+      searches against a term**. There is no list-everything projection, and there could
+      not sensibly be: the catalogue is every US-listed equity and option. So the question
+      the task posed — paging, streaming, or refusal — has a fourth answer the crypto
+      venues made invisible: **a pull requires a query**.
+      Core's conformance suite asserts `Capabilities.active?(caps, {:get_symbols, 1})`
+      with the message *"every venue can be pulled; there is no flag for it"*. That
+      assertion is right and the assumption under it — that a full catalogue is one cheap
+      call — is the crypto-venue shape. Resolved without weakening either: `get_symbols/1`
+      is **active**, takes `:query`, and returns `{:error, {:query_required, :schwab}}`
+      without one. That is deliberately *not* `:not_supported` — the endpoint works, the
+      caller has to say what it wants — and a caller can tell the two apart, which is the
+      whole point.
+      Returning some arbitrary search instead would hand back a short list that **looks
+      like a catalogue**, which is this venue's version of the family's recurring failure.
+      `catalog_size: :vast` is declared, and `list_instruments/1` stays `:unsupported`:
+      it is the optional richer-`Instrument` callback, `get_symbols/1` already covers the
+      searchable surface, and the extra fields are not checkable without a credential.
+      **Recorded as a Core gap at 7.5**: the contract has no way to say "pullable, but only
+      by query". Today that is expressed by an error atom a consumer must know to expect.
 - [~] **7.5** Whatever else Schwab needs that the contract cannot express is a Core gap —
       record it here. (Equities are *not* new ground: Webull already declares
       `asset_classes: [:crypto, :equity]` and lands in Phase 6.2, before this.)
@@ -2188,6 +2248,21 @@ migration task — deciding the host's collection strategy remains out of scope 
          forward from 7.1, now confirmed against the specs). Replacement is the sharper of
          the two: expressing it as cancel-then-place is *not equivalent on this venue*,
          because it opens a window in which no order is live.
+      6. **The contract cannot say "pullable, but only by query"** (from 7.4). Core's
+         conformance suite asserts every venue can be pulled, on the crypto-venue
+         assumption that a full catalogue is one cheap call. Schwab's `/instruments` has
+         no list-everything projection at all. Today that is expressed as an active
+         endpoint returning `{:error, {:query_required, :schwab}}`, which works and which
+         a consumer has to know to expect. A first-class way to declare it — a capability
+         field, or a distinct error the contract names — would let a caller discover the
+         requirement instead of learning it from a refusal.
+      7. **Multi-leg, conditional and `previewOrder` shapes have no request vocabulary**
+         (from 7.3). `place_order/3` takes a flat request — one symbol, one side, one
+         quantity — while Schwab's `TRIGGER`, `OCO` and net-priced spreads nest whole
+         orders in `childOrderStrategies`. This package builds the single-leg `SINGLE`
+         strategy and nothing else, which is the honest boundary rather than a workaround:
+         inventing a request shape here would put venue vocabulary into consumer code,
+         which is what the facade exists to prevent (D12).
 
 ### Phase 8 — Close
 
@@ -5173,5 +5248,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-31 (v1.85 — **Phase 7.1 and 7.2 CLOSED**: the architect signed the browser into Schwab's developer portal, and both OpenAPI documents are captured in full and committed (`openapi/`, `documentation/`, `portal-raw/`, with a `README` recording how to re-capture — a page-context `fetch()` cannot, CORS blocks the gateway origin). **A security finding**: the portal's spec response carries the signed-in account's live `appKey`/`appSecret` in the same JSON, because that endpoint also feeds the "Try it" console — redacted, recorded, nothing committed, and anyone re-capturing must redact again. The outline-only capture was **exactly right about shape** (10 + 13 endpoints) and lossy only about values; one reading in it was **wrong and is corrected in place** (`orderTypeRequest` differs from `orderType` by `UNKNOWN` alone, a read-side escape hatch, not a resolution rule). **Sandbox: no** — promised "later this year" in a 2025-10-30 document, with no non-production server in either spec, so unlike Gemini this venue cannot be exercised without real money. `DpExchange.Schwab.Capabilities` derived entirely from the specs: 22 tests, 100% coverage, `mix quality` clean, **eight candle widths** with minute widths capped at a ten-day lookback, and three refusals where a plausible substitute was available — `:ioc`/`:fok` are `duration` values here and not order types, `:gtd` is absent because three fixed horizons are not an arbitrary date, and `max_candles_per_request` is `nil` because the cap is a period. **`max_leverage` is the wrong shape for Reg-T and this changed Core**: five buying powers that are not multiples of one another on a margin account and none of them on a cash account → Core gained `:per_account`, a positive statement rather than a silence. **Two further Core defects fixed**: `Timeframe` did not model `10m` (so every 10-minute candle passed the alignment check unexamined), and `Capabilities` refused `1w`/`1M` while `Timeframe`'s own moduledoc documents them as deliberately unbucketable — Core contradicted itself, and gained `nameable/0` for the widths it can *name* as against the widths it can *bucket*. **Five Core gaps recorded at 7.5**, none blocking: no per-account dimension on `ceiling` (and a legal ceiling of zero is not `:unsupported`), a crypto instrument-type vocabulary, four order types with no atom, `session` with no slot at all, and `previewOrder`/atomic replacement still unexpressible. 69/77 tasks.)
+**Last Updated**: 2026-08-31 (v1.86 — **Phase 7 COMPLETE except 7.5's open gaps: 7.1, 7.2, 7.3 and 7.4 all closed.** `dp-exchange-schwab` implemented against the contract with no host source: **228 tests, 0 failures across 8 seeds, 94.38% coverage, `mix quality` clean, and Core's 28-assertion conformance suite passing.** Both of Schwab's OpenAPI documents are captured and committed — the portal is behind a login and publishes no spec, so the reference cannot be re-fetched and travels with the code. **A security finding**: the portal's spec response ships the signed-in account's live `appKey`/`appSecret`, because that endpoint also feeds the "Try it" console; redacted, recorded, nothing committed. **Two architect corrections reshaped the package.** First, token refresh belongs *in* the package — §6.0 already placed "session refresh, token rotation" on this side, and the access token lives **30 minutes**, so a signing-only package would hand back an expired token twice an hour. Second, **the refresh token is one-time use and every refresh mints a new one with a fresh seven days**, so there is **no weekly ceiling on unattended operation** — an earlier draft claimed one. Three consequences are enforced because each failure is unrecoverable without a person at a browser: a success with no replacement token is an error, a refresh is **never retried** (at-most-once), and the result must be persisted before use. **7.4 found the contract's real limit**: `/instruments` has *no list-everything projection*, so `get_symbols/1` cannot be answered as the crypto-venue shape assumes — resolved as an **active** endpoint requiring `:query`, which is deliberately not `:unsupported`, because "needs a term" and "has no endpoint" are different things a caller must tell apart. **Three Core defects fixed** (`Timeframe` missing `10m`; `Capabilities` *and* `AdapterContract` both refusing `1w`/`1M` against `known/0` where `Timeframe`'s own moduledoc documents them as deliberately unbucketable — Core gained `nameable/0`; and `max_leverage` admitting no answer for Reg-T — Core gained `:per_account`, since a margin account carries five buying powers that are not multiples of one another and a cash account carries none). **Seven Core gaps recorded at 7.5**, none blocking. Core 0.1.10 published. 72/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)

@@ -172,8 +172,13 @@ defmodule DpExchange.Core.AdapterContract do
         end
 
         test "declared candle widths are in the shared vocabulary" do
+          # `nameable/0`, not `known/0`. The vocabulary of *labels* is deliberately wider
+          # than the set Core can *bucket*: `1w` and `1M` have no boundary rule and never
+          # will, because a weekly bar's start depends on the venue's week and a month is
+          # not a fixed number of seconds. A venue that genuinely serves them must be able
+          # to say so — the alternative is under-declaring what it serves.
           caps = @venue.capabilities()
-          assert caps.historical_timeframes -- Timeframe.known() == []
+          assert caps.historical_timeframes -- Timeframe.nameable() == []
         end
 
         test "a claim of history names the widths it serves" do
