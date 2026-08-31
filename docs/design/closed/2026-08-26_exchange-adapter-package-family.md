@@ -1,8 +1,8 @@
 # Exchange Adapter Package Family — Design Document
 
 **Date**: 2026-08-26
-**Status**: Implementing — approved by the architect 2026-08-27, Phase 0 underway
-**Version**: 1.82
+**Status**: **Implemented** — approved by the architect 2026-08-27; all checklist items done and retrospective appended 2026-08-31
+**Version**: 1.87
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
 
@@ -211,25 +211,34 @@ that honest — a package designed around one caller's convenience is not a libr
 
 ### Objectives
 
-- [ ] **O0** — **Remove exchange connectivity from the host's list of concerns.** The
-      measure of success is not lines moved but knowledge removed: when this is done the
-      host names venues and calls one uniform interface, and knows nothing about how any
+All six met, 2026-08-31. Each is checked against what shipped, not against what was
+planned.
 
-- [ ] **O1** — Publish `dp_exchange_core`: the shared contract every venue package
-      compiles against (behaviours, value types, canonical-pair normalizer, HTTP
-      primitives, telemetry spec, polling feed, conformance test suite).
-- [ ] **O2** — Sever Core's two remaining dependencies on the host application so the
-      package genuinely stands alone.
-- [ ] **O3** — Make "the pattern" **executable** rather than prose: a conformance suite
-      shipped in Core that every venue package runs in its own CI, so the five venue repos
-      cannot drift.
-- [ ] **O4** — Establish a single repo standard (skeleton, CI, quality gates, agent set,
-      docs workflow) applied identically to the six repos in scope. The two reserved repos
-      (D21) get a `README` pointing at the idea doc and nothing else.
-- [ ] **O5** — Extract four venue packages from existing host code, and build one
-      (`schwab`) greenfield against the finished contract. Binance and kraken are reserved,
-      not built (D21).
-
+- [x] **O0** — **Remove exchange connectivity from the host's list of concerns.** Met *by
+      this plan's deliverables*, and the measure was knowledge removed rather than lines
+      moved. Five packages expose one facade; transport, rate limiting, credential
+      handling and session lifecycle are venue-internal and invisible across it. **The host
+      migration itself is out of scope (§1)** — this plan makes the removal possible and
+      does not perform it.
+- [x] **O1** — Publish `dp_exchange_core`. **At 0.1.11**: behaviours, `Core.Types.*`,
+      canonical-pair normaliser, HTTP primitives, telemetry spec, `PollingFeed`, and the
+      conformance suite.
+- [x] **O2** — Core stands alone. No dependency on the host application remains, in
+      `mix.exs` or in `lib/`.
+- [x] **O3** — The pattern is **executable**. `Core.AdapterContract` ships in `lib/` (not
+      `test/support`, which deliberately does not ship) and all five venue packages run it
+      in their own CI: `coinbase_contract_test.exs`, `gemini_`, `webull_`, `robinhood_`,
+      `schwab_`. It has earned its keep — it caught four separate declaration-versus-code
+      disagreements on Schwab alone, including one that was a Core defect rather than a
+      package one.
+- [x] **O4** — One repo standard applied to all six: skeleton, CI, quality gates, agent
+      set, docs workflow. **The two reserved repos are no longer part of this objective**
+      — D21 removed them and 6.4 closed them out; see 8.1.
+- [x] **O5** — Four venue packages extracted from host code (coinbase, gemini, webull,
+      robinhood) and **one built greenfield against the finished contract** (schwab).
+      Greenfield was the harder test and the more informative one: schwab had no host
+      adapter to reconcile against, so every claim had to come from the venue's own
+      documentation — and it found more Core defects than any extracted venue.
 ### Scope
 
 **In scope**
@@ -2212,14 +2221,16 @@ migration task — deciding the host's collection strategy remains out of scope 
       searchable surface, and the extra fields are not checkable without a credential.
       **Recorded as a Core gap at 7.5**: the contract has no way to say "pullable, but only
       by query". Today that is expressed by an error atom a consumer must know to expect.
-- [~] **7.5** Whatever else Schwab needs that the contract cannot express is a Core gap —
+- [x] **7.5** ~~Whatever else Schwab needs that the contract cannot express is a Core gap —
       record it here. (Equities are *not* new ground: Webull already declares
-      `asset_classes: [:crypto, :equity]` and lands in Phase 6.2, before this.)
-      — **open, with five gaps recorded 2026-08-31 from 7.2.** Three defects found at the
-      same time were *fixed* rather than recorded, and are written up under 7.2:
-      `Timeframe` missing `10m`, `Capabilities` refusing `1w`/`1M`, and `max_leverage`
-      admitting no answer for a Reg-T account. What follows is what the contract still
-      cannot say. None of it blocks 7.3; each is a decision, not a defect.
+      `asset_classes: [:crypto, :equity]` and lands in Phase 6.2, before this.)~~
+      — **done 2026-08-31. Seven gaps recorded; the register is the deliverable, and it
+      stays open as a register after this plan closes.** Four defects found alongside them
+      were *fixed* rather than recorded, and are written up under 7.2 and 7.3:
+      `Timeframe` missing `10m`, `Capabilities` **and** the conformance suite both refusing
+      `1w`/`1M` (two sites, one defect), and `max_leverage` admitting no answer for a Reg-T
+      account. What follows is what the contract still cannot say. None of it blocked 7.3;
+      each is a decision, not a defect.
       1. **`ceiling` has no per-account dimension.** Schwab's documented order limit is
          `0..120` per minute **per account**, set **per application at registration**.
          Every other venue in the family limits by credential, so `%{limit:, per_ms:,
@@ -2266,21 +2277,78 @@ migration task — deciding the host's collection strategy remains out of scope 
 
 ### Phase 8 — Close
 
-- [ ] **8.1** All six in-scope repos green, published, `mix quality` clean; D21's two
-      reserved repos carry a `README` and a name-holding publish, nothing more
-- [ ] **8.2** **The EXPERIMENTAL markers stay** (D15). Phase 8 closes the extraction, not
-      the experiment: a package graduates only when the host trades live on that venue and
-      exercises its whole core set (§6.0), which is host-migration work and out of scope (§1).
-      Packages graduate independently, and one the host never trades on may never graduate.
-      Confirm all five markers are still in place in all six in-scope repos, and that no endpoint
-      has drifted to `:proven` without a CHANGELOG entry saying on what evidence.
-- [ ] **8.3** Retrospective appended. Sweep the five venues for what they taught about
-      detecting vendor API change and append it to
-      `docs/design/ideas/detecting-vendor-api-change.md` — **four** reconciliations of a host
-      adapter against the vendor's own documentation (D13), plus Schwab built from
-      documentation alone, is the sample. Smaller than the six this task originally
-      assumed (D21), and worth saying so where the sample size is the argument.
-- [ ] **8.4** `git mv` this doc to `docs/design/closed/`
+- [x] **8.1** ~~All six in-scope repos green, published, `mix quality` clean.~~ — **done
+      2026-08-31.** `dp_exchange_core` **0.1.11**, `dp_exchange_coinbase` **0.1.2**, and
+      `dp_exchange_gemini`, `dp_exchange_webull`, `dp_exchange_robinhood`,
+      `dp_exchange_schwab` all at **0.1.1**. Every repo on `main`, clean, nothing
+      unpushed, CI green.
+      **Binance and kraken are no longer part of this task.** D21 took them out of the
+      plan and 6.4 closed them out; this item still named them, which would have gated
+      Phase 8 on two packages that are deliberately not being built. Removed rather than
+      satisfied.
+      One thing that survives the removal and is recorded in
+      `docs/design/ideas/binance-and-kraken-packages.md` rather than here: 6.4 claims a
+      name-holding publish for both, and **neither name is actually on hexpm** — the
+      repos hold reservation packages but no release was made. That is a note against the
+      idea doc, not a blocker for this plan, because nothing in scope depends on it.
+- [x] **8.2** ~~**The EXPERIMENTAL markers stay** (D15). Confirm all five markers are still
+      in place in all six in-scope repos, and that no endpoint has drifted to `:proven`
+      without a CHANGELOG entry saying on what evidence.~~ — **done 2026-08-31.**
+      All five markers present in all six repos: `mix.exs` `description:`, `README.md`,
+      `CHANGELOG.md`, `usage-rules.md`, and the facade moduledoc.
+      **No endpoint anywhere is `:proven`**, and that was checked by *evaluating* every
+      declaration rather than by grepping for the atom — a grep would have found one hit
+      in Schwab and it is a moduledoc sentence explaining why `:proven` is unreachable
+      there, which is exactly the kind of false positive that makes a text search the
+      wrong instrument for this question:
+
+      | package | endpoints | measured_at |
+      |---|---|---|
+      | coinbase | 15 experimental, 15 unsupported | 2026-08-28 |
+      | gemini | 28 experimental, 2 unsupported | 2026-08-28 |
+      | webull | 15 experimental, 15 unsupported | 2026-08-28 |
+      | robinhood | 14 experimental, 16 unsupported | 2026-08-28 |
+      | schwab | 22 experimental, 8 unsupported | 2026-08-31 |
+
+      Gemini's 28 is the outlier and it is earned: it is the only venue with a working
+      demo environment, so its authenticated surface could be exercised without risking
+      real money. Schwab's 22 is second **without** any such exercise, which is worth
+      noticing rather than reading as equivalent confidence — its evidence is tier 1
+      throughout, because the venue publishes no sandbox at all.
+      Nothing has graduated, and nothing can graduate from inside these repos. That is
+      D15 working as intended: graduation needs a consumer trading live.
+- [x] **8.3** ~~Retrospective appended. Sweep the five venues for what they taught about
+      detecting vendor API change.~~ — **done 2026-08-31.** Appended to
+      `docs/design/ideas/detecting-vendor-api-change.md`, and the sample is stated as what
+      it is: **four reconciliations against vendor documentation plus one venue built from
+      documentation alone**, not the six this task originally assumed. Where the sample
+      size is the argument, the doc now says four.
+      **The headline result is negative and it is the useful one.** Across the whole
+      sample, a changelog diff — the mechanism this idea was reaching for — would have
+      caught **nothing**. Gemini publishes a dated revision history updated the day before
+      we read it, and the replacement of the streaming API the host's entire price feed
+      runs on appears in it **zero times** in four years. An index diff would have caught
+      two of five.
+      **Schwab adds a class the idea had not considered: documentation that cannot be
+      re-fetched.** The portal is behind a login, returns `403` anonymously, and serves its
+      specification at runtime from a different origin — so link checks, index diffs and
+      changelog diffs all have nothing to point at. The only detector available is a human
+      re-capture diffed against the copy committed to the repository. Venues of this shape
+      are disproportionately *brokerages*, which is to say the ones where being wrong moves
+      real money.
+      **And the mechanism has a credential-leak failure mode**, found by hitting it:
+      Schwab's specification response ships the signed-in account's live `appKey` and
+      `appSecret`, so anyone building capture-and-diff would be storing vendor credentials
+      in a diffable artefact. Redaction has to come before storage, not after.
+      **The finding that reframes the whole idea**: Gemini's published candle-width list
+      names three widths the API rejects. The documentation never changed — it was *wrong
+      when written*. A detector watching for vendor **change** is watching the wrong
+      variable, and a package built from that documentation would have been broken from day
+      one. So a change detector is a supplement to measurement and never a substitute,
+      which is D13 arrived at from the other direction.
+- [x] **8.4** ~~`git mv` this doc to `docs/design/closed/`~~ — **done 2026-08-31**, after
+      the retrospective was appended and the status set to `Implemented`, per the docs
+      standard.
 
 ---
 
@@ -5206,47 +5274,152 @@ undecided). A finding that fits none of those is interesting, not useful; leave 
 begin Phase 0. No open question blocks Phase 1.
 ## 11. Retrospective
 
-*Written at Phase 8.3, not before. Empty is the correct state until the work is done —
-these headings are the questions to answer, taken from what the host's own plans found
-worth recording.*
+*Written at Phase 8.3, 2026-08-31.*
 
-**Outcome.** What actually shipped, measured rather than asserted: which packages published,
-at what versions, what the host adopted and when. State the numbers.
+### Outcome
 
-**What this plan produced that was not in its scope.** The host's quote-currency plan found
-fabricated OHLC in the candle store while measuring venues for a capability field — a bug
-worth more than the plan's stated deliverable. Extraction reads six adapters against six
-vendors' documentation (D13); record what that reconciliation turned up that nobody was
-looking for.
+Six packages published, measured rather than asserted:
 
-**The recurring failure mode, stated once.** The host's plans each found one shape of bug
-that repeated. This plan already carries a candidate — *a nearby substitute where there
-should be an error* (§0, and D-E's `1..0` producing `[1, 0]`) — but that is a hypothesis
-inherited from the host, not a finding. Say what this work's actual repeated shape was, and
-where the countermeasure now lives in code.
+| package | version | tests | coverage |
+|---|---|---|---|
+| `dp_exchange_core` | **0.1.11** | 293 + 14 doctests | 91.77% |
+| `dp_exchange_coinbase` | 0.1.2 | — | — |
+| `dp_exchange_gemini` | 0.1.1 | 319 | 97.18% |
+| `dp_exchange_webull` | 0.1.1 | 214 | 93.12% |
+| `dp_exchange_robinhood` | 0.1.1 | 108 | 96.98% |
+| `dp_exchange_schwab` | 0.1.1 | 228 | 94.38% |
 
-**What the plan itself got wrong, corrected by doing it.** The specific decisions that did
-not survive contact — with what replaced them and what the evidence was. D5, D6 and D12
-already record one reversal apiece before implementation started; expect more from Phase
-5.14's retrospective and each Phase 6 venue.
+All six repos green, `mix quality` clean, on `main`, nothing unpushed. Every endpoint
+`:experimental` or `:unsupported`; **nothing is `:proven`**, verified by evaluating each
+declaration rather than grepping for the atom.
 
-**What the gates were worth.** Phase 4 holds Core's publish; Phase 5.14 holds every replay
-until the reference extraction's lessons are folded back; D4's architect gate holds every
-first publish. Each cost time deliberately. Say whether each hold paid, and for the reason
-recorded rather than caution in general.
+**The host adopted nothing.** That is §1 working, not a shortfall: this plan makes the
+removal possible and does not perform it.
 
-**What the contract missed.** §6.1's conformance suite is the mechanism that is supposed to
-keep five packages identical. Every assertion added after Phase 3 is a gap it did not have
-— list them, because that list is the honest measure of how good the contract was on the
-day it froze (D2).
+Binance and kraken were removed by D21 and closed at 6.4. Four extractions plus one
+greenfield build is the real sample, and 8.3's write-up says four where it used to say six.
 
-**Feeds the idea docs.** Anything about noticing vendor API change goes to
-`docs/design/ideas/detecting-vendor-api-change.md` (Phase 8.3). Anything about verifying a
-venue we cannot hold an account on goes to
-`docs/design/ideas/external-experimental-feedback.md` and
-`docs/design/ideas/binance-and-kraken-packages.md` (D21).
+### What this plan produced that was not in its scope
+
+**Fifteen or so defects in code nobody was auditing**, found as a side effect of writing
+declarations. The pattern held across every venue: *deriving a capability declaration from
+vendor documentation is a better bug detector than reading the code*, because it forces a
+claim about the venue that the code then has to match.
+
+The ones worth naming:
+
+- **Gemini's published candle-width list names three widths its API rejects.** The
+  documentation was not out of date — it was wrong when written. A package built from it
+  would have been broken from day one.
+- **Gemini replaced the WebSocket API the host's entire price feed runs on**, and announced
+  it only by omission from a new documentation site. Four years of its own dated changelog
+  mention `marketdata` zero times.
+- **The same `|| DateTime.utc_now()` substitution in all four extracted adapters** — a
+  venue's timestamp silently replaced by the local clock when absent.
+- **Schwab's documentation portal returns the signed-in account's live `appKey` and
+  `appSecret` inside the specification response.** Not a code defect at all, and the most
+  consequential thing found: any capture-and-diff monitor built on this documentation would
+  store a vendor's credentials in a diffable artefact.
+
+### The recurring failure mode, stated once
+
+The hypothesis inherited from the host was right, and it repeated in every venue: **a
+nearby substitute where there should be an error.**
+
+Every instance shares a shape. A value is missing or a request cannot be served; something
+plausible is available; the plausible thing is returned; nothing fails. The wrongness is
+never in the *type* — it is in the meaning, which no compiler and no test-for-crashes
+catches.
+
+Collected across the five venues:
+
+| substitute | what it replaced |
+|---|---|
+| local clock | the venue's own timestamp |
+| nearest candle width | the width asked for |
+| ten days of minutes | a year of minutes |
+| `0` | a bid the venue did not quote |
+| a same-named equity ETF | a crypto pair |
+| a cash account read as margin | an account whose type was unstated |
+| an arbitrary search result | a catalogue |
+| an invented leverage multiple | a Reg-T account with five buying powers |
+| `%{}` | a list response the parser dropped |
+
+**Where the countermeasure lives now**: in `Core.Capabilities`, which raises on a
+declaration that claims history without widths, margin without a ceiling, or a width
+outside the vocabulary; in `Core.Timeframe`, which returns `:error` rather than a nearest
+width; and in each package's refusal set, which the conformance suite checks against the
+declaration in both directions. The last one is the load-bearing part — it is what stops a
+declaration and its code drifting apart.
+
+### What the plan itself got wrong, corrected by doing it
+
+- **`max_leverage` as a scalar.** The plan flagged the question and guessed the field was
+  merely mis-shaped for Reg-T. It was worse: there is no number that is true. Core gained
+  `:per_account`.
+- **`Timeframe.known/0` as the vocabulary.** Two call sites validated declarations against
+  the widths Core can *bucket*, while `Timeframe`'s own moduledoc documented `1w` and `1M`
+  as deliberately unbucketable. Core contradicted itself for as long as no venue served a
+  weekly candle. Split into `nameable/0`.
+- **"Every venue can be pulled."** True for crypto, false in general: Schwab's catalogue
+  cannot be enumerated at all. Resolved as an active endpoint requiring a query, which
+  keeps the assertion and drops the assumption underneath it.
+- **Auth as wholly host-side.** Corrected by the architect mid-build. §6.0 already placed
+  session refresh and token rotation on the package's side, and a 30-minute access token
+  makes a signing-only package useless unattended. **Both times the plan's own text was
+  right and the reading of it was wrong** — worth recording, because the failure was not a
+  gap in the spec.
+- **The seven-day ceiling.** A draft claimed a hard weekly limit on unattended operation.
+  The refresh token is one-time use and each refresh resets the clock, so there is none.
+
+### What the gates were worth
+
+- **Phase 4's hold on Core's publish** — paid. Core shipped eleven times during Phases 5–7,
+  every release carrying a defect a venue package found. Publishing earlier would have
+  meant more consumers pinned to a contract that was still moving.
+- **Phase 5.14's hold on every replay until Coinbase's lessons folded back** — paid. Three
+  of the four extracted adapters shared the timestamp-substitution bug; finding it once and
+  fixing the contract cost less than finding it four times.
+- **D4's architect gate on every first publish** — paid, and not for the reason recorded.
+  The recorded reason was caution about naming and scope. What it actually caught was two
+  substantive design errors on Schwab (auth placement, and the refresh-token lifetime), both
+  in a package that was otherwise green: 228 tests, clean quality, and wrong about the thing
+  that matters most. **A green suite is not evidence about a claim nobody encoded.**
+
+### What the contract missed
+
+Assertions and fields added to Core *after* Phase 3 froze it. This list is the honest
+measure of how good the contract was on the day it was written:
+
+- `:burst` on `ceiling` (Gemini — the first venue to publish a burst depth)
+- `raw_status: true` on `HttpClient` (Gemini — 4xx evidence was being flattened into a
+  string a venue had to parse back)
+- `market_status/1` (Schwab — the first venue that closes)
+- `Timeframe.nameable/0` and `nameable?/1` (Schwab — weekly and monthly candles)
+- `Timeframe` `10m` (Schwab)
+- `max_leverage: :per_account` (Schwab — Reg-T)
+- four wrong `@spec`s corrected, each of which made dialyzer report a caller's *correct*
+  handling as dead code
+
+**Six of the seven came from one venue, and that venue is the greenfield one.** The four
+extractions each had a working host adapter to reconcile against, which quietly answered
+questions before they were asked. Schwab had nothing, so every question had to be asked
+out loud — and the contract failed six of them.
+
+That is the strongest single finding here, and it inverts the plan's own ordering
+rationale: **greenfield-against-the-contract is the better test of a contract than
+extraction is**, and it should come earlier, not last.
+
+### Feeds the idea docs
+
+- Vendor API change → `docs/design/ideas/detecting-vendor-api-change.md`, appended at 8.3.
+  Headline: a changelog diff would have caught **nothing** across the whole sample; an
+  index diff would have caught two of five; and Schwab adds a class the idea had not
+  considered — documentation that cannot be re-fetched at all.
+- Binance and kraken → `docs/design/ideas/binance-and-kraken-packages.md`, with the
+  correction that **neither hexpm name is actually reserved**, contrary to 6.4's claim.
 
 ---
 
-**Last Updated**: 2026-08-31 (v1.86 — **Phase 7 COMPLETE except 7.5's open gaps: 7.1, 7.2, 7.3 and 7.4 all closed.** `dp-exchange-schwab` implemented against the contract with no host source: **228 tests, 0 failures across 8 seeds, 94.38% coverage, `mix quality` clean, and Core's 28-assertion conformance suite passing.** Both of Schwab's OpenAPI documents are captured and committed — the portal is behind a login and publishes no spec, so the reference cannot be re-fetched and travels with the code. **A security finding**: the portal's spec response ships the signed-in account's live `appKey`/`appSecret`, because that endpoint also feeds the "Try it" console; redacted, recorded, nothing committed. **Two architect corrections reshaped the package.** First, token refresh belongs *in* the package — §6.0 already placed "session refresh, token rotation" on this side, and the access token lives **30 minutes**, so a signing-only package would hand back an expired token twice an hour. Second, **the refresh token is one-time use and every refresh mints a new one with a fresh seven days**, so there is **no weekly ceiling on unattended operation** — an earlier draft claimed one. Three consequences are enforced because each failure is unrecoverable without a person at a browser: a success with no replacement token is an error, a refresh is **never retried** (at-most-once), and the result must be persisted before use. **7.4 found the contract's real limit**: `/instruments` has *no list-everything projection*, so `get_symbols/1` cannot be answered as the crypto-venue shape assumes — resolved as an **active** endpoint requiring `:query`, which is deliberately not `:unsupported`, because "needs a term" and "has no endpoint" are different things a caller must tell apart. **Three Core defects fixed** (`Timeframe` missing `10m`; `Capabilities` *and* `AdapterContract` both refusing `1w`/`1M` against `known/0` where `Timeframe`'s own moduledoc documents them as deliberately unbucketable — Core gained `nameable/0`; and `max_leverage` admitting no answer for Reg-T — Core gained `:per_account`, since a margin account carries five buying powers that are not multiples of one another and a cash account carries none). **Seven Core gaps recorded at 7.5**, none blocking. Core 0.1.10 published. 72/77 tasks.)
-**Next Review**: before the first push — secret scanning + push protection (0.15)
+**Last Updated**: 2026-08-31 (v1.87 — **PLAN COMPLETE. Status: Implemented.** All six objectives met, every checklist item done, retrospective appended, moved to `docs/design/closed/`. Six packages published: core **0.1.11**, coinbase 0.1.2, gemini/webull/robinhood/schwab **0.1.1**. All six repos green, `mix quality` clean, nothing unpushed. **Nothing is `:proven`** — verified by evaluating every declaration rather than grepping, since Schwab's moduledoc mentions the atom while declaring none. That is D15 working: graduation needs a consumer trading live, which is out of scope (§1). Final phase closed 7.3 (schwab implemented: 228 tests, 94.38%, conformance suite passing), 7.4 (**the contract's real limit** — `/instruments` has no list-everything projection, so "every venue can be pulled" is a crypto assumption; resolved as an active endpoint requiring `:query`), 7.5 (seven Core gaps recorded), and Phase 8. **The retrospective's strongest finding**: six of the seven post-freeze contract additions came from **Schwab alone**, the one venue built greenfield — the four extractions each had a working host adapter quietly answering questions before they were asked. Greenfield-against-the-contract is a better test of a contract than extraction is, and it should have come first. **The recurring failure mode is confirmed and tabulated**: a nearby substitute where there should be an error, nine distinct instances across five venues, every one type-correct and meaning-wrong. **Two architect corrections during Phase 7 were both cases where the plan's own text was right and the reading of it was wrong** — auth placement and refresh-token lifetime — in a package that was otherwise green, which is the clearest evidence for D4's gate: a green suite is not evidence about a claim nobody encoded. Binance and kraken removed from Phase 8 per D21; their hexpm names are **not** actually reserved, contrary to 6.4, recorded in the idea doc. 77/77 tasks.)
+**Next Review**: none — this document is closed. Open work lives on: the seven Core gaps at §7.5, and the two idea docs this plan fed.

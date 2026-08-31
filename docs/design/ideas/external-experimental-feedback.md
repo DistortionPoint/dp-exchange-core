@@ -3,7 +3,7 @@
 **Date:** 2026-08-27
 **Status:** Idea (not worked out — architect has directions in mind)
 **Related:**
-  - `docs/design/2026-08-26_exchange-adapter-package-family.md` (D7 tier 3, D15) — the plan
+  - `docs/design/closed/2026-08-26_exchange-adapter-package-family.md` (D7 tier 3, D15) — the plan
     that surfaces the need and deliberately does not solve it
   - `../dp_crypto_management/docs/bugs/fixed/` — 13 hand-written reports the host filed
     against `influx_elixir`'s `Client.Local`; the informal version of this loop, and proof

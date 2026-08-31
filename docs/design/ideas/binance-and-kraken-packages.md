@@ -3,7 +3,7 @@
 **Date:** 2026-08-27
 **Status:** Idea (deferred out of the extraction plan, 2026-08-27)
 **Related:**
-  - `docs/design/2026-08-26_exchange-adapter-package-family.md` — D11 extraction order,
+  - `docs/design/closed/2026-08-26_exchange-adapter-package-family.md` — D11 extraction order,
     D13 documentation-first, D15 experimental labelling. Both venues were in scope there
     until this doc took them out.
   - `docs/design/ideas/external-experimental-feedback.md` — the mechanism that would make
@@ -122,3 +122,16 @@ about, with no route to ever proving any of it works.
 
 Better to reserve the names, write down everything already known, and pick them up when
 one of the three changes above happens.
+
+---
+
+## Note from Phase 8.1, 2026-08-31
+
+Task 6.4 records a "name-holding publish" for both packages. **Neither name is on hexpm**
+— `mix hex.info dp_exchange_binance` and `dp_exchange_kraken` both return *no package with
+that name*. The repositories hold the reservation packages as described, and the local
+commits exist, but no release was made and the repos were never pushed.
+
+Recorded here rather than reopened in the plan: D21 put both out of scope, 8.1 no longer
+gates on them, and nothing in scope depends on either name. Anyone picking this up should
+know the names are **not** actually reserved on hexpm and could be taken by someone else.

@@ -21,12 +21,34 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.11] - 2026-08-31
+
+### Fixed
+- **The conformance suite refused `1w` and `1M` too.** `Capabilities.validate_history!/1`
+  was fixed in 0.1.10 to check `Timeframe.nameable/0`, but `AdapterContract`'s assertion 2
+  still checked `known/0` — so a venue serving weekly or monthly candles built its
+  declaration successfully and then **failed Core's own conformance suite**. That is the
+  worse of the two failures: the package looks correct right up until the suite it exists
+  to satisfy rejects it. Second site of one defect; found running the suite against Schwab.
+
+## [0.1.10] - 2026-08-31
+
 ### Added
 - `Timeframe.nameable/0` and `Timeframe.nameable?/1` — the widths Core can read as a
   **label**, which is deliberately wider than `known/0`, the widths it can **bucket**.
   `1w` and `1M` are nameable and have no boundary rule, and never will: a weekly bar's
   start depends on which weekday the venue begins its week, and a month is not a fixed
   number of seconds.
+- `max_leverage` accepts **`:per_account`** — a positive statement that the venue margins
+  and the ceiling belongs to the account rather than to the venue. Reg-T forced it: a
+  Schwab margin account carries five different buying powers that are not multiples of one
+  another, and a cash account at the same venue carries none of them, so no scalar is true.
+  `nil` with `supports_margin: true` still raises, because `nil` means "nobody said" — and
+  the error now names `:per_account`, so a venue author discovers the option instead of
+  inventing a number. Without it the only ways to ship were to declare
+  `supports_margin: false`, which is false, or to invent a multiplier.
 
 ### Fixed
 - `Capabilities` no longer refuses a venue that serves weekly or monthly candles.
@@ -46,6 +68,10 @@ an acceptable changelog line.
   `/pricehistory` serves 1, 5, 10, 15 and 30-minute widths. Unlike `1w` and `1M`, which
   are deliberately absent because their boundaries are not fixed, 600 seconds is not
   ambiguous and there was no reason to leave it unmodelled.
+
+## [0.1.9] - 2026-08-28
+
+### Fixed
 - `HttpClient.request/5`'s spec no longer advertises `{:error, :rate_limited,
   retry_after: seconds}`. **It never returned it.** Both rate-limit paths convert to a
   two-element error before returning, each deliberately and for a recorded reason — a

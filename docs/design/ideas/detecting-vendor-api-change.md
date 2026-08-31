@@ -3,7 +3,7 @@
 **Date:** 2026-08-27
 **Status:** Idea (placeholder — the material comes from doing the work)
 **Related:**
-  - `docs/design/2026-08-26_exchange-adapter-package-family.md` — D7 tier 2, D13, D14
+  - `docs/design/closed/2026-08-26_exchange-adapter-package-family.md` — D7 tier 2, D13, D14
     notices, §5.0 capabilities. Several pieces of a change-detector exist there for other
     reasons; nothing assembles them.
   - `docs/design/ideas/external-experimental-feedback.md` — the other half of the same
@@ -170,3 +170,80 @@ it was written from*. It maps `1h → 1hr` because someone measured it on 2026-0
 current docs say `1h`, which fails. A pure documentation-follows-vendor rule would have
 regressed working code. **Measurement outranks documentation for anything measurable** —
 recorded as a refinement to D13 in the main plan, not a contradiction of it.
+
+---
+
+## From Phase 6.2–6.3 (Webull, Robinhood) and Phase 7 (Schwab), 2026-08-31
+
+Fed by 8.3's sweep at plan close. **The sample is smaller than this document assumed** —
+four reconciliations against vendor documentation plus one venue built from documentation
+alone, not the six originally planned, because D21 removed binance and kraken. Where the
+sample size is the argument, say four.
+
+### The strongest finding: documentation you cannot re-fetch
+
+Schwab's API documentation is **behind a login**. `developer.schwab.com` returns `403` to
+an anonymous reader, and the OpenAPI documents the portal's Swagger UI renders are fetched
+at runtime from a gateway on a different origin — so even a saved page carries the outline
+and not the specification.
+
+That breaks every monitor this document has been reaching for. A link check needs a
+fetchable link; an index diff needs an index; a changelog diff needs a changelog. Schwab
+offers none of them to a machine that is not signed in as a person.
+
+**What was done instead, and it is the only thing that works here**: the specification is
+*committed to the repository*. `dp-exchange-schwab/docs/reference/schwab/` holds both
+OpenAPI documents, both prose documentation pages, and the raw portal responses. Detecting
+change means signing in, re-capturing, and diffing against the committed copy — a manual
+act, deliberately, because no automated one is available.
+
+**The detector question this raises**: how many vendors are like this? A monitoring design
+that assumes public documentation will silently cover zero percent of the venues that need
+it most, and the ones behind a login are disproportionately the *brokerages* — the venues
+where being wrong moves real money.
+
+### A vendor can ship credentials in a documentation response
+
+Schwab's `api-specification` endpoint returns the signed-in account's live `appKey` and
+`appSecret` in the same JSON as the specification, because that endpoint also feeds the
+portal's "Try it" console. Anyone building the capture-and-diff monitor above would, by
+construction, be storing a vendor's credentials in a diffable artefact.
+
+Not a change-detection finding exactly, but it belongs here: **the mechanism this document
+proposes has a credential-leak failure mode**, and any implementation needs a redaction
+step ahead of storage rather than after it.
+
+### The four reconciliations, and what each detector would have caught
+
+| venue | what was wrong | changelog would catch? | index diff would catch? | schema diff would catch? |
+|---|---|---|---|---|
+| Coinbase | rate-limit page unfindable | no | no — page never existed to be listed | no |
+| Gemini | three published candle widths the API rejects | no | no | **no** — the docs say one thing, the API another |
+| Gemini | streaming API replaced, announced only by absence | **no** — 0 hits in four years | **yes** | no |
+| Webull / Schwab | documented shapes never probed | no | no | n/a |
+
+**Two of five would have been caught by an index diff, and none by a changelog diff.** The
+changelog is the mechanism everyone reaches for first and it scored zero across the whole
+sample.
+
+### The failure no document diff can catch, and Gemini proved it twice
+
+Gemini's published candle-width list names three widths the API rejects. The documentation
+did not change; it was **wrong when written**, and stayed wrong. A monitor watching for
+vendor *change* is watching the wrong variable: the documentation was stable and the
+package built from it would have been broken from day one.
+
+This is why D13 ends where it does — where a documented claim is directly measurable, the
+measurement is the source. **A change detector is a supplement to measurement, never a
+substitute**, and this document should say so at the top when it becomes real work.
+
+### What Schwab adds that measurement cannot reach
+
+Schwab is the first venue in the family that **cannot be measured at all** from these
+repositories: no sandbox, no anonymous endpoint, no public specification. Its entire
+declaration is tier-1 evidence, and there is no probe that would upgrade it.
+
+So for venues of this shape the hierarchy inverts: the committed documentation *is* the
+source of truth, and the only detector available is a human re-capture. That deserves its
+own row in whatever this becomes — **venues where documentation is unverifiable are a
+distinct class**, not a degraded case of the public ones.

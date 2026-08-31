@@ -47,6 +47,23 @@ The per-repo checklist. Every step exists because skipping it has cost something
 
 - [ ] Declare `:experimental` for everything. `:proven` is earned by production use.
 
+- [ ] **When the venue has no answer, say so positively rather than leaving a field
+      empty.** Five extractions found the same shape five times: a field whose `nil` reads
+      as "nobody filled this in" when the truth is "the venue does not have one". Each of
+      these is a statement, not a gap:
+      - `max_leverage: :per_account` — margins, but the ceiling belongs to the account.
+      - `authenticated_ceiling: nil` on a venue with real limits — the limit is a property
+        of *your registration*, not the venue. Configure it; do not declare it.
+      - `historical_timeframes: []` — no candle endpoint at all. Declaring a width you
+        cannot serve is worse than declaring none.
+      - `max_candles_per_request: nil` when the cap is a *period* rather than a count.
+      If the contract cannot express your venue's answer, that is a Core gap — record it
+      in the plan rather than picking the nearest field that almost fits.
+
+- [ ] **Check `historical_timeframes` against `Timeframe.nameable/0`, not `known/0`.**
+      `1w` and `1M` are nameable and deliberately unbucketable. A venue serving them is
+      normal; Core just cannot tell you where a weekly bucket starts.
+
 ## 3. Implement
 
 - [ ] `@behaviour DpExchange.Core.Venue` on your one public module. The compiler's

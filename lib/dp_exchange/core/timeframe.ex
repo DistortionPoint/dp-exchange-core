@@ -29,12 +29,33 @@ defmodule DpExchange.Core.Timeframe do
   on the read path, so rows written before the guard existed never reach a backtest.
   Core cannot enforce that itself: it owns no storage. It owns the test.
 
-  ## Weekly and monthly are deliberately absent from `boundary/2`
+  ## Two vocabularies: what can be bucketed, and what can be named
+
+  `known/0` is the set of widths this module can **bucket** — every one has an
+  entry in `@seconds`, so `aligned?/2` and `boundary/2` can answer for it.
+
+  `nameable/0` is wider. It is the set of widths Core can **read as a label**,
+  and it adds `1w` and `1M`.
 
   A `1w` bar's boundary depends on which weekday the venue starts its week, and
-  `1M` is not a fixed number of seconds at all. Rather than encode a guess that
-  would reject real data, both are absent, and callers treat "no boundary rule"
-  as "cannot check" rather than "invalid".
+  `1M` is not a fixed number of seconds at all. Neither will ever get a boundary
+  rule, because encoding a guess would reject real data — so `seconds/1` returns
+  `:error` for both, `aligned?/2` returns `true`, and `boundary/2` passes them
+  through untouched. Callers read "no boundary rule" as "cannot check", never as
+  "invalid".
+
+  **The distinction is load-bearing, and Core got it wrong twice before it was
+  drawn.** `Capabilities.validate_history!/1` and the conformance suite both
+  checked declarations against `known/0`, so a venue serving a real weekly candle
+  could not declare it — leaving that venue two choices, under-declare what it
+  serves or not ship. Validate declarations against `nameable/0`; reach for
+  `known/0` only when you need the width in seconds. A width outside both, such
+  as `3m`, is still refused.
+
+  Found when Schwab's `/pricehistory` turned out to serve `1w`, `1M`, and a
+  `10m` width that had simply been missing from `@seconds` — not neutral, since
+  `aligned?/2` answers `true` for anything it cannot model, so every 10-minute
+  candle had been passing the authenticity check unexamined.
   """
 
   @seconds %{

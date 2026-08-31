@@ -75,6 +75,34 @@ known, never whether it runs. `:unsupported` means the function exists and retur
 
 Anything undeclared is `:experimental`. That is the honest default, not a claim.
 
+### Three fields whose *absence* means something specific
+
+Reading these as "not set" loses the whole point of declaring them:
+
+- **`max_leverage: :per_account`** — the venue margins, but has no single ceiling. Read the
+  ceiling from the balance response, not from the declaration. A Schwab margin account
+  carries five different buying powers that are not multiples of one another, and a cash
+  account at the same venue carries none of them, so no scalar is true. `nil` here means
+  the venue does not margin at all.
+- **`authenticated_ceiling: nil` on a venue that clearly has limits** — the limit is not a
+  property of the venue. Schwab's order ceiling is set per *application* at registration,
+  anywhere in `0..120` per minute per *account*, so any number in the package would be a
+  claim about somebody else's registration. Configure your own.
+- **`historical_timeframes: []`** — the venue publishes no candle endpoint. It is not "we
+  did not check": a venue that serves candles must name the widths, and `Capabilities`
+  raises if it claims history without them.
+
+### Timeframes: nameable is wider than bucketable
+
+`Timeframe.known/0` is what Core can **bucket** — `aligned?/2` and `boundary/2` answer for
+those. `Timeframe.nameable/0` is what Core can **read as a label**, and adds `1w` and `1M`.
+
+Weekly and monthly have no boundary rule and never will: a weekly bar's start depends on
+which weekday the venue begins its week, and a month is not a fixed number of seconds. So
+`seconds/1` returns `:error` for both and `aligned?/2` returns `true` — **"no rule" means
+"cannot check", never "invalid"**. Validate a declaration against `nameable/0`; reach for
+`known/0` only when you need the width in seconds.
+
 ## Coverage is observed, never intended
 
 `coverage/1` reports what is **actually arriving**, by route. It is not a list of what you

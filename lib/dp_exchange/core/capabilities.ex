@@ -102,6 +102,26 @@ defmodule DpExchange.Core.Capabilities do
   Optional, not required, because a venue that does not publish a burst depth must not be
   made to invent one — and `nil` here means "not published", which a consumer can tell
   apart from a declared burst of zero.
+
+  ## `max_leverage: :per_account`, for venues that margin without a single ceiling
+
+  `max_leverage` began as `Decimal.t() | nil`, on the reasonable-looking assumption that a
+  venue which margins has *a* leverage. Schwab does not, and the assumption cost more than
+  it looked: `nil` with `supports_margin: true` raises, so the only ways to ship were to
+  declare `supports_margin: false`, which is false, or to invent a multiplier — the
+  substitution this whole family exists to refuse.
+
+  A Schwab `MarginAccount` carries five different buying powers — overall, non-marginable,
+  day-trading, option and stock — which are not multiples of one another, so no one of them
+  is "the" leverage. A `CashAccount` at the same venue carries none of them, so any number
+  reported for one would be invented. The Reg-T fields, `regTCall` and `sma`, are call and
+  credit *amounts* rather than ratios. Equities margin is not crypto margin, and Kraken's
+  5x does not carry over.
+
+  So `:per_account` is a **positive statement**: the venue margins, and the ceiling belongs
+  to the account rather than to the venue — read it from the balance response. `nil` still
+  raises when `supports_margin: true`, because `nil` means "nobody said", and the error
+  names `:per_account` so a venue author discovers the option instead of inventing a number.
   """
   @type ceiling ::
           %{
