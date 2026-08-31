@@ -1859,22 +1859,130 @@ packages match real usage (O0) and the only ones that can graduate (D15):
       endpoint — one request per symbol is not a listing), and the no-sharding claim is
       exercised with a handful of symbols rather than the full catalogue, which is stated
       in `Feed`'s moduledoc rather than left implied.
-- [ ] **6.2** `webull` (11 files) — MQTT over WebSocket, protobuf, session plan. The
+- [x] ~~**6.2** `webull` (11 files) — MQTT over WebSocket, protobuf, session plan. The
       hardest of the four extracted from host source, and the one that most exercises
       whether the facade truly hides
-      transport (§6.0): it owns its whole client and never touched the host's.
-- [ ] **6.3** `robinhood` (4 files) — no venue socket at all; `subscribe/2` is served by
+      transport (§6.0): it owns its whole client and never touched the host's.~~ —
+      **complete 2026-08-28, pushed to `main`.** 214 tests, `mix quality` exit 0, coverage
+      **93.12%**, Core's 28 conformance assertions passing **first run** — the second
+      venue running. 4,506 LOC of adapter read (the largest in the family), subtree dirty
+      for the **third** venue in a row, per-file SHA-256 recorded.
+      **It did exercise the facade hardest, and the facade held.** Subscribing here is two
+      protocols at once — MQTT over WebSocket receives, HTTP steers — joined only by a
+      `session_id` the package invents and gives to both. A consumer calls `subscribe/2`
+      with symbols. Nothing about the split, the broker, the protobuf or the re-subscribe
+      reaches them.
+      **The venue's constraints shape the package rather than the consumer**: five
+      concurrent connections per App Key, ~1 minute of server-side session retention after
+      a disconnect (so a reconnect storm is an outage and backoff is the only way back),
+      three messages per second per connection, and **subscriptions that are not restored
+      after a reconnect**. The last is why the package replays them.
+      **Findings, all measured:**
+      1. **The documented "TCP/IP" endpoint speaks TLS.** A well-formed MQTT 3.1.1 CONNECT
+         to `data-api.webull.com:1883` returns `15 03 01 00 02 01 00` — a TLS
+         `close_notify`. The prior adapter reached the right conclusion (use WebSocket)
+         from the wrong evidence: it recorded "never speaks MQTT … no TLS handshake".
+         There is a TLS peer there refusing a malformed `ClientHello`. **Third instance in
+         this family of "the code was right and its recorded reason was wrong"**, which is
+         the shape that never fails and never gets caught.
+      2. **A proto3 scalar sent twice destroyed the whole message.** The decoder
+         accumulated repeats into a list — correct, since a wire walk cannot tell scalar
+         from repeated — and then read fields with an `is_binary` guard that a list fails.
+         Its own comment claimed scalars "keep the LAST occurrence, which is proto3's
+         rule". They did not. Legal-on-the-wire input, dropped silently.
+      3. **A fifth MQTT remaining-length byte returned `:incomplete`**, telling the caller
+         to wait for bytes that could never repair an already-invalid length. A corrupt
+         frame would have parked the read buffer forever: socket up, subscription live,
+         nothing arriving.
+      4. **The MQTT decoder discarded the fixed-header flags**, where PUBLISH keeps its
+         QoS. At QoS 1 the two bytes after the topic are a packet identifier; read as
+         payload they become the head of the protobuf. That does not fail — it decodes
+         into a *slightly wrong* message.
+      5. **The crypto-bars response nests rows under `"result"`.** Decoding the groups
+         instead yields all-nil bars, which reads as "the venue has no data" — and is
+         exactly what the prior backfill logged for every crypto pair.
+      6. **`|| DateTime.utc_now()` on bar timestamps** — the **third venue** in this family
+         carrying that same substitution. Now `{:error, :missing_venue_timestamp}`.
+      **And one bug of my own, caught by a test before it shipped**: the reconnect replay
+      called with empty options, so it had no credentials and would have failed the first
+      time a socket dropped — the "you never see a reconnect" promise silently ending.
+      **Two declarations no other venue has made.** `credential_benefit: :required`, since
+      every call is signed and there is no anonymous endpoint; and
+      `reports_trade_volume: false`, since this venue exposes no crypto volume anywhere —
+      `volume` is `nil`, never `0`, because zero looks like a real measurement of no
+      trading.
+      **UAT is half an environment and says so.** REST works; `mqtt-uat.webullbroker.com`
+      does not resolve. `subscribe/2` there refuses rather than falling back to production,
+      because a consumer testing against UAT that received production prices would be
+      reading real market data believing it was fake. `streaming?/1` lets that be asked
+      before committing.
+      **Still open**: order placement, balances, accounts, fees, transfers, trade history,
+      order book and market overview are `:unsupported` — a statement about this package,
+      not the venue, and labelled as such.
+- [x] ~~**6.3** `robinhood` (4 files) — no venue socket at all; `subscribe/2` is served by
       polling internally (§6.0). The test of whether "both endpoints always exist" holds
-      for a venue that natively offers only one. `signing.ex`.
-
+      for a venue that natively offers only one. `signing.ex`.~~ —
+      **complete 2026-08-28, pushed to `main`.** 108 tests, `mix quality` exit 0, coverage
+      **96.98%**, Core's 28 conformance assertions passing **first run** — the third venue
+      running. 1,130 LOC, the smallest in the family; subtree dirty for the fourth venue
+      in a row.
+      **The claim held, and `Core.PollingFeed` is why it was cheap.** `subscribe/2` is a
+      REST poll; what a consumer receives is identical to a socket venue's. The single
+      visible difference is `coverage/1` reporting `:internal_poll` rather than `:stream` —
+      the difference surfacing as *what is arriving* rather than *how*, which is exactly
+      the line §6.0 draws.
+      **What it cost before the facade is recorded in the adapter's own moduledoc**: the
+      collection layer kept a poll set and decided which venues were exempt from it, and an
+      operations page described Robinhood's pairs **in terms of a socket the venue does not
+      have and has never claimed** — sending readers to hunt a streaming fault that cannot
+      exist. That is the concrete version of "the host should not know how a venue works".
+      **Findings:**
+      1. **A fourth `|| DateTime.utc_now()`.** Every venue extracted so far has carried the
+         same substitution on timestamps — Coinbase, Gemini, Webull, now Robinhood. Four
+         for four. It is no longer a per-venue defect; it is what the host's shared idiom
+         was, and the strongest argument yet for the conformance suite asserting it.
+      2. **The catalogue walk could loop forever.** A cursor walk trusts the venue to stop
+         saying "next"; if it ever points at a page already fetched, the caller hangs with
+         no error while the venue takes a signed request every few milliseconds. Now
+         `{:error, {:pagination_loop, path}}`. **Found because a test hung** — the walk was
+         written and only the test revealed there was no bound.
+      3. **The price is the ask, and saying so matters.** `best_bid_ask` has no separate
+         price field, so a quote's `price` is the ask — real, quoted, and the number a
+         buyer pays, but **not a mid**. A series built from it sits a spread above a
+         mid-based series from another venue, which is invisible until two venues are
+         compared. Documented rather than silently corrected.
+      4. **`historical_timeframes: []`.** The venue publishes no candle endpoint at all, so
+         the empty list is the honest declaration — a populated one with an `:unsupported`
+         endpoint behind it would be a declaration disagreeing with itself.
+      **A distinction worth keeping**: `venue_does_not_serve/0` separates endpoints the
+      **venue** does not offer from ones this package has not ported. Both answer
+      `{:error, :not_supported}` and a caller acts identically on either — but only one of
+      them can ever change, and anyone deciding what to build next needs to know which.
 **The two that cannot graduate** (D15) — extracted for completeness, not for proof:
 
-- [ ] **6.4** **Close out binance and kraken (D21).** No extraction. Confirm both repos are
+- [x] ~~**6.4** **Close out binance and kraken (D21).** No extraction. Confirm both repos are
       still empty and still ours, reserve both hexpm names with a placeholder publish, and
       point each repo's `README` at
       `docs/design/ideas/binance-and-kraken-packages.md`. Note in the host's adoption issue
       (D16) that the host keeps its own binance and kraken adapters — we never took
-      ownership of code we did not extract (D18).
+      ownership of code we did not extract (D18).~~ — **done 2026-08-28.**
+      Both repos confirmed empty (size 0) and ours. Reservation packages committed: no
+      adapter, no behaviour, no venue, and a `status/0` answering
+      `{:error, :not_implemented}` so anyone who reaches for one by name gets something
+      that explains itself rather than an `UndefinedFunctionError`.
+      **The two READMEs say different things, deliberately.** Grouping them under one
+      reason would have been the easy write-up and the wrong one: Binance is *unavailable*
+      in the maintainers' jurisdiction; Kraken is *available and unused* — the host's own
+      adapter records "No active strategy on Kraken. Nothing to collect." The consequence
+      is identical and the cause is not, and a reader deciding whether to contribute needs
+      the cause.
+      Host adoption issue updated (`dp_crypto_management#1`, comment): the host keeps its
+      own binance and kraken adapters, and the directory sweep in the original issue
+      covers **coinbase and gemini only**. The comment also carries the Phase 6 deltas and
+      the four-for-four `|| DateTime.utc_now()` finding.
+      **Still open**: both repos are **private**, so the hexpm reservation publish has not
+      run — CI publishes on push to `main` and the architect gate (make public) applies to
+      these two exactly as it did to the other four.
 ### Phase 7 — Schwab, greenfield
 
 Schwab is **not** the only venue built from API documentation — every venue is (D13).
@@ -1895,27 +2003,147 @@ never be swept into full-catalog collection by an omission, so Schwab ships
 implementation time, not a package concern. Note this is a capability declaration, not a
 migration task — deciding the host's collection strategy remains out of scope (§1).
 
-- [ ] **7.1** Receive the Schwab API documentation from the architect. Commit the
+- [x] **7.1** ~~Receive the Schwab API documentation from the architect. Commit the
       relevant extracts to `docs/reference/schwab/` in `dp-exchange-schwab` so the
-      implementation is reproducible and reviewable against a fixed source, rather than
-      against a link that may move or a chat message. If the docs describe a sandbox,
-      **verify it actually works** before relying on it — none of the other four has one
-      that does (D7) — and record the answer alongside the docs.
-- [ ] **7.2** Derive the `Capabilities` declaration from the documentation *before*
-      writing the provider: `asset_classes`, `has_rest_historical_candles` +
-      `historical_timeframes` + `max_candles_per_request`, `has_rest_order_book`,
-      `supports_short_selling`, `reports_trade_volume`, `default_quotes` /
-      `supported_quotes`, `auto_collect: false` (above), `overview_suits_collection`, and
-      what `coverage/1` will honestly report — per §6.1.8 there is no streaming flag to
-      set; what matters is what `coverage/1` reports as observed arriving, not what was
-      subscribed.
-      **`supports_margin` / `max_leverage` are also decided here.** Schwab margins, and
-      after D21 it is the only in-scope venue that does — so the slot exists because of
-      Schwab and its shape comes from Schwab's documentation, not from the crypto venues
-      that first motivated it (§6.0, "Functional groups the facade does not have
-      at all"). Equities margin is not crypto margin:
-      whether `max_leverage` is even the right shape for a Reg-T account is a question for
-      7.1's documentation, not an assumption to carry over from Kraken's 5x.
+      implementation is reproducible and reviewable against a fixed source.~~ —
+      **done 2026-08-31.** The architect signed the Playwright browser into the developer
+      portal, which closed the blocker below entirely.
+      **Both OpenAPI documents are captured in full** and committed under
+      `docs/reference/schwab/openapi/` — Market Data Production (OpenAPI 3.0.3, 172 KB)
+      and Accounts and Trading Production (OpenAPI 3.0.1, 99 KB; the portal's internal
+      name for it is `Retail Trader API Production`). The portal's Documentation tab for
+      both is committed beside them, and the raw portal responses under `portal-raw/`.
+      `README.md` there records how to re-capture: the spec is fetched at runtime by the
+      Swagger UI, and a page-context `fetch()` cannot retrieve it because
+      `jfk2-api-gateway.schwab.com` is a different origin and CORS blocks it — the
+      response has to be read from the network log.
+      **The earlier outline-only capture was checked against the real specs and was
+      exactly right about shape**: 10 market-data paths, 13 trading operations across 10
+      paths, no discrepancy. Worth recording, because it means the saved pages were lossy
+      about *values* and not about *structure*.
+      **One reading in `endpoint-inventory.md` was wrong and is corrected in place.**
+      `orderType` and `orderTypeRequest` as separate schemas was read as meaning that
+      requested types resolve into others. The enums are identical except that `orderType`
+      also carries `UNKNOWN` — a read-side escape hatch, a value an order can come back as
+      and a value you cannot send. Recorded as a correction rather than silently edited:
+      the guess was plausible, and plausible-but-wrong is the failure this reference exists
+      to catch.
+      **Sandbox: answered, and the answer is no.** The sandbox text lives on the
+      Documentation tab, which the page capture did not carry. Schwab writes that "The
+      Trader API Sandbox environments will be available later this year" in a document
+      published **2025-10-30**, and neither spec declares a non-production server —
+      `servers` is a single entry in each. So unlike Gemini, this venue cannot be exercised
+      end to end without touching real money, and the environment split Gemini needed has
+      nothing to point at here. If Schwab ships one, the shape is already known.
+      **A security finding, and it is the reason this is worth reading twice.** The
+      portal's `api-specification` response carries `appKey` and `appSecret` — the live
+      credentials of the signed-in account's developer app — in the same JSON as the spec,
+      because that endpoint also feeds the "Try it" console. They are **not** part of the
+      API description. Both are redacted in `portal-raw/`, the redaction is recorded in
+      that directory's `README.md`, and the unwrapped `openapi/*.json` never contained
+      them. Nothing was committed. **Anyone re-capturing must redact again before staging:
+      these repos are public and git history is not retractable.**
+      **Verified live rather than assumed**: `GET api.schwabapi.com/marketdata/v1/quotes`
+      answers **401**, confirming the base URL and path shape without a credential.
+      **Three things the inventory settles on its own**, all still true against the specs:
+      - **No order-book endpoint exists.** Nothing in either document returns depth.
+        `get_order_book/2` is `:unsupported`.
+      - **There is a market-hours endpoint** (`/markets`), and `Hours` carries `isOpen`
+        directly. This is the venue `market_status/1` was added for: an equities venue is
+        closed nights and weekends, and a feed that alarms on silence alarms every night,
+        making a real outage indistinguishable from Saturday. Schwab is the first venue in
+        the family that can answer it from the venue rather than by assuming `:open`.
+      - **Seven quote shapes across `AssetMainType`.** A symbol here is one instrument,
+        not a pair.
+      **Two capabilities the contract has no slot for**, unchanged and now confirmed
+      against the specs: **`previewOrder`** (validate an order and return estimated
+      commission and fees *without placing it* — the only endpoint in the family that lets
+      a consumer check an order against the venue's own rules before committing), and
+      **atomic order replacement** (`PUT .../orders/{orderId}`; every other venue cancels
+      and re-places, and on this venue that is *not* equivalent, because cancel-then-place
+      has a window in which no order is live).
+      **Two products worth knowing about and out of scope here**: `find-products.json`
+      shows Schwab publishes separate **Crypto** and **Thinkorswim** API products.
+      Thinkorswim is where a streaming surface would live if Schwab has one, since neither
+      of these two specs describes one. Neither has been examined.
+- [x] **7.2** ~~Derive the `Capabilities` declaration from the documentation *before*
+      writing the provider.~~ — **done 2026-08-31.**
+      `DpExchange.Schwab.Capabilities` in `dp-exchange-schwab`, 22 tests, 100% coverage,
+      `mix quality` clean. Every value is read out of the committed specs;
+      `docs/reference/schwab/spec-facts.md` names the schema or parameter behind each one.
+      **What the declaration says, and the three places it refuses a plausible
+      substitute:**
+      - `historical_timeframes` — **eight widths**: `1m 5m 10m 15m 30m 1d 1w 1M`, from the
+        `(periodType, frequencyType, frequency)` triple, whose legal combinations are
+        constrained in both directions. **The minute widths are reachable only through
+        `periodType=day`, which caps the lookback at ten days.** A consumer asking for a
+        year of one-minute data cannot be served and must be told so; handing back a
+        coarser series is the exact substitution §"Fail closed" forbids.
+      - `max_candles_per_request: nil` — the cap is a *period*, not a bar count, and the
+        bar count differs per width and with extended hours. No single integer is true.
+      - `supported_order_types: [:market, :limit, :stop, :stop_limit]` — four of Core's
+        seven. **`:ioc` and `:fok` are `duration` values on this venue, not order types**,
+        and declaring them here would repeat the Gemini error in the other direction, where
+        `:post_only` was declared as a time-in-force. `:post_only` has no equivalent —
+        `NON_MARKETABLE` is close and is not the same thing.
+      - `supported_time_in_force: [:day, :gtc, :fok, :ioc]` — **`:gtd` is absent, not
+        approximated.** Schwab offers `END_OF_WEEK`, `END_OF_MONTH` and
+        `NEXT_END_OF_MONTH`: three fixed horizons, not an arbitrary date. A caller asking
+        for good-till-date cannot be served by picking the nearest of the three.
+      - `supports_short_selling: true` (`instruction` admits `SELL_SHORT`,
+        `SELL_SHORT_EXEMPT`, `BUY_TO_COVER`), `supports_fractional_shares: true`
+        (`quantityType` admits `DOLLARS`; a dollar-denominated order yields a fractional
+        share count), `reports_trade_volume: true` (`Candle.volume`,
+        `QuoteEquity.totalVolume`), `catalog_size: :vast`, `credential_benefit: :required`
+        (no anonymous surface anywhere), `streamable: [:quotes]` by poll.
+      - **`authenticated_ceiling: nil`, and this is a contract gap rather than an
+        absence.** The documented limit is `0..120` order writes per minute **per
+        account**, set **per application at registration**. A number here would be a claim
+        about somebody else's registration; zero is legal and is not the same as
+        `:unsupported`; and Core's `ceiling` has no per-account dimension. Recorded at 7.5.
+      **`supports_margin` / `max_leverage`: answered, and the answer changed Core.**
+      This item asked whether `max_leverage` is even the right shape for a Reg-T account.
+      **It is not.** `SecuritiesAccount` is a discriminated union of `MarginAccount` and
+      `CashAccount`; `MarginBalance` carries *five* different buying powers —
+      `buyingPower`, `buyingPowerNonMarginableTrade`, `dayTradingBuyingPower`,
+      `optionBuyingPower`, `stockBuyingPower` — which are not multiples of one another, so
+      no one of them is "the" leverage, and `CashBalance` carries none of them, so any
+      number reported for a cash account would be invented. The Reg-T fields are `regTCall`
+      and `sma`, and both are call and credit *amounts* rather than ratios.
+      Core's `validate_margin!/1` admitted only a `Decimal` or `nil`, and `nil` with
+      `supports_margin: true` raised — so the only ways to ship were to declare
+      `supports_margin: false`, which is false, or to invent a multiplier, which is the
+      substitution this family exists to refuse. **Core gained `:per_account`**: a positive
+      statement that the venue margins and the ceiling belongs to the account rather than
+      to the venue, pointing a caller at the balance response where the answer actually
+      lives. `nil` still raises, and the error now names `:per_account` so the option is
+      discoverable rather than something a venue author has to invent.
+      **Two further Core defects found while deriving this, both fixed:**
+      - **`Timeframe` did not model `10m`.** Not neutral: `aligned?/2` returns `true` for a
+        width it cannot model — "no rule" must not read as "invalid" — so every 10-minute
+        candle passed the authenticity check unexamined and `boundary/2` was a no-op.
+        600 seconds is not ambiguous and there was no reason to leave it out.
+      - **`Capabilities` refused a venue that serves weekly or monthly candles.**
+        `validate_history!/1` checked `historical_timeframes` against `Timeframe.known()`,
+        the set Core can *bucket* — while `Timeframe`'s own moduledoc already documents
+        `1w` and `1M` as deliberately unbucketable and instructs callers to read "no
+        boundary rule" as "cannot check" rather than "invalid". Core contradicted itself:
+        `aligned?/2` tolerated an unmodelled width, `boundary/2` passed it through, and
+        `Capabilities` rejected it outright, leaving a venue serving a real weekly candle
+        with two options — under-declare, or not ship. Core gained
+        `Timeframe.nameable/0` and `nameable?/1`, the widths it can *name*, deliberately
+        wider than the widths it can *bucket*. `3m` is still refused.
+      **`auto_collect: false` and `overview_suits_collection` are not `Capabilities`
+      fields** in the shipped struct, so they are not declared here; `catalog_size: :vast`
+      is what the struct carries to the same end, and what a host must not sweep is stated
+      in the moduledoc. Confirm against 7.4.
+      **Not measured.** Reading a specification is tier-1 evidence (D7): it says what a
+      venue is documented to do, never what it does. Every endpoint is `:experimental` or
+      `:unsupported`, nothing is `:proven`, and the test suite asserts that no endpoint is
+      `:proven` rather than trusting it. There is no sandbox to probe and the credentials
+      to probe production must never live in this repo.
+      **Blocks on nothing. Requires Core to publish** the three changes above before
+      `dp-exchange-schwab` can build against Hex rather than a path.
 - [ ] **7.3** Scaffold `dp-exchange-schwab` from the §7 standard (**two restart gates**,
       §7.1); implement against the
       contract with no host source
@@ -1924,9 +2152,42 @@ migration task — deciding the host's collection strategy remains out of scope 
       both have a defined answer at millions of instruments (paging? streaming? refusal?)
       rather than assuming the crypto-venue shape, where a full catalog is a single
       cheap call. If the contract cannot express it, that is a Core gap — record it here.
-- [ ] **7.5** Whatever else Schwab needs that the contract cannot express is a Core gap —
+- [~] **7.5** Whatever else Schwab needs that the contract cannot express is a Core gap —
       record it here. (Equities are *not* new ground: Webull already declares
       `asset_classes: [:crypto, :equity]` and lands in Phase 6.2, before this.)
+      — **open, with five gaps recorded 2026-08-31 from 7.2.** Three defects found at the
+      same time were *fixed* rather than recorded, and are written up under 7.2:
+      `Timeframe` missing `10m`, `Capabilities` refusing `1w`/`1M`, and `max_leverage`
+      admitting no answer for a Reg-T account. What follows is what the contract still
+      cannot say. None of it blocks 7.3; each is a decision, not a defect.
+      1. **`ceiling` has no per-account dimension.** Schwab's documented order limit is
+         `0..120` per minute **per account**, set **per application at registration**.
+         Every other venue in the family limits by credential, so `%{limit:, per_ms:,
+         burst:}` was enough. Here there is no venue constant to declare at all, and a
+         host running several accounts through one application shares one budget across
+         them. Also: **a ceiling of zero is legal and is not `:unsupported`** — the
+         endpoint exists, it is the registration that cannot use it, and the contract
+         cannot currently tell those apart.
+      2. **`supported_instrument_types` is `[:spot, :perp]`, which is a crypto
+         vocabulary.** Schwab's `assetType` admits `EQUITY`, `OPTION`, `FUTURE`, `FOREX`,
+         `INDEX`, `MUTUAL_FUND`, `FIXED_INCOME`, `CASH_EQUIVALENT`, `COLLECTIVE_INVESTMENT`
+         and more. The declaration says `[:spot]` because that is the closest atom, and it
+         *understates the venue* — which is recorded in the moduledoc rather than left to
+         be inferred. Webull reached Phase 6.2 without hitting this because its equity
+         surface is cash equities only.
+      3. **Four real order types have no Core atom**: `TRAILING_STOP`,
+         `TRAILING_STOP_LIMIT`, `MARKET_ON_CLOSE`, `LIMIT_ON_CLOSE`. The declaration lists
+         only what Core can name, so a consumer reading it sees fewer order types than the
+         venue accepts. Under-declaring is the safe direction, and it is still a gap.
+      4. **`session` has no slot at all.** A Schwab order carries which trading session it
+         is for — `NORMAL`, `AM`, `PM`, `SEAMLESS` — and it is part of an order rather than
+         an option on one. Every crypto venue trades continuously, so nothing in
+         `place_order/3`'s shape anticipates it. This is the clearest case in the family of
+         a field that exists because the market closes.
+      5. **`previewOrder` and atomic replacement still have no expression** (carried
+         forward from 7.1, now confirmed against the specs). Replacement is the sharper of
+         the two: expressing it as cancel-then-place is *not equivalent on this venue*,
+         because it opens a window in which no order is live.
 
 ### Phase 8 — Close
 
@@ -4912,5 +5173,5 @@ venue we cannot hold an account on goes to
 
 ---
 
-**Last Updated**: 2026-08-28 (v1.84 — **Phase 6.1 gemini SHIPPED**: 319 tests (304 tier-1, 15 tier-2 live incl. the demo environment), `mix quality` clean, coverage **97.18%**, pushed to `main`. **Four documentation defects found on one venue in one day** — a replaced WebSocket API announced only by its absence from the docs site (four years of the venue's dated changelog mention `marketdata` zero times), three of seven candle timeframes that the API rejects, a sandbox base URL that is actually the website, and auth error codes that disagree with the live ones. **Two architect corrections reshaped the package**: the demo environment is first-class and production/demo run side by side with separate limiters (a shared bucket would have spent live trading's budget on strategy testing); and account/trading ARE implemented per §6.0 — credentials as arguments, signing in the package, storage and scheme-choice with the host. **`:market` orders are refused**, because the venue serves none and its documented workaround needs a price only the caller can choose. Three more Core defects found by ordinary use (burst depth had nowhere to be declared, `HttpClient` destroyed the 4xx evidence a refusal is made of, a fourth wrong `@spec`) → Core 0.1.8 published. **D13 refined**: where a documented claim is directly measurable, the measurement is the source. 67/77 tasks.)
+**Last Updated**: 2026-08-31 (v1.85 — **Phase 7.1 and 7.2 CLOSED**: the architect signed the browser into Schwab's developer portal, and both OpenAPI documents are captured in full and committed (`openapi/`, `documentation/`, `portal-raw/`, with a `README` recording how to re-capture — a page-context `fetch()` cannot, CORS blocks the gateway origin). **A security finding**: the portal's spec response carries the signed-in account's live `appKey`/`appSecret` in the same JSON, because that endpoint also feeds the "Try it" console — redacted, recorded, nothing committed, and anyone re-capturing must redact again. The outline-only capture was **exactly right about shape** (10 + 13 endpoints) and lossy only about values; one reading in it was **wrong and is corrected in place** (`orderTypeRequest` differs from `orderType` by `UNKNOWN` alone, a read-side escape hatch, not a resolution rule). **Sandbox: no** — promised "later this year" in a 2025-10-30 document, with no non-production server in either spec, so unlike Gemini this venue cannot be exercised without real money. `DpExchange.Schwab.Capabilities` derived entirely from the specs: 22 tests, 100% coverage, `mix quality` clean, **eight candle widths** with minute widths capped at a ten-day lookback, and three refusals where a plausible substitute was available — `:ioc`/`:fok` are `duration` values here and not order types, `:gtd` is absent because three fixed horizons are not an arbitrary date, and `max_candles_per_request` is `nil` because the cap is a period. **`max_leverage` is the wrong shape for Reg-T and this changed Core**: five buying powers that are not multiples of one another on a margin account and none of them on a cash account → Core gained `:per_account`, a positive statement rather than a silence. **Two further Core defects fixed**: `Timeframe` did not model `10m` (so every 10-minute candle passed the alignment check unexamined), and `Capabilities` refused `1w`/`1M` while `Timeframe`'s own moduledoc documents them as deliberately unbucketable — Core contradicted itself, and gained `nameable/0` for the widths it can *name* as against the widths it can *bucket*. **Five Core gaps recorded at 7.5**, none blocking: no per-account dimension on `ceiling` (and a legal ceiling of zero is not `:unsupported`), a crypto instrument-type vocabulary, four order types with no atom, `session` with no slot at all, and `previewOrder`/atomic replacement still unexpressible. 69/77 tasks.)
 **Next Review**: before the first push — secret scanning + push protection (0.15)

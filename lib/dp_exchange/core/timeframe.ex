@@ -40,6 +40,7 @@ defmodule DpExchange.Core.Timeframe do
   @seconds %{
     "1m" => 60,
     "5m" => 300,
+    "10m" => 600,
     "15m" => 900,
     "30m" => 1_800,
     "1h" => 3_600,
@@ -63,6 +64,39 @@ defmodule DpExchange.Core.Timeframe do
   @doc "Every timeframe with a known width, shortest first."
   @spec known() :: [String.t()]
   def known, do: @seconds |> Map.keys() |> Enum.sort_by(&Map.fetch!(@seconds, &1))
+
+  # Widths Core can *name* but cannot *bucket*. A weekly bar's boundary depends on which
+  # weekday the venue starts its week, and a month is not a fixed number of seconds — so
+  # neither has an entry in `@seconds`, and neither ever will.
+  #
+  # They still need to be nameable. Schwab's `/pricehistory` serves both, and a venue that
+  # genuinely serves a weekly candle has only two options if the vocabulary refuses the
+  # label: omit a real width from its declaration, or not ship. Both are worse than
+  # carrying a width we can read but not align.
+  @unbucketable ~w(1w 1M)
+
+  @doc """
+  Every timeframe Core can read as a label, shortest first, including the two it cannot
+  bucket.
+
+  This is deliberately wider than `known/0`, and the difference is the point. `known/0`
+  answers "which widths can I align and bucket"; this answers "which widths can I store
+  under a label something else can read back". A venue may serve `1w`; nothing in Core can
+  tell you where a `1w` bucket starts, and that is a reason not to check alignment rather
+  than a reason to reject the width.
+  """
+  @spec nameable() :: [String.t()]
+  def nameable, do: known() ++ @unbucketable
+
+  @doc """
+  Whether Core recognises `timeframe` as a label at all.
+
+  `false` means the string is outside the vocabulary entirely — not that its boundary is
+  unknown. Use this to validate a declaration; use `seconds/1` when you need the width.
+  """
+  @spec nameable?(term()) :: boolean()
+  def nameable?(timeframe) when is_binary(timeframe), do: timeframe in nameable()
+  def nameable?(_other), do: false
 
   @doc """
   Whether `datetime` sits exactly on a `timeframe` bucket boundary.

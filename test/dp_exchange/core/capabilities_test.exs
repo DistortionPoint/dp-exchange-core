@@ -1,7 +1,7 @@
 defmodule DpExchange.Core.CapabilitiesTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.Capabilities
+  alias DpExchange.Core.{Capabilities, Timeframe}
 
   doctest Capabilities
 
@@ -220,6 +220,42 @@ defmodule DpExchange.Core.CapabilitiesTest do
   end
 
   describe "margin — the two halves must agree" do
+    test ":per_account is accepted — a venue may margin without a single ceiling" do
+      # Reg-T equities forced this. A Schwab margin account carries five different buying
+      # powers that are not multiples of one another, and a cash account at the same venue
+      # carries none of them. No number is true. `nil` would read as "nobody said", which
+      # is what the guard below exists to catch; `:per_account` says "the venue has none"
+      # and points the caller at the balance response.
+      declaration = caps(supports_margin: true, max_leverage: :per_account)
+
+      assert declaration.max_leverage == :per_account
+    end
+
+    test ":per_account without margin is refused, exactly as a number would be" do
+      assert_raise ArgumentError, ~r/supports_margin is false/, fn ->
+        caps(supports_margin: false, max_leverage: :per_account)
+      end
+    end
+
+    test "a leverage that is neither a Decimal nor :per_account is refused" do
+      # A bare integer or a string would be parsed by guessing, and a leverage parsed by
+      # guessing is a leverage sized wrong.
+      for bad <- [5, "5", 5.0, :unlimited] do
+        assert_raise ArgumentError, ~r/neither a Decimal nor :per_account/, fn ->
+          caps(supports_margin: true, max_leverage: bad)
+        end
+      end
+    end
+
+    test "the nil refusal names :per_account, so the third option is discoverable" do
+      # An error that states the rule but not the remedy sends a venue author looking for
+      # a number to invent.
+      error =
+        assert_raise ArgumentError, fn -> caps(supports_margin: true) end
+
+      assert error.message =~ ":per_account"
+    end
+
     test "margin with a leverage ceiling is accepted" do
       declaration = caps(supports_margin: true, max_leverage: Decimal.new(5))
       assert Decimal.equal?(declaration.max_leverage, Decimal.new(5))
@@ -245,13 +281,29 @@ defmodule DpExchange.Core.CapabilitiesTest do
       end
     end
 
-    test "an unmodelled width is refused" do
-      assert_raise ArgumentError, ~r/are not known timeframes/, fn ->
+    test "a width outside the vocabulary is refused" do
+      assert_raise ArgumentError, ~r/outside the timeframe vocabulary/, fn ->
         caps(
           endpoints: %{{:get_historical_prices, 4} => :proven},
           historical_timeframes: ~w(1h 3m)
         )
       end
+    end
+
+    test "1w and 1M are accepted — nameable is wider than bucketable, deliberately" do
+      # Core models no boundary for either, and never will: a weekly bar's start depends
+      # on the venue's week, and a month is not a fixed number of seconds. That is a
+      # reason not to check their alignment, not a reason to refuse a venue that serves
+      # them. Schwab's /pricehistory serves both, and before this the only ways to ship
+      # were to omit a real width or to not ship.
+      declaration =
+        caps(
+          endpoints: %{{:get_historical_prices, 4} => :experimental},
+          historical_timeframes: ~w(1d 1w 1M)
+        )
+
+      assert declaration.historical_timeframes == ~w(1d 1w 1M)
+      assert Timeframe.seconds("1w") == :error
     end
 
     test "a venue whose history endpoint is unsupported need not name widths" do

@@ -130,6 +130,9 @@ defmodule DpExchange.Core.Capabilities do
             supported_instrument_types: [:spot],
             supports_short_selling: false,
             supports_margin: false,
+            # `Decimal` when the venue has one ceiling, `:per_account` when it margins but
+            # the ceiling belongs to the account rather than the venue (Reg-T equities —
+            # see `validate_margin!/1`), `nil` only when it does not margin at all.
             max_leverage: nil,
             supports_fractional_shares: false,
             streamable: [],
@@ -154,7 +157,7 @@ defmodule DpExchange.Core.Capabilities do
           supported_instrument_types: [atom()],
           supports_short_selling: boolean(),
           supports_margin: boolean(),
-          max_leverage: Decimal.t() | nil,
+          max_leverage: Decimal.t() | :per_account | nil,
           supports_fractional_shares: boolean(),
           streamable: [data_kind()],
           authenticated_streamable: [data_kind()],
@@ -331,14 +334,16 @@ defmodule DpExchange.Core.Capabilities do
               "endpoint and declare the widths it actually serves"
     end
 
-    case declaration.historical_timeframes -- Timeframe.known() do
+    case declaration.historical_timeframes -- Timeframe.nameable() do
       [] ->
         :ok
 
       unknown ->
         raise ArgumentError,
-              "historical_timeframes #{inspect(unknown)} are not known timeframes — a width " <>
-                "the vocabulary does not model would be stored under a label nothing can read"
+              "historical_timeframes #{inspect(unknown)} are outside the timeframe vocabulary — " <>
+                "a width Core cannot name would be stored under a label nothing can read back. " <>
+                "Note this checks nameability, not bucketing: 1w and 1M are nameable and " <>
+                "deliberately have no boundary rule"
     end
   end
 
@@ -410,10 +415,27 @@ defmodule DpExchange.Core.Capabilities do
     raise ArgumentError,
           "supports_margin is true but max_leverage is nil — a caller sizing a leveraged " <>
             "order has no ceiling to size against, and guessing one is how a position " <>
-            "exceeds what the venue will accept"
+            "exceeds what the venue will accept. If the venue margins but the ceiling belongs " <>
+            "to the account rather than to the venue, declare :per_account — that is a " <>
+            "statement where nil is a silence"
   end
 
-  defp validate_margin!(_declaration), do: :ok
+  # A venue that margins but has no single ceiling. Reg-T is the case that forced this:
+  # a Schwab margin account carries five different buying powers — overall,
+  # non-marginable, day-trading, option and stock — which are not multiples of one
+  # another, and a cash account at the same venue carries none of them. There is no
+  # number that is true, and `nil` would read as "nobody stated it" rather than as "the
+  # venue does not have one". `:per_account` says the second thing out loud and points a
+  # caller at the balance response, which is where the answer actually lives.
+  defp validate_margin!(%__MODULE__{supports_margin: true, max_leverage: :per_account}), do: :ok
+
+  defp validate_margin!(%__MODULE__{supports_margin: true, max_leverage: %Decimal{}}), do: :ok
+
+  defp validate_margin!(%__MODULE__{max_leverage: leverage}) do
+    raise ArgumentError,
+          "max_leverage #{inspect(leverage)} is neither a Decimal nor :per_account — a " <>
+            "leverage a caller must parse by guessing its type is a leverage it will get wrong"
+  end
 
   defp check_subset!(values, allowed, name) when is_list(values) do
     case values -- allowed do

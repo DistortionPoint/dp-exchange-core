@@ -12,6 +12,16 @@ defmodule DpExchange.Core.TimeframeTest do
       assert {:ok, 86_400} = Timeframe.seconds("1d")
     end
 
+    test "10m is modelled — Schwab serves it, and 600 seconds is not ambiguous" do
+      # Added when Schwab's /pricehistory turned out to serve a 10-minute candle.
+      # Its absence here was not neutral: `aligned?/2` returns true for a width it
+      # cannot model, so every 10m candle passed the authenticity check unexamined.
+      assert {:ok, 600} = Timeframe.seconds("10m")
+      assert Timeframe.boundary(~U[2026-08-31 14:07:33Z], "10m") == ~U[2026-08-31 14:00:00Z]
+      refute Timeframe.aligned?(~U[2026-08-31 14:07:00Z], "10m")
+      assert Timeframe.aligned?(~U[2026-08-31 14:10:00Z], "10m")
+    end
+
     test "an unmodelled width is :error, not the nearest one" do
       # This is the whole point of the function. A `1w` silently becoming `1d`
       # mis-buckets every candle it touches, and every value stays plausible.
@@ -47,6 +57,30 @@ defmodule DpExchange.Core.TimeframeTest do
       for tf <- Timeframe.known() do
         assert {:ok, _width} = Timeframe.seconds(tf)
       end
+    end
+  end
+
+  describe "nameable/0 — wider than known/0, and that gap is the design" do
+    test "every bucketable width is also nameable" do
+      for tf <- Timeframe.known(), do: assert(Timeframe.nameable?(tf))
+    end
+
+    test "1w and 1M are nameable but have no width" do
+      # The whole reason the two lists differ. A venue may serve a weekly candle; nothing
+      # in Core can say where a weekly bucket starts. Refusing the label would force such
+      # a venue to under-declare what it serves.
+      for tf <- ~w(1w 1M) do
+        assert Timeframe.nameable?(tf)
+        assert Timeframe.seconds(tf) == :error
+        refute tf in Timeframe.known()
+      end
+    end
+
+    test "a string outside the vocabulary is neither" do
+      refute Timeframe.nameable?("3m")
+      refute Timeframe.nameable?("1y")
+      refute Timeframe.nameable?(:"1d")
+      refute Timeframe.nameable?(nil)
     end
   end
 

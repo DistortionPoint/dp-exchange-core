@@ -21,7 +21,31 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+- `Timeframe.nameable/0` and `Timeframe.nameable?/1` — the widths Core can read as a
+  **label**, which is deliberately wider than `known/0`, the widths it can **bucket**.
+  `1w` and `1M` are nameable and have no boundary rule, and never will: a weekly bar's
+  start depends on which weekday the venue begins its week, and a month is not a fixed
+  number of seconds.
+
 ### Fixed
+- `Capabilities` no longer refuses a venue that serves weekly or monthly candles.
+  `validate_history!/1` checked `historical_timeframes` against `Timeframe.known()`,
+  which is the set Core can *bucket* — so declaring `1w` raised, even though
+  `Timeframe` already documents both as deliberately unbucketable and instructs callers
+  to read "no boundary rule" as "cannot check" rather than "invalid". Core contradicted
+  itself: `aligned?/2` tolerates an unmodelled width, `boundary/2` passes it through,
+  and `Capabilities` rejected it outright. A venue serving a real weekly candle had two
+  options, under-declare or not ship. It now checks `Timeframe.nameable/0`; a width Core
+  cannot name at all, such as `3m`, is still refused. Found deriving Schwab's
+  declaration.
+- `Timeframe` now models `10m` (600 seconds). Its absence was **not** neutral:
+  `aligned?/2` returns `true` for a width it cannot model — "no rule" must not read as
+  "invalid" — so every 10-minute candle passed the authenticity check unexamined, and
+  `boundary/2` was a no-op on it. Found deriving Schwab's declaration, where
+  `/pricehistory` serves 1, 5, 10, 15 and 30-minute widths. Unlike `1w` and `1M`, which
+  are deliberately absent because their boundaries are not fixed, 600 seconds is not
+  ambiguous and there was no reason to leave it unmodelled.
 - `HttpClient.request/5`'s spec no longer advertises `{:error, :rate_limited,
   retry_after: seconds}`. **It never returned it.** Both rate-limit paths convert to a
   two-element error before returning, each deliberately and for a recorded reason — a
