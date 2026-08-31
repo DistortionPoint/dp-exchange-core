@@ -52,3 +52,13 @@ Thumbs.db
 # Playwright MCP scratch — page snapshots and console logs from browser-driven
 # documentation reads. Never a package artifact.
 .playwright-mcp/
+
+# Saved-page asset bundles from the Schwab developer portal capture.
+#
+# The `_files/` directories are Schwab's own compiled JS and CSS — 7.5 MB, duplicated
+# across two page saves, and of no informational value: the content was extracted into
+# `dp_exchange_schwab/docs/reference/schwab/` (both specs, both prose documents, the 17
+# User Guides). **This repo is public and history is not retractable**, so republishing a
+# third party's compiled front-end assets permanently is not something to do by accident.
+# The HTML pages themselves are kept.
+docs/reference/schwab-portal-capture/**/*_files/

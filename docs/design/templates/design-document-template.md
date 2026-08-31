@@ -40,6 +40,80 @@
 3. **User Experience**: [UX goals, e.g., task completion in < 3 clicks]
 4. **Technical Standards**: Code quality, security, maintainability standards met
 
+<!--
+  The checklist goes HERE — immediately after Project Overview, near the top.
+
+  It is the part a reader works from. Anyone picking the document up mid-flight wants to
+  know what is done and what is next before they want the methodology, and burying it
+  below the design discussion means scrolling past a thousand lines to find the one
+  section that changes daily.
+
+  This was moved on 2026-08-31: the template had it fourth, after "Detailed Implementation
+  Plan", and a plan written to that ordering had to be restructured. The convention the
+  repository actually follows — see any document in `docs/design/closed/` — puts it at §2.
+-->
+## Subtask Checklist and Progress Tracking
+
+### Phase 1: Foundation Setup
+
+- [ ] **Database Schema**: Create/modify database tables
+  - [ ] Design schema changes
+  - [ ] Write migration scripts
+  - [ ] Test migrations in development
+- [ ] **API Endpoints**: Implement core API functionality
+  - [ ] Create controller actions
+  - [ ] Add request validation
+  - [ ] Implement response formatting
+- [ ] **Authentication/Authorization**: Security implementation
+  - [ ] Define access controls
+  - [ ] Implement permission checks
+  - [ ] Add security tests
+
+### Phase 2: Core Implementation
+
+- [ ] **Business Logic**: Implement core functionality
+  - [ ] Service layer implementation
+  - [ ] Data processing logic
+  - [ ] Error handling
+- [ ] **User Interface**: Frontend implementation
+  - [ ] Create UI components
+  - [ ] Implement user interactions
+  - [ ] Add responsive design
+- [ ] **Integration**: Connect components
+  - [ ] Frontend-backend integration
+  - [ ] External service integration
+  - [ ] Data synchronization
+
+### Phase 3: Testing and Validation
+
+- [ ] **Unit Tests**: Component-level testing
+  - [ ] Backend service tests
+  - [ ] Frontend component tests
+  - [ ] Database operation tests
+- [ ] **Integration Tests**: End-to-end testing
+  - [ ] API integration tests
+  - [ ] User workflow tests
+  - [ ] Performance tests
+- [ ] **User Acceptance**: Validation with stakeholders
+  - [ ] Feature demonstration
+  - [ ] Feedback collection
+  - [ ] Issue resolution
+
+### Phase 4: Deployment and Monitoring
+
+- [ ] **Deployment Preparation**: Production readiness
+  - [ ] Environment configuration
+  - [ ] Security review
+  - [ ] Performance optimization
+- [ ] **Go-Live**: Production deployment
+  - [ ] Database migrations
+  - [ ] Application deployment
+  - [ ] Monitoring setup
+- [ ] **Post-Launch**: Monitoring and support
+  - [ ] Performance monitoring
+  - [ ] Error tracking
+  - [ ] User feedback collection
+
 ## Design Approach and Methodology
 
 ### Design Philosophy
@@ -174,68 +248,6 @@ DELETE /api/v1/resource/:id
 
 1. **Action 1**: [User flow and expected behavior]
 2. **Action 2**: [User flow and expected behavior]
-
-## Subtask Checklist and Progress Tracking
-
-### Phase 1: Foundation Setup
-
-- [ ] **Database Schema**: Create/modify database tables
-  - [ ] Design schema changes
-  - [ ] Write migration scripts
-  - [ ] Test migrations in development
-- [ ] **API Endpoints**: Implement core API functionality
-  - [ ] Create controller actions
-  - [ ] Add request validation
-  - [ ] Implement response formatting
-- [ ] **Authentication/Authorization**: Security implementation
-  - [ ] Define access controls
-  - [ ] Implement permission checks
-  - [ ] Add security tests
-
-### Phase 2: Core Implementation
-
-- [ ] **Business Logic**: Implement core functionality
-  - [ ] Service layer implementation
-  - [ ] Data processing logic
-  - [ ] Error handling
-- [ ] **User Interface**: Frontend implementation
-  - [ ] Create UI components
-  - [ ] Implement user interactions
-  - [ ] Add responsive design
-- [ ] **Integration**: Connect components
-  - [ ] Frontend-backend integration
-  - [ ] External service integration
-  - [ ] Data synchronization
-
-### Phase 3: Testing and Validation
-
-- [ ] **Unit Tests**: Component-level testing
-  - [ ] Backend service tests
-  - [ ] Frontend component tests
-  - [ ] Database operation tests
-- [ ] **Integration Tests**: End-to-end testing
-  - [ ] API integration tests
-  - [ ] User workflow tests
-  - [ ] Performance tests
-- [ ] **User Acceptance**: Validation with stakeholders
-  - [ ] Feature demonstration
-  - [ ] Feedback collection
-  - [ ] Issue resolution
-
-### Phase 4: Deployment and Monitoring
-
-- [ ] **Deployment Preparation**: Production readiness
-  - [ ] Environment configuration
-  - [ ] Security review
-  - [ ] Performance optimization
-- [ ] **Go-Live**: Production deployment
-  - [ ] Database migrations
-  - [ ] Application deployment
-  - [ ] Monitoring setup
-- [ ] **Post-Launch**: Monitoring and support
-  - [ ] Performance monitoring
-  - [ ] Error tracking
-  - [ ] User feedback collection
 
 ## Review and Iteration Notes
 

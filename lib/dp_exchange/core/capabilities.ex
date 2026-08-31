@@ -64,8 +64,45 @@ defmodule DpExchange.Core.Capabilities do
   @typedoc """
   A kind of data a subscription can deliver — normalised, so a consumer never learns a
   venue's channel vocabulary.
+
+  ## `:top_of_book` is not `:order_book`
+
+  Venues stream these on separate channels because they are separate things: a best-bid/ask
+  feed carries one level and a depth feed carries many, and the first is deliberately
+  cheaper. They are kept apart here for the same reason `Types.TopOfBook` is not
+  `Types.OrderBook` — a consumer subscribing to depth and receiving a single level would be
+  told it has a book when it has a quote.
+
+  ## What these were measured against
+
+  Gemini's AsyncAPI document and Schwab's Streamer service list, read 2026-08-31:
+
+      bookTicker                          -> :top_of_book
+      depth, depth5/10/20 (+Fast)         -> :order_book
+      trade                               -> :trades
+      ordersAccount, ordersSession        -> :orders
+      balancesAccount (+Snapshot)         -> :balances
+      positionsAccount (+Snapshot)        -> :positions
+      LEVELONE_*                          -> :quotes
+      NYSE_BOOK, NASDAQ_BOOK, OPTIONS_BOOK -> :order_book
+      CHART_EQUITY, CHART_FUTURES         -> :candles
+      ACCT_ACTIVITY                       -> :orders and :fills
+
+  **Three streamed channels have no kind here yet, deliberately**: Gemini's
+  `settlementsAccount` and `contractStatus` are prediction-market lifecycle events, and its
+  `requestForQuote*` family is an RFQ surface. None has a facade home, and inventing a kind
+  before the shape is decided would put a name on the contract that nothing can deliver.
   """
-  @type data_kind :: :quotes | :order_book | :trades | :orders | :fills | :balances
+  @type data_kind ::
+          :quotes
+          | :top_of_book
+          | :order_book
+          | :trades
+          | :candles
+          | :orders
+          | :fills
+          | :balances
+          | :positions
 
   @typedoc """
   What credentials **buy** on this venue.
@@ -174,6 +211,12 @@ defmodule DpExchange.Core.Capabilities do
             # see `validate_margin!/1`), `nil` only when it does not margin at all.
             max_leverage: nil,
             supports_fractional_shares: false,
+            # Custodial staking only — the venue holds the asset and pays a rate. **Not**
+            # on-chain staking, where the venue hands back an unsigned transaction for the
+            # caller to sign and broadcast. Those are different capabilities and one venue
+            # publishes both, so a flag that meant "stakes, somehow" would be useless
+            # exactly where it matters.
+            has_staking: false,
             # Which trading sessions an order may name. `[]` for a venue that trades
             # continuously — every crypto venue — and non-empty only where the market
             # closes, which is why nothing needed it until an equities broker arrived.
@@ -219,6 +262,7 @@ defmodule DpExchange.Core.Capabilities do
           supports_margin: boolean(),
           max_leverage: Decimal.t() | :per_account | nil,
           supports_fractional_shares: boolean(),
+          has_staking: boolean(),
           supported_sessions: [session()],
           supports_order_preview: boolean(),
           supports_order_replace: boolean(),
@@ -249,7 +293,17 @@ defmodule DpExchange.Core.Capabilities do
   @type catalog_access :: :enumerable | :query_only
 
   @maturities [:proven, :experimental, :unsupported]
-  @data_kinds [:quotes, :order_book, :trades, :orders, :fills, :balances]
+  @data_kinds [
+    :quotes,
+    :top_of_book,
+    :order_book,
+    :trades,
+    :candles,
+    :orders,
+    :fills,
+    :balances,
+    :positions
+  ]
 
   # `:market` through `:fok` are the original seven, written for crypto venues. The four
   # that follow are real order types Schwab accepts and Core had no word for, so a venue

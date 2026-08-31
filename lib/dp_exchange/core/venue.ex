@@ -168,10 +168,239 @@ defmodule DpExchange.Core.Venue do
   touches, and every value stays plausible.
   """
   @callback get_historical_prices(symbol(), String.t(), keyword(), keyword()) ::
-              result([Types.Quote.t()])
+              result([Types.Candle.t()])
 
   @doc "Every symbol the venue lists."
   @callback get_symbols(keyword()) :: result([symbol()])
+
+  @doc """
+  Best bid and ask for `symbol` — the top of the book, **not a traded price**.
+
+  Returns `Types.TopOfBook`, which has no `price` field. A caller wanting what the
+  instrument last traded at calls `get_price/2`; a caller wanting what it can currently
+  trade at calls this. The two must never stand in for one another — see
+  `Types.TopOfBook`'s moduledoc for the defect that rule was written from.
+
+  Most venues publish a dedicated BBO endpoint that is cheaper than a full book, which is
+  why this is not `get_order_book/2` with a depth of one. Several publish no timestamp with
+  it and several publish no sizes; the type makes both optional rather than inventing them.
+  """
+  @callback get_top_of_book(symbol(), keyword()) :: result(Types.TopOfBook.t())
+
+  @doc """
+  Staking rates on offer, per asset and provider.
+
+  **This is custodial staking** — the venue holds the asset and pays a rate. It is not
+  on-chain staking: an endpoint that returns an *unsigned transaction* for a caller to sign
+  and broadcast is a different capability and must never be reached through these callbacks.
+  A caller believing it had staked when it holds an unsigned transaction nobody signed is
+  the most expensive form of this family's recurring failure.
+  """
+  @callback get_staking_rates(keyword()) :: result([Types.StakingRate.t()])
+
+  @doc "Staked positions, one per asset, with their liquidity states kept apart."
+  @callback get_staking_balances(keyword()) :: result([Types.StakingBalance.t()])
+
+  @doc "Rewards accrued over a period. The period is part of the value, not a filter."
+  @callback get_staking_rewards(keyword()) :: result([Types.StakingReward.t()])
+
+  @doc "Movements in and out of staked positions, redemptions included with their progress."
+  @callback get_staking_history(keyword()) :: result([Types.StakingTransaction.t()])
+
+  @doc """
+  Stakes `amount` of `asset`.
+
+  Returns the resulting transaction. **This moves funds**: a consumer calling it has decided
+  to, and D2 puts that decision with the host rather than with this package.
+  """
+  @callback stake(String.t(), Decimal.t(), keyword()) :: result(Types.StakingTransaction.t())
+
+  @doc """
+  Redeems `amount` of a staked `asset`.
+
+  **Returns immediately; the redemption does not complete immediately.** The returned
+  transaction carries `:amount_remaining`, which is non-zero for as long as the asset is
+  unbonding. A caller that treats the return value as settled will spend an asset it does
+  not have yet — see `Types.StakingTransaction`.
+  """
+  @callback unstake(String.t(), Decimal.t(), keyword()) :: result(Types.StakingTransaction.t())
+
+  @doc """
+  Open positions — exposure, not holdings.
+
+  Distinct from `get_balances/1`: a balance says what the account holds, a position says
+  what exposure it has taken and how far it is from liquidation. A spot-only venue declares
+  this `:unsupported`; that is not the same as having none.
+  """
+  @callback get_positions(keyword()) :: result([Types.Position.t()])
+
+  @doc """
+  Funding for a perpetual — settled, projected, and when the next one lands.
+
+  Returns `Types.Funding`, which keeps the settled amount and the venue's estimate apart. A
+  venue that does not trade perpetuals declares this `:unsupported`.
+  """
+  @callback get_funding(symbol(), keyword()) :: result(Types.Funding.t())
+
+  @doc """
+  Risk statistics for a derivative — mark, index and open interest.
+
+  Returns `Types.ContractStats`. Mark and index are separate prices with separate meanings,
+  and neither is what the instrument last traded at.
+  """
+  @callback get_contract_stats(symbol(), keyword()) :: result(Types.ContractStats.t())
+
+  @doc """
+  Quotes a conversion of `amount` from one asset to another. **Nothing moves.**
+
+  Returns a `Types.Conversion` with `status: :quoted` and, where the venue states one, an
+  `:expires_at`. The rate is held only until then. Committing is a separate call —
+  `commit_conversion/2` — and a caller that never commits has done nothing but ask.
+  """
+  @callback quote_conversion(String.t(), String.t(), Decimal.t(), keyword()) ::
+              result(Types.Conversion.t())
+
+  @doc """
+  Commits a previously quoted conversion. **This moves funds.**
+
+  A quote past its window may be refused, or filled at the current rate rather than the
+  quoted one — which is the outcome to guard against, because it looks like success. D2 puts
+  the decision to call this with the host.
+  """
+  @callback commit_conversion(String.t(), keyword()) :: result(Types.Conversion.t())
+
+  @doc "A conversion's current state, quoted or committed."
+  @callback get_conversion(String.t(), keyword()) :: result(Types.Conversion.t())
+
+  @doc """
+  The portfolios this credential can address.
+
+  A portfolio is **where** you ask, not what you get back: balances, orders and positions
+  are addressed to one with `portfolio: id` in `opts`. A venue with a single implicit
+  context declares this `:unsupported` and ignores the option.
+
+  **Where the option is omitted on a venue that has portfolios, the package uses the venue's
+  default and does not invent one.** A caller needing determinism passes the id.
+  """
+  @callback list_portfolios(keyword()) :: result([Types.Portfolio.t()])
+
+  @doc """
+  A deposit address for `asset` on `network`.
+
+  **The network is required and not defaulted.** The same asset exists on several chains and
+  the addresses are not interchangeable; a package choosing a default network would be
+  choosing where a caller's funds go.
+
+  Read `Types.DepositAddress`'s `:memo_required` before sending. `nil` there means the venue
+  did not say, which is not the same as `false`.
+  """
+  @callback get_deposit_address(String.t(), String.t(), keyword()) ::
+              result(Types.DepositAddress.t())
+
+  @doc "Addresses on the withdrawal allow-list, with whether each is usable yet."
+  @callback list_approved_addresses(keyword()) :: result([Types.ApprovedAddress.t()])
+
+  @doc """
+  Estimates the fee to withdraw `amount` of `asset` over `network`.
+
+  Separate from `withdraw/5` because the venues expose it separately, and because the
+  estimate can differ from the charge. Do not record an estimate as a fee.
+  """
+  @callback estimate_withdrawal_fee(String.t(), String.t(), Decimal.t(), keyword()) ::
+              result(Decimal.t())
+
+  @doc """
+  Withdraws `amount` of `asset` over `network` to `address`.
+
+  **This is the only operation in this contract that cannot be undone.** D2 places the
+  decision to call it with the host, not with this package.
+
+  Two failure modes are worth naming because neither is a package bug:
+
+    * the address is not on the venue's allow-list, or is on it and **not yet active** —
+      see `Types.ApprovedAddress`
+    * the asset requires a memo and none was given, in which case the funds leave and are
+      not credited to anyone
+
+  A memo is passed as `memo:` in `opts`. A package must not synthesise one.
+  """
+  @callback withdraw(String.t(), String.t(), Decimal.t(), String.t(), keyword()) ::
+              result(Types.Withdrawal.t())
+
+  @doc """
+  The option chain for an underlying — expiry × strike, both sides.
+
+  Returns `Types.OptionChain`. Two-dimensional deliberately: a flat list of contracts is
+  lossless in data and answers none of the questions a chain is asked.
+  """
+  @callback get_option_chain(String.t(), keyword()) :: result(Types.OptionChain.t())
+
+  @doc """
+  The expiries listed on an underlying, without the strikes.
+
+  Venues expose this separately because a full chain is large and a caller choosing an
+  expiry does not need every strike to do it.
+  """
+  @callback get_option_expirations(String.t(), keyword()) :: result([Date.t()])
+
+  @doc """
+  Greeks and implied volatility for one contract.
+
+  Returns `Types.OptionGreeks`. **Model output, not market data** — two venues quoting the
+  same contract publish different numbers and neither is wrong.
+  """
+  @callback get_option_greeks(String.t(), keyword()) :: result(Types.OptionGreeks.t())
+
+  @doc "Watchlists held at the venue. The venue's list, which may differ from the host's."
+  @callback list_watchlists(keyword()) :: result([Types.Watchlist.t()])
+
+  @doc "One watchlist including its membership."
+  @callback get_watchlist(String.t(), keyword()) :: result(Types.Watchlist.t())
+
+  @doc "Creates a watchlist at the venue."
+  @callback create_watchlist(String.t(), [String.t()], keyword()) :: result(Types.Watchlist.t())
+
+  @doc "Replaces a watchlist's name or membership."
+  @callback update_watchlist(String.t(), keyword()) :: result(Types.Watchlist.t())
+
+  @doc "Deletes a watchlist at the venue."
+  @callback delete_watchlist(String.t(), keyword()) :: result(:ok)
+
+  @doc """
+  Financial statements for an issuer.
+
+  `kind` selects balance sheet, income, cash flow or the venue's indicator set. Line items
+  come back under the venue's own names — see `Types.FinancialStatement` for why they are
+  not normalised into a fixed schema.
+  """
+  @callback get_financials(String.t(), atom(), keyword()) ::
+              result([Types.FinancialStatement.t()])
+
+  @doc "Dividends, earnings dates and splits. Each date is carried under its own name."
+  @callback get_corporate_events(keyword()) :: result([Types.CorporateEvent.t()])
+
+  @doc "Regulatory filings the venue indexes. This interface points at them; it never fetches one."
+  @callback get_filings(String.t(), keyword()) :: result([Types.Filing.t()])
+
+  @doc "News the venue publishes or relays, with its own tagging."
+  @callback get_news(keyword()) :: result([Types.NewsItem.t()])
+
+  @doc """
+  A venue screener, mover list or ranking, by the venue's own identifier for it.
+
+  Rows carry the venue's ranking and metrics. Two venues' lists under one name answer
+  different questions; this interface does not merge or re-rank them.
+  """
+  @callback get_screener(String.t(), keyword()) :: result([Types.ScreenerResult.t()])
+
+  @doc "Creates an account or sub-account at the venue."
+  @callback create_account(keyword()) :: result(map())
+
+  @doc "Renames an existing account at the venue."
+  @callback rename_account(String.t(), String.t(), keyword()) :: result(map())
+
+  @doc "The roles this credential holds, as the venue defines them."
+  @callback get_roles(keyword()) :: result(map())
 
   @doc "The order book for `symbol`, best price first on both sides."
   @callback get_order_book(symbol(), keyword()) :: result(Types.OrderBook.t())
@@ -423,13 +652,107 @@ defmodule DpExchange.Core.Venue do
       {:quantization, 1} =>
         "not load-bearing — an unsupporting venue means the caller skips quantization",
       {:get_order_book, 2} =>
-        "irreplaceable but not load-bearing — depth is unavailable, trading is not",
+        "not load-bearing — a consumer reaches every other endpoint without depth; " <>
+          "irreplaceable where published, since a book is the venue's own",
+      {:list_watchlists, 1} =>
+        "not load-bearing — a venue may keep no lists; irreplaceable where it does, since " <>
+          "the venue's list is the venue's and can differ from any the host holds",
+      {:get_watchlist, 2} =>
+        "not load-bearing — a venue may keep no lists; irreplaceable where it does",
+      {:create_watchlist, 3} =>
+        "not load-bearing — a venue may keep no lists; irreplaceable where it does",
+      {:update_watchlist, 2} =>
+        "not load-bearing — a venue may keep no lists; irreplaceable where it does",
+      {:delete_watchlist, 2} =>
+        "not load-bearing — a venue may keep no lists; irreplaceable where it does",
+      {:get_financials, 3} =>
+        "replaceable — issuer statements are published by the issuer and carried by many " <>
+          "data providers, so a venue is one source among several",
+      {:get_corporate_events, 1} =>
+        "replaceable — dividends, earnings dates and splits come from the issuer and are " <>
+          "carried by many providers",
+      {:get_filings, 2} =>
+        "replaceable — filings live with the regulator; a venue indexing them is a pointer",
+      {:get_news, 1} => "replaceable — a venue relaying news is one feed among many",
+      {:get_screener, 2} =>
+        "not load-bearing — a venue may publish no screeners; irreplaceable where it does, " <>
+          "since the criteria are the venue's own and no other source reproduces its list",
+      {:create_account, 1} =>
+        "not load-bearing — a venue may not open accounts through its API; irreplaceable " <>
+          "where it does, since only the venue creates accounts on the venue",
+      {:rename_account, 3} =>
+        "not load-bearing — a venue may not expose account administration; irreplaceable " <>
+          "where it does",
+      {:get_roles, 1} =>
+        "not load-bearing — a venue may define no roles; irreplaceable where it does, since " <>
+          "only the venue knows what this credential is permitted to reach",
+      {:get_top_of_book, 2} =>
+        "replaceable — the top level of get_order_book/2 answers the same question wherever " <>
+          "a venue publishes depth",
+      {:get_option_chain, 2} =>
+        "not load-bearing — a venue may list no options at all, so a package without this " <>
+          "is complete rather than lacking; irreplaceable where the venue does list them",
+      {:get_option_expirations, 2} =>
+        "replaceable — derivable from get_option_chain/2, at the cost of fetching every " <>
+          "strike to learn the dates",
+      {:get_option_greeks, 2} =>
+        "replaceable — model output; any pricing library computes it from the contract and " <>
+          "a volatility input, and two venues publish different numbers anyway",
+      {:get_deposit_address, 3} =>
+        "not load-bearing — a venue may accept no deposits through its API; irreplaceable " <>
+          "where it does, since only the venue can say where its own custody receives",
+      {:list_approved_addresses, 1} =>
+        "not load-bearing — not every venue keeps an allow-list; irreplaceable where one exists",
+      {:estimate_withdrawal_fee, 4} =>
+        "replaceable — network fees are observable on the chain, though not to the venue's " <>
+          "own precision",
+      {:withdraw, 5} =>
+        "not load-bearing — a venue may not permit withdrawal through its API; irreplaceable " <>
+          "where it does, since nothing outside the venue moves the venue's custody",
+      {:list_portfolios, 1} =>
+        "not load-bearing — a venue may have one implicit context and nothing to name",
+      {:quote_conversion, 4} =>
+        "not load-bearing — a venue may offer no conversion; irreplaceable where it does, " <>
+          "since only the venue quotes its own rate",
+      {:commit_conversion, 2} =>
+        "not load-bearing — a venue may offer no conversion; irreplaceable where it does",
+      {:get_conversion, 2} =>
+        "not load-bearing — a venue may offer no conversion; irreplaceable where it does, " <>
+          "since only the venue holds the conversion's state",
+      {:get_funding, 2} =>
+        "not load-bearing — a venue may list no perpetuals; irreplaceable where it does, " <>
+          "since funding is the venue's own and differs between venues on one contract",
+      {:get_contract_stats, 2} =>
+        "not load-bearing — a venue may list no derivatives; irreplaceable where it does, " <>
+          "since a mark price is the venue's own valuation and nothing external reproduces it",
+      {:get_positions, 1} =>
+        "not load-bearing — a spot venue holds none; irreplaceable where they exist, since " <>
+          "only the venue knows what it has you down for",
+      {:get_staking_rates, 1} =>
+        "not load-bearing — a venue may not stake; irreplaceable where it does, since the " <>
+          "rate is the venue's own offer",
+      {:get_staking_balances, 1} =>
+        "not load-bearing — a venue may not stake; irreplaceable where it does, since only " <>
+          "the venue knows what it holds staked",
+      {:get_staking_rewards, 1} =>
+        "not load-bearing — a venue may not stake; irreplaceable where it does",
+      {:get_staking_history, 1} =>
+        "not load-bearing — a venue may not stake; irreplaceable where it does, since only " <>
+          "the venue holds its own record",
+      {:stake, 3} => "not load-bearing — a venue may not stake; irreplaceable where it does",
+      {:unstake, 3} =>
+        "not load-bearing — a venue may not stake; irreplaceable where it does, and the " <>
+          "only route back out of the venue's custody",
       {:list_instruments, 1} =>
         "not load-bearing — a richer get_symbols/1; absence costs detail, not function",
       {:get_market_overview, 1} => "not load-bearing — a bulk convenience over per-symbol calls",
-      {:get_fees, 2} => "not load-bearing — affects P&L accuracy, not whether an order executes",
+      {:get_fees, 2} =>
+        "not load-bearing — a consumer reaches every other endpoint without the schedule; " <>
+          "irreplaceable where published, since a venue's fees are its own",
       {:get_trade_history, 2} => "not load-bearing — after-the-fact reconstruction",
-      {:get_transfers, 2} => "not load-bearing — not the trading path",
+      {:get_transfers, 2} =>
+        "not load-bearing — a record of movements the venue has already made; " <>
+          "irreplaceable, since only the venue holds its own ledger",
       {:get_accounts, 2} => "not load-bearing — balances are the sizing input",
       {:update_symbols, 2} =>
         "not load-bearing — an optimisation over unsubscribe/2 + subscribe/2, both core",
@@ -442,7 +765,7 @@ defmodule DpExchange.Core.Venue do
         "not load-bearing, but it is RISK-bearing — absence means cancel-then-place, " <>
           "which works and opens a window in which no order is live",
       {:subscribe_notices, 1} =>
-        "not load-bearing — losing notices costs visibility, not the trading path"
+        "not load-bearing — losing notices costs visibility into the stream, not the stream"
     }
   end
 

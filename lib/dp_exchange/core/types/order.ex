@@ -18,6 +18,10 @@ defmodule DpExchange.Core.Types.Order do
     :symbol,
     :side,
     :order_type,
+    # `Capabilities.supported_time_in_force` says which a venue accepts; without this the
+    # type could not say which one an order actually used. A caller reading an order back
+    # could not distinguish an IOC that expired from a GTC still working.
+    :time_in_force,
     :quantity,
     :price,
     :stop_price,
@@ -26,6 +30,12 @@ defmodule DpExchange.Core.Types.Order do
     :average_price,
     :fee,
     :fee_currency,
+    # Empty for an ordinary single-instrument order. Non-empty for a spread, which the
+    # venue fills as a unit or not at all — see `Types.OrderLeg`. A venue that cannot
+    # trade multi-leg refuses rather than decomposing: submitting the legs separately is
+    # something the venue never received, and reports back as though it had. A venue that
+    # cannot accept multi-leg refuses.
+    :legs,
     :created_at,
     :updated_at,
     :provider
@@ -49,6 +59,7 @@ defmodule DpExchange.Core.Types.Order do
           symbol: String.t(),
           side: side(),
           order_type: order_type(),
+          time_in_force: atom() | nil,
           quantity: Decimal.t(),
           price: Decimal.t() | nil,
           stop_price: Decimal.t() | nil,
@@ -57,6 +68,7 @@ defmodule DpExchange.Core.Types.Order do
           average_price: Decimal.t() | nil,
           fee: Decimal.t() | nil,
           fee_currency: String.t() | nil,
+          legs: [DpExchange.Core.Types.OrderLeg.t()] | nil,
           created_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil,
           provider: atom() | String.t()

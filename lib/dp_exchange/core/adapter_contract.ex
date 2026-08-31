@@ -74,7 +74,8 @@ defmodule DpExchange.Core.AdapterContract do
       {10, "facade completeness and exclusivity — only the facade is public"},
       {11, "self-sufficiency — nothing injected but credentials and options"},
       {12, "capabilities and behaviour agree, in both directions"},
-      {13, "process-scoped isolation — usable in a consumer's async suite"}
+      {13, "process-scoped isolation — usable in a consumer's async suite"},
+      {14, "top of book is not a price — a BBO carries resting orders, never a traded price"}
     ]
   end
 
@@ -431,6 +432,51 @@ defmodule DpExchange.Core.AdapterContract do
   defp purity do
     quote location: :keep do
       # --- 7, 10, 11. purity, exclusivity, self-sufficiency ----------------
+
+      describe "14. top of book is not a price" do
+        # These assertions exist because the confusion they forbid already shipped: a venue
+        # package read `price || ask` from a best-bid/ask endpoint, so a response with no
+        # traded price produced a quote whose `price` was a resting order. Review missed it,
+        # and the package's own tests asserted it as correct.
+
+        test "TopOfBook has no price field, and cannot grow one by accident" do
+          # Structural, and asserted rather than trusted: the entire point of the type is
+          # that there is nowhere to put a traded price. A field added later would silently
+          # re-open the defect this type was built to close.
+          top = %DpExchange.Core.Types.TopOfBook{
+            symbol: "BTC-USD",
+            observed_at: DateTime.utc_now(),
+            provider: :contract_check
+          }
+
+          refute Map.has_key?(top, :price),
+                 "TopOfBook must never carry `price`. A caller wanting a traded price " <>
+                   "calls get_price/2 and gets a Quote, or gets an error."
+        end
+
+        test "get_top_of_book/2 returns a TopOfBook that records when it was observed" do
+          caps = @venue.capabilities()
+
+          if Capabilities.active?(caps, {:get_top_of_book, 2}) and @sample_pairs != [] do
+            case @venue.get_top_of_book(hd(@sample_pairs), []) do
+              {:ok, top} ->
+                assert %DpExchange.Core.Types.TopOfBook{} = top,
+                       "a BBO carries resting orders; a Quote carries a traded price, and " <>
+                         "they are not interchangeable"
+
+                assert %DateTime{} = top.observed_at,
+                       "observed_at is required: a BBO is stale the instant it is read, so " <>
+                         "when it was read is part of the value"
+
+                assert is_nil(top.venue_time) or match?(%DateTime{}, top.venue_time),
+                       "venue_time is the venue's own or nil — never a stand-in for it"
+
+              _refused_or_unsupported ->
+                :ok
+            end
+          end
+        end
+      end
 
       describe "7. purity" do
         test "the compiled package links against nothing but its declared dependencies" do

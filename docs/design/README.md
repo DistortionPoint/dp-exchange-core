@@ -86,6 +86,19 @@ docs/design/
         └── [code samples...]
 ```
 
+## Document structure — the checklist goes near the top
+
+Every plan carries a **Subtask Checklist and Progress Tracking** section, and it belongs
+**immediately after Project Overview**, at §2. Not below the design discussion.
+
+It is the part a reader works from. Someone picking a plan up mid-flight wants to know
+what is done and what is next before they want the methodology, and a checklist buried
+under a thousand lines of design is one nobody keeps current.
+
+`templates/design-document-template.md` had it fourth until 2026-08-31, and a plan written
+to that ordering had to be restructured. **The template is now correct**; if the two ever
+disagree again, the convention in `closed/` wins and the template is the thing to fix.
+
 ## Status Convention (added 2026-05-27)
 
 Every active design document carries a `**Status**:` header at the top. Allowed values:

@@ -22,6 +22,111 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Changed
+- **BREAKING: `Core.Types.Quote` no longer carries `:bid` and `:ask`.** They are order book
+  data — resting orders — and `Quote` is trade data. Every venue package in the family was
+  filling them, and one read `price || ask` from a best-bid/ask endpoint, producing a quote
+  whose `price` was a resting order. Every value was real; only the meaning was wrong.
+
+  A caller wanting the top of the book calls `get_top_of_book/2`. A caller wanting what
+  traded calls `get_price/2`. Neither can stand in for the other.
+
+- `Core.Types.Quote`'s `:timestamp` guarantee is unchanged and now load-bearing: **the
+  venue's own, used as-is**. Observation time lives on `TopOfBook.observed_at`, in a field
+  that says what it is.
+
+### Added
+- **Options.** `Types.OptionContract` (identity only — no prices), `Types.OptionGreeks`
+  (model output, with the theoretical value named `:model_price` because it is the field
+  most easily mistaken for a price), `Types.OptionChain` (**two-dimensional**, expiry →
+  strike → `{call, put}`, a one-sided strike keeping `nil` rather than a missing key), and
+  `Types.OrderLeg`. Callbacks `get_option_chain/2`, `get_option_expirations/2`,
+  `get_option_greeks/2`.
+
+  A chain row carrying bid, ask, last, mark and theoretical value offers five plausible
+  prices and no help choosing, so it is split three ways: identity here, book on
+  `TopOfBook`, last trade on `Quote`. **`:multiplier` of `nil` does not mean 100.** A venue
+  that cannot trade multi-leg must **refuse**, never decompose — a caller left holding one
+  filled leg has naked risk it never chose.
+
+- **BREAKING: `get_historical_prices/4` returns `[Types.Candle.t()]`**, not
+  `[Types.Quote.t()]`. It declared quotes, and the venue packages returned **bare untyped
+  maps** with their own key sets — so the declared type was false and nothing compared one
+  venue's candles to another's.
+
+  `Types.Candle` names its time field **`:opened_at`**, because venues disagree about
+  whether a bar is stamped at its open or its close and the difference is one whole
+  interval — a series joined across both conventions is misaligned by a day with every
+  value correct. `coherent?/1` catches a malformed bar at the boundary. `:volume` is `nil`
+  when unpublished, never `0`.
+
+- **`Types.Order` gains `:time_in_force` and `:legs`.** `Capabilities.supported_time_in_force`
+  declared what a venue accepts while the order type had no field for it, so a caller
+  reading an order back could not tell an IOC that expired from a GTC still working.
+- **Derivatives.** `Types.Funding` (settled `:amount` kept apart from `:estimated_amount` —
+  a real response has them 40% apart) and `Types.ContractStats` (mark and index are separate
+  prices, and neither is a traded price), with `get_funding/2` and `get_contract_stats/2`.
+- **Conversions.** `Types.Conversion` plus `quote_conversion/4`, `commit_conversion/2` and
+  `get_conversion/2` — the facade's only two-step write. `:expires_at` is the point:
+  committing an expired quote can fill at the *current* rate, which looks like success.
+  `expired?/2` returns `nil` when no expiry was stated — unknown, not valid.
+- **Portfolios.** `Types.Portfolio` and `list_portfolios/1`. A portfolio is an **address**,
+  not a value; balances, orders and positions are addressed with `portfolio: id` in `opts`
+  rather than by adding a parameter to forty signatures.
+- **Money movement, write side.** `Types.DepositAddress`, `Types.ApprovedAddress`,
+  `Types.Withdrawal`, and `get_deposit_address/3`, `list_approved_addresses/1`,
+  `estimate_withdrawal_fee/4`, `withdraw/5`.
+
+  **`withdraw/5` is the only operation in this contract that cannot be undone.** The
+  allow-list is first-class: `ApprovedAddress.usable?/2` returns `nil` for a pending address
+  with no stated activation, because venues delay first use precisely so a stolen account
+  cannot add an address and drain it. `DepositAddress.memo_required` is **tri-state** — a
+  deposit missing a required memo is credited to nobody, so `nil` must never be defaulted to
+  `false`. `:network` is enforced on both.
+- **`Core.Types.Position`** and **`get_positions/1`** — exposure, distinct from a balance and
+  not derivable from one. `:side` is explicit and `:quantity` always positive, because
+  venues disagree about how to say "short" and a guessed sign convention yields a position
+  that is exactly backwards while every number stays plausible. Realised and unrealised P&L
+  are separate and never summed. **`:liquidation_price` of `nil` means the venue did not
+  say, not that the position is safe.**
+- **`data_kind` gains `:top_of_book`, `:candles` and `:positions`.** Measured against
+  Gemini's AsyncAPI and Schwab's Streamer service list: all three are streamed by a venue in
+  the family and had no kind. `:top_of_book` is deliberately not `:order_book` — venues
+  stream them on separate channels because one carries a level and the other a book.
+  `t:data_kind/0` records the full channel-to-kind mapping so it can be checked rather than
+  trusted.
+- **Custodial staking.** Six callbacks — `get_staking_rates/1`, `get_staking_balances/1`,
+  `get_staking_rewards/1`, `get_staking_history/1`, `stake/3`, `unstake/3` — and a
+  `has_staking` capability flag, which earlier notes recorded as shipped and which did not
+  exist.
+
+  **Custodial only.** A venue that returns an *unsigned transaction* for the caller to sign
+  and broadcast is doing something else, and one venue publishes both. A caller believing it
+  had staked when it holds an unsigned transaction nobody signed is the most expensive form
+  of this family's recurring failure.
+
+  Four types, shaped by the venues' published schemas:
+  - `Types.StakingBalance` — keeps `staked`, `available_to_trade` and
+    `available_for_withdrawal` **apart**; a real response has the whole position redeemable
+    and none of it tradable. `by_provider` is carried, not summed: a redemption is addressed
+    to a provider.
+  - `Types.StakingRate` — percentages only, `rate_pct` and `apy_pct` both named. One venue
+    publishes basis points, a simple percentage and an APY for the same position;
+    `bps_to_pct/1` lives here so the 100× conversion is done once.
+  - `Types.StakingReward` — carries its accrual period and the rate *at accrual*.
+  - `Types.StakingTransaction` — carries the unbonding progression `amount` /
+    `amount_paid_so_far` / `amount_remaining`. **`settled?/1` returns `nil` when the venue
+    reports no progress** — unknown, not complete.
+- **`Core.Types.TopOfBook`** — best bid and ask, with **no `price` field**. `bid_size` and
+  `ask_size` are optional (`nil` means *not published*, never zero); `venue_time` is the
+  venue's own or `nil`, since several BBO endpoints publish none; `observed_at` is required.
+  `mid/1`, `spread/1` and `crossed?/1` are functions, not fields — a mid is derived, and a
+  caller has to ask for it rather than find it sitting there looking like venue data.
+- **`get_top_of_book/2`** on the `Venue` behaviour, registered in `peripheral_endpoints/0`.
+- **Conformance assertion 14, "top of book is not a price"** — asserts the returned struct
+  is a `TopOfBook`, that `observed_at` is set, that `venue_time` is the venue's or `nil`,
+  and that `TopOfBook` has no `price` field and cannot grow one.
+
+### Changed
 - **`preview_order/3` and `replace_order/4` are now `Venue` callbacks**, and required
   rather than optional. §6.1's rule is that the facade is one fixed set, never extended
   per venue, and optionality is reserved for callbacks where requiring them would be pure

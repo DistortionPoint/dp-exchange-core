@@ -48,7 +48,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @behaviour DpExchange.Core.Venue
 
-  alias DpExchange.Core.{CanonicalPair, Capabilities, Instrument, Notice, Types}
+  alias DpExchange.Core.{CanonicalPair, Capabilities, Instrument, Notice, Types, Venue}
 
   # Longest-first, which is the whole point: reversed, `BTCUSDC` parses as `BTC-USD`.
   # Longest-first, and `BUSD` before `USD` is the ordering that matters: `BTCBUSD` ends
@@ -59,7 +59,45 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @symbols ~w(BTC-USD BTC-USDC BTC-USDT BTC-BUSD ETH-USD ETH-EUR)
 
-  @unsupported [{:get_transfers, 2}, {:quantization, 1}]
+  # The reference venue does not stake — `has_staking: false` below, and these six
+  # declared `:unsupported` so assertion 12 sees the declaration and the behaviour agree.
+  @unsupported [
+    {:get_transfers, 2},
+    {:quantization, 1},
+    {:get_positions, 1},
+    {:get_funding, 2},
+    {:list_watchlists, 1},
+    {:get_watchlist, 2},
+    {:create_watchlist, 3},
+    {:update_watchlist, 2},
+    {:delete_watchlist, 2},
+    {:get_financials, 3},
+    {:get_corporate_events, 1},
+    {:get_filings, 2},
+    {:get_news, 1},
+    {:get_screener, 2},
+    {:create_account, 1},
+    {:rename_account, 3},
+    {:get_roles, 1},
+    {:get_option_chain, 2},
+    {:get_option_expirations, 2},
+    {:get_option_greeks, 2},
+    {:get_deposit_address, 3},
+    {:list_approved_addresses, 1},
+    {:estimate_withdrawal_fee, 4},
+    {:withdraw, 5},
+    {:list_portfolios, 1},
+    {:quote_conversion, 4},
+    {:commit_conversion, 2},
+    {:get_conversion, 2},
+    {:get_contract_stats, 2},
+    {:get_staking_rates, 1},
+    {:get_staking_balances, 1},
+    {:get_staking_rewards, 1},
+    {:get_staking_history, 1},
+    {:stake, 3},
+    {:unstake, 3}
+  ]
 
   # --- lifecycle ---------------------------------------------------------
 
@@ -131,8 +169,6 @@ defmodule DpExchange.Core.ReferenceVenue do
          symbol: symbol,
          price: Decimal.new("42000.50"),
          volume: Decimal.new("1234.5"),
-         bid: Decimal.new("42000.00"),
-         ask: Decimal.new("42001.00"),
          # The caller's clock is never substituted for a venue's. Here there is no venue,
          # so this is the reference's own event time — stated, not disguised.
          timestamp: ~U[2026-08-27 12:00:00Z],
@@ -186,6 +222,129 @@ defmodule DpExchange.Core.ReferenceVenue do
       {:refused, :symbol_not_listed}
     end
   end
+
+  @impl true
+  def get_top_of_book(symbol, _opts) do
+    if symbol in @symbols do
+      {:ok,
+       %Types.TopOfBook{
+         symbol: symbol,
+         bid: Decimal.new("42000"),
+         ask: Decimal.new("42001"),
+         bid_size: Decimal.new("1.5"),
+         ask_size: Decimal.new("1.0"),
+         # A venue that publishes its own stamp; several publish none, and `nil` here is a
+         # legitimate answer the conformance suite must also accept.
+         venue_time: ~U[2026-08-27 12:00:00Z],
+         observed_at: ~U[2026-08-27 12:00:00Z],
+         provider: runtime_id()
+       }}
+    else
+      {:refused, :symbol_not_listed}
+    end
+  end
+
+  # The reference venue does not stake. It implements the callbacks and refuses, which is
+  # what a non-staking venue does — and `has_staking: false` in its capabilities is the
+  # declaration a caller routes on. Assertion 12 checks the two agree.
+  @impl true
+  def get_positions(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_funding(_symbol, _opts), do: Venue.not_supported()
+
+  @impl true
+  def list_watchlists(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_watchlist(_id, _opts), do: Venue.not_supported()
+
+  @impl true
+  def create_watchlist(_name, _symbols, _opts), do: Venue.not_supported()
+
+  @impl true
+  def update_watchlist(_id, _opts), do: Venue.not_supported()
+
+  @impl true
+  def delete_watchlist(_id, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_financials(_symbol, _kind, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_corporate_events(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_filings(_symbol, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_news(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_screener(_name, _opts), do: Venue.not_supported()
+
+  @impl true
+  def create_account(_opts), do: Venue.not_supported()
+
+  @impl true
+  def rename_account(_id, _name, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_roles(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_option_chain(_underlying, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_option_expirations(_underlying, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_option_greeks(_symbol, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_deposit_address(_asset, _network, _opts), do: Venue.not_supported()
+
+  @impl true
+  def list_approved_addresses(_opts), do: Venue.not_supported()
+
+  @impl true
+  def estimate_withdrawal_fee(_asset, _network, _amount, _opts), do: Venue.not_supported()
+
+  @impl true
+  def withdraw(_asset, _network, _amount, _address, _opts), do: Venue.not_supported()
+
+  @impl true
+  def list_portfolios(_opts), do: Venue.not_supported()
+
+  @impl true
+  def quote_conversion(_from, _to, _amount, _opts), do: Venue.not_supported()
+
+  @impl true
+  def commit_conversion(_id, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_conversion(_id, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_contract_stats(_symbol, _opts), do: Venue.not_supported()
+
+  @impl true
+  def get_staking_rates(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_staking_balances(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_staking_rewards(_opts), do: Venue.not_supported()
+
+  @impl true
+  def get_staking_history(_opts), do: Venue.not_supported()
+
+  @impl true
+  def stake(_asset, _amount, _opts), do: Venue.not_supported()
+
+  @impl true
+  def unstake(_asset, _amount, _opts), do: Venue.not_supported()
 
   @impl true
   def get_market_overview(_opts) do
