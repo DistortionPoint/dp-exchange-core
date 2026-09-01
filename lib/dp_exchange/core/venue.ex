@@ -426,6 +426,38 @@ defmodule DpExchange.Core.Venue do
   @doc "The order book for `symbol`, best price first on both sides."
   @callback get_order_book(symbol(), keyword()) :: result(Types.OrderBook.t())
 
+  @doc """
+  The order imbalance published ahead of an opening or closing auction.
+
+  Optional. `opts[:auction]` is `:opening` or `:closing` and is **required** — the two are
+  different auctions with different windows, and a venue asked for neither has nothing to
+  answer.
+
+  **Not derivable from `get_order_book/2`.** During an auction the continuous book stops
+  being the price: what matters is how much can be matched, how much cannot, and where the
+  auction would clear. A caller reading a continuous quote at 15:59 is reading a book that
+  is not where the close will happen.
+
+  Published only inside the venue's auction windows; outside them a venue may answer with
+  the last one it published, which is why `Types.AuctionImbalance` carries both the venue's
+  own time and when it was observed.
+  """
+  @callback get_auction_imbalance(symbol(), keyword()) :: result(Types.AuctionImbalance.t())
+
+  @doc """
+  Traded volume split by price and by side, one entry per interval.
+
+  Optional. **Not a `Candle` with extra fields and not derivable from one**: a candle's
+  single volume number cannot say that of 1,000 shares, 600 lifted the ask and 400 hit the
+  bid, nor at which prices each happened. Neither can be reconstructed from the other, which
+  is why `Types.VolumeProfile` is its own type.
+
+  `timeframe` uses the same vocabulary `get_historical_prices/4` does, and a venue that does
+  not serve a width returns an error rather than the nearest one it does.
+  """
+  @callback get_volume_profile(symbol(), String.t(), keyword()) ::
+              result([Types.VolumeProfile.t()])
+
   @doc "A bulk snapshot across the venue's symbols, where it offers one."
   @callback get_market_overview(keyword()) :: result(map())
 
@@ -874,6 +906,15 @@ defmodule DpExchange.Core.Venue do
           "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
           "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
           "own volume is complete without it",
+      {:get_auction_imbalance, 2} =>
+        "irreplaceable and not load-bearing — only the exchange running the auction " <>
+          "publishes its imbalance, and a consumer that never trades an auction is " <>
+          "complete without it; NOT derivable from get_order_book/2, which describes the " <>
+          "continuous market the auction replaces",
+      {:get_volume_profile, 3} =>
+        "irreplaceable and not load-bearing — the split of volume by price and side is the " <>
+          "venue's own classification of its own prints, and a Candle's single volume " <>
+          "number cannot be decomposed back into it",
       {:cancel_all_orders, 2} =>
         "irreplaceable and not load-bearing — get_orders/2 plus cancel_order/3 in a loop " <>
           "is N partial outcomes and cannot reach an order that appeared between the two, " <>

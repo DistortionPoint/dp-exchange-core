@@ -1036,11 +1036,11 @@ behind an invented open question. See OQ9, closed.
 
 #### Phase 7 · Order book and depth (8)
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/best_bid_ask
+- [x] `coinbase ` GET    /api/v3/brokerage/best_bid_ask
 - [ ] `coinbase ` GET    /api/v3/brokerage/market/product_book
-- [ ] `coinbase ` GET    /api/v3/brokerage/product_book
-- [ ] `gemini   ` GET    /v1/book/BTCUSD
-- [ ] `webull   ` GET    /market-data/stocks/depths/list
+- [x] `coinbase ` GET    /api/v3/brokerage/product_book
+- [x] `gemini   ` GET    /v1/book/BTCUSD
+- [x] `webull   ` GET    /market-data/stocks/depths/list
 - [ ] `webull   ` GET    /market-data/stocks/footprints/list
 - [ ] `webull   ` GET    /market-data/stocks/noii-bars/list
 - [ ] `webull   ` GET    /market-data/stocks/noii-snapshots/list

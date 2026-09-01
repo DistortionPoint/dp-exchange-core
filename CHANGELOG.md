@@ -22,6 +22,30 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Added
+- **`get_auction_imbalance/2` and `get_volume_profile/3`, with `Types.AuctionImbalance` and
+  `Types.VolumeProfile`.** Two equity-microstructure capabilities Webull publishes that the
+  family had no facade or shape for.
+
+  **An auction imbalance is not a quote or a book.** During an auction the continuous book
+  stops being the price; what matters is how much can be matched, how much cannot, and
+  where it would clear — three numbers a `Quote` has nowhere to put. A caller reading a
+  continuous quote at 15:59 is reading a book that is not where the close will happen.
+  `opts[:auction]` is required, because the opening and closing auctions are different
+  auctions with different windows.
+
+  **The imbalance side is carried as the venue sent it, unmapped.** Venues publish the
+  direction as a code and the tables differ — Webull documents `imbalance_side` with the
+  example `"2"` and does not say what 2 means. Guessing it backwards tells a caller there
+  is unmatched buying when there is selling: wrong, entirely plausible, and at the one
+  moment of the day with the most volume behind it.
+
+  **A volume profile is not a candle with extra fields.** A candle's single volume number
+  cannot say that of 1,000 shares 600 lifted the ask and 400 hit the bid, nor at which
+  prices each happened, and neither type is derivable from the other. `:delta` is the
+  venue's own figure and is **not** recomputed from the totals: a venue that classifies
+  some prints as neither aggressive buy nor sell reports numbers that do not reconcile, and
+  that gap is information about its classifier rather than a fault to paper over.
+
 
 - **`:event_contract` in the instrument-type vocabulary.** Webull lists event contracts as a
   tradable instrument type and the vocabulary had no term for one, so a package serving them

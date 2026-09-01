@@ -485,6 +485,56 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def get_auction_imbalance(symbol, opts) do
+    # The auction is required. The reference venue enforces the contract's own rule so a
+    # conformance run fails a package that picked one.
+    case Keyword.get(opts, :auction) do
+      auction when auction in [:opening, :closing] ->
+        {:ok,
+         %Types.AuctionImbalance{
+           symbol: symbol,
+           auction: auction,
+           paired_quantity: Decimal.new("701859"),
+           imbalance_quantity: Decimal.new("5715"),
+           # The venue's own value, unmapped — see Types.AuctionImbalance.
+           side: "2",
+           reference_price: Decimal.new("253.83"),
+           near_price: Decimal.new("253.93"),
+           far_price: Decimal.new("253.98"),
+           venue_time: ~U[2026-08-28 19:59:59Z],
+           observed_at: ~U[2026-08-28 20:00:00Z],
+           provider: runtime_id()
+         }}
+
+      nil ->
+        {:error, :auction_required}
+
+      other ->
+        {:error, {:unsupported_auction, other}}
+    end
+  end
+
+  @impl true
+  def get_volume_profile(symbol, timeframe, _opts) do
+    {:ok,
+     [
+       %Types.VolumeProfile{
+         symbol: symbol,
+         timeframe: timeframe,
+         opened_at: ~U[2026-08-28 12:00:00Z],
+         total_volume: Decimal.new("1000"),
+         delta: Decimal.new("200"),
+         buy_volume: Decimal.new("600"),
+         sell_volume: Decimal.new("400"),
+         buy_at_price: %{"24.20" => Decimal.new("100"), "24.21" => Decimal.new("500")},
+         sell_at_price: %{"24.20" => Decimal.new("350"), "24.21" => Decimal.new("50")},
+         session: :regular,
+         provider: runtime_id()
+       }
+     ]}
+  end
+
+  @impl true
   def get_order(_credentials, id, _opts) do
     {:ok,
      %Types.Order{
