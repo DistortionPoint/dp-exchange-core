@@ -694,6 +694,27 @@ defmodule DpExchange.Core.Venue do
   @doc "Places an order. Irreplaceable by definition: this is the act."
   @callback place_order(credentials(), map(), keyword()) :: result(Types.Order.t())
 
+  @doc """
+  Places several orders in **one** request. **This moves funds.**
+
+  Optional, and **it is not `place_order/3` in a loop.** A batch is one request the venue
+  accepts or rejects as a unit; N calls are N partial outcomes a caller has to reconcile,
+  and the reconciliation is exactly what goes wrong when the third of five fails. A venue
+  that publishes a batch endpoint gives a consumer an atomicity it cannot build from the
+  single-order call, which is why this is a callback rather than a helper.
+
+  **A partial batch is the shape to expect, not the exception.** Venues validate per order
+  and return per order, so the result is a list the same length as the request, each entry
+  either an order or the venue's refusal of that one. A package must not collapse that into
+  a single ok-or-error: a caller told "the batch failed" when four of five were placed has
+  four positions it does not know about.
+
+  Venues cap the size — Webull at 50 — and a request over the cap is refused by the venue,
+  not split here. Splitting would turn one atomic request into several and quietly undo the
+  only reason to call this.
+  """
+  @callback place_orders(credentials(), [map()], keyword()) :: result([map()])
+
   @doc "Cancels an order."
   @callback cancel_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
 
@@ -1092,6 +1113,11 @@ defmodule DpExchange.Core.Venue do
         "not load-bearing — an optimisation over unsubscribe/2 + subscribe/2, both core",
       {:market_status, 1} =>
         "not load-bearing — a venue that cannot say is treated as open, which is the crypto answer",
+      {:place_orders, 3} =>
+        "irreplaceable and not load-bearing — a consumer that places one order at a time " <>
+          "is complete without it, and place_order/3 in a loop is NOT the same thing: a " <>
+          "batch is one request the venue accepts or rejects as a unit, and N calls are N " <>
+          "partial outcomes to reconcile",
       {:preview_order, 3} =>
         "not load-bearing — absence means placing without a dry run, which is how every " <>
           "other venue in the family works",

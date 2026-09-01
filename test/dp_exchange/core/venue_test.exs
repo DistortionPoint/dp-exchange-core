@@ -352,6 +352,17 @@ defmodule DpExchange.Core.VenueTest do
       assert method["status"] == "pending"
     end
 
+    test "a batch answers per order, because a partial batch is the normal shape" do
+      # A caller told "the batch failed" when four of five were placed has four positions it
+      # does not know about.
+      requests = [%{symbol: "BTC-USD"}, %{symbol: "ETH-USD"}, %{symbol: "SOL-USD"}]
+
+      assert {:ok, results} = ReferenceVenue.place_orders(%{}, requests, [])
+      assert length(results) == length(requests)
+      assert Enum.any?(results, &Map.has_key?(&1, "order_id"))
+      assert Enum.any?(results, &Map.has_key?(&1, "error"))
+    end
+
     test "a payment method is read by id, because a listing is a snapshot" do
       # A method's verification state changes without the account doing anything. Selecting
       # the row out of an earlier listing reads a status that may have been true an hour ago.

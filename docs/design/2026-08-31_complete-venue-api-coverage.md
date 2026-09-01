@@ -1355,22 +1355,22 @@ five are in scope while the consent redirects are not.*
 - [x] `gemini   ` POST   api.gemini.com/v1/oauth/revokeByToken oauth/revoke-access-token
 - [x] `webull   ` POST   /oauth2/tokens/create                 connect-api/create-and-refresh-token
 
-#### Phase 13 · Robinhood — the whole v2 surface (9)
+#### Phase 13 · Robinhood — the whole v2 surface (9) — **complete**
 
 *Every box is open even though the package already ships `best_bid_ask` and
 `trading_pairs` — **it ships them on v1**. D5 makes v2 the surface, so at v2 they are not
 done; task 1.4 is the migration. Marking them complete here would hide the only work this
 venue has.*
 
-- [ ] `robinhood` GET    /api/v2/crypto/marketdata/best_bid_ask/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/estimated_price/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/accounts/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/holdings/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/orders/
-- [ ] `robinhood` POST   /api/v2/crypto/trading/orders/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/orders/{order_id}/
-- [ ] `robinhood` POST   /api/v2/crypto/trading/orders/{order_id}/cancel/
-- [ ] `robinhood` GET    /api/v2/crypto/trading/trading_pairs/
+- [x] `robinhood` GET    /api/v2/crypto/marketdata/best_bid_ask/
+- [x] `robinhood` GET    /api/v2/crypto/trading/estimated_price/
+- [x] `robinhood` GET    /api/v2/crypto/trading/accounts/
+- [x] `robinhood` GET    /api/v2/crypto/trading/holdings/
+- [x] `robinhood` GET    /api/v2/crypto/trading/orders/
+- [x] `robinhood` POST   /api/v2/crypto/trading/orders/
+- [x] `robinhood` GET    /api/v2/crypto/trading/orders/{order_id}/
+- [x] `robinhood` POST   /api/v2/crypto/trading/orders/{order_id}/cancel/
+- [x] `robinhood` GET    /api/v2/crypto/trading/trading_pairs/
 
 
 #### Phase 13 · Schwab — REST (23) — **complete**
@@ -1542,7 +1542,7 @@ optional and it is not the README."*
 - [ ] `coinbase ` new surface, custodial staking (D4), INTX absent by D1
 - [ ] `gemini   ` new surface, the 22 socket channels, `rest-api/common` admin and OAuth, prediction markets
 - [ ] `webull   ` new surface, corrected paths (D6), the Connect token lifecycle
-- [ ] `robinhood` **v2 throughout** (D5) — every v1 path in the current document is wrong after 1.4
+- [x] `robinhood` **v2 throughout** (D5) — every v1 path in the current document is wrong after 1.4
 - [ ] `schwab   ` new surface, the Streamer's 15 services, transactions, `/userPreference`
 
 #### Phase 14 · Capability declarations (6)
@@ -1554,7 +1554,7 @@ consumer routes on it, which makes it the most consequential document in each pa
 - [ ] `coinbase ` restated per endpoint; `:experimental` unless a consumer has traded it live
 - [ ] `gemini   ` same
 - [ ] `webull   ` same
-- [ ] `robinhood` same
+- [x] `robinhood` same
 - [ ] `schwab   ` same — **`streamable` gains `:order_book`, `:orders`, `:fills`** (§1.5)
 
 #### Phase 14 · `README.md` (6)
@@ -1563,7 +1563,7 @@ consumer routes on it, which makes it the most consequential document in each pa
 - [ ] `coinbase ` capability table refreshed
 - [ ] `gemini   ` capability table refreshed
 - [ ] `webull   ` capability table refreshed
-- [ ] `robinhood` capability table refreshed
+- [x] `robinhood` capability table refreshed
 - [ ] `schwab   ` **delete "There is no order book and no socket"** (`README.md:47`)
 
 #### Phase 14 · Moduledocs carrying claims that go stale (6)
@@ -1575,7 +1575,7 @@ valuable thing in the file — carry it, do not compress it away.*
       describes depth". The specifications still do not; **the venue does**. Say which source was read
 - [ ] `schwab   ` `Feed` — its premise changes entirely when polling becomes a socket
 - [ ] `webull   ` `Rest:7,71,105,115,121` — every `/openapi/…` path and its measurement note (D6)
-- [ ] `robinhood` `Rest:53,84` — v1 paths and any prose asserting v1 is the surface
+- [x] `robinhood` `Rest:53,84` — v1 paths and any prose asserting v1 is the surface
 - [ ] `gemini   ` `Private:94,118` — `/v1/account` **is** documented; `/v1/transfers` → `/v2/transfers`
 - [ ] `coinbase ` `Coinbase:51,188` — "no atomic replace", "no endpoint" re-checked
 
@@ -1594,7 +1594,7 @@ record the source and date consulted — or delete the claim.*
 - [ ] `coinbase ` audited
 - [ ] `gemini   ` audited
 - [ ] `webull   ` audited
-- [ ] `robinhood` audited — including "no streaming API", the one negative in the family that
+- [x] `robinhood` audited — including "no streaming API", the one negative in the family that
       **survived** verification (§1.5); record how it was checked so it is not re-litigated
 - [ ] `schwab   ` audited
 
@@ -1607,7 +1607,7 @@ record the source and date consulted — or delete the claim.*
 - [ ] `coinbase ` `CHANGELOG.md`
 - [ ] `gemini   ` `CHANGELOG.md`
 - [ ] `webull   ` `CHANGELOG.md`
-- [ ] `robinhood` `CHANGELOG.md` — **v1→v2 is breaking for any consumer pinning paths**
+- [x] `robinhood` `CHANGELOG.md` — **v1→v2 is breaking for any consumer pinning paths**
 - [ ] `schwab   ` `CHANGELOG.md`
 
 #### Phase 14 · Reference material stays current (7)
@@ -1618,7 +1618,7 @@ next reader inherits the partial enumeration this plan spent its analysis correc
 - [ ] `coinbase ` `endpoint-inventory.md` — 0.2's endpoint counts replacing page counts
 - [ ] `gemini   ` `endpoint-inventory.md` — REST and the socket matrix kept together
 - [ ] `webull   ` `endpoint-inventory.md`
-- [ ] `robinhood` `endpoint-inventory.md`
+- [x] `robinhood` `endpoint-inventory.md`
 - [ ] `schwab   ` `coverage-matrix.md`, `endpoint-inventory.md`, `spec-facts.md`,
       `portal-product-landscape.md` — the last records that 23 of 24 products are unreachable
 - [ ] Every inventory states **when** it was captured and **from what** (D13)

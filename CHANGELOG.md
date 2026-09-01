@@ -21,6 +21,26 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`place_orders/3`** — several orders in one request, which closes OQ8.
+
+  **It is not `place_order/3` in a loop.** A batch is one request the venue accepts or
+  rejects as a unit; N calls are N partial outcomes a caller has to reconcile, and the
+  reconciliation is exactly what goes wrong when the third of five fails. A venue that
+  publishes a batch endpoint gives a consumer an atomicity it cannot build from the
+  single-order call, which is why this is a callback rather than a helper a consumer writes.
+
+  **A partial batch is the shape to expect, not the exception.** Venues validate per order
+  and return per order, so the result is a list the same length as the request — each entry
+  either an order or the venue's refusal of that one. Collapsing it into a single ok-or-error
+  is the failure this callback is documented against: a caller told "the batch failed" when
+  four of five were placed has four positions it does not know about.
+
+  Venues cap the size — Webull at 50 — and a request over the cap is refused by the venue
+  rather than split by a package. Splitting turns one atomic request into several and quietly
+  undoes the only reason to call it.
+
 ### Changed
 
 - **`Types.Order`'s `:symbol` and `:id` now admit `nil`**, joining the four that already
@@ -43,6 +63,24 @@ an acceptable changelog line.
   package today; the contract now says so where it is declared.
 
 ### Added
+
+- **`place_orders/3`** — several orders in one request, which closes OQ8.
+
+  **It is not `place_order/3` in a loop.** A batch is one request the venue accepts or
+  rejects as a unit; N calls are N partial outcomes a caller has to reconcile, and the
+  reconciliation is exactly what goes wrong when the third of five fails. A venue that
+  publishes a batch endpoint gives a consumer an atomicity it cannot build from the
+  single-order call, which is why this is a callback rather than a helper a consumer writes.
+
+  **A partial batch is the shape to expect, not the exception.** Venues validate per order
+  and return per order, so the result is a list the same length as the request — each entry
+  either an order or the venue's refusal of that one. Collapsing it into a single ok-or-error
+  is the failure this callback is documented against: a caller told "the batch failed" when
+  four of five were placed has four positions it does not know about.
+
+  Venues cap the size — Webull at 50 — and a request over the cap is refused by the venue
+  rather than split by a package. Splitting turns one atomic request into several and quietly
+  undoes the only reason to call it.
 
 - **Three more account-and-funding callbacks**: `get_payment_method/3`,
   `get_notional_balances/3` and `list_custody_fees/2`.

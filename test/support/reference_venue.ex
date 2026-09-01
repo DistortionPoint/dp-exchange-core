@@ -532,6 +532,20 @@ defmodule DpExchange.Core.ReferenceVenue do
     do: {:ok, Map.merge(%{"id" => "bank-3", "status" => "pending"}, details)}
 
   @impl true
+  def place_orders(_credentials, requests, _opts) do
+    # One entry per request, and the second one refused. A batch that reported a single
+    # ok-or-error would let a consumer ship code that believes "the batch failed" when four
+    # of five were placed.
+    {:ok,
+     requests
+     |> Enum.with_index()
+     |> Enum.map(fn
+       {_request, 1} -> %{"error" => "INSUFFICIENT_BUYING_POWER"}
+       {request, index} -> %{"order_id" => "batch-#{index}", "symbol" => request[:symbol]}
+     end)}
+  end
+
+  @impl true
   def get_payment_method(_credentials, id, _opts),
     do: {:ok, %{"id" => id, "status" => "verified", "type" => "bank"}}
 
