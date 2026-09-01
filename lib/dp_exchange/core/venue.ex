@@ -445,6 +445,19 @@ defmodule DpExchange.Core.Venue do
   @callback get_trades(symbol(), keyword()) :: result([Types.Trade.t()])
 
   @doc """
+  A foreign-exchange reference rate for `pair` at `at`.
+
+  Optional. **Not a rate the venue trades at** — a venue publishing this is relaying a
+  third party's number for historical reference, which is why `Types.FxRate` carries the
+  source and the benchmark alongside the rate.
+
+  `at` is the instant the rate is for, not a window: the venue answers for that moment. A
+  venue that serves only recent history says so by refusing, rather than returning its
+  nearest available rate under the requested timestamp.
+  """
+  @callback get_fx_rate(String.t(), DateTime.t(), keyword()) :: result(Types.FxRate.t())
+
+  @doc """
   The order imbalance published ahead of an opening or closing auction.
 
   Optional. `opts[:auction]` is `:opening` or `:closing` and is **required** — the two are
@@ -935,6 +948,10 @@ defmodule DpExchange.Core.Venue do
           "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
           "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
           "own volume is complete without it",
+      {:get_fx_rate, 3} =>
+        "replaceable — an FX reference rate is a third party's number that the venue is " <>
+          "relaying, and the source publishes it directly; NOT the venue's own market, " <>
+          "which is why Types.FxRate names the source separately from the provider",
       {:get_trades, 2} =>
         "replaceable — the public tape is carried by every market-data provider, and a " <>
           "consumer already reading one elsewhere does not need the venue's; NOT the same " <>

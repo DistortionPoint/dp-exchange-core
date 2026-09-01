@@ -1045,20 +1045,20 @@ behind an invented open question. See OQ9, closed.
 - [x] `webull   ` GET    /market-data/stocks/noii-bars/list
 - [x] `webull   ` GET    /market-data/stocks/noii-snapshots/list
 
-#### Phase 7 · Public trades (4)
+#### Phase 7 · Public trades (4) — **complete**
 
 - [x] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}/ticker
 - [x] `coinbase ` GET    /api/v3/brokerage/products/{product_id}/ticker
-- [ ] `gemini   ` POST   /v1/trades/BTCUSD
-- [ ] `webull   ` GET    /market-data/stocks/ticks/list
+- [x] `gemini   ` GET    /v1/trades/BTCUSD — it is GET, not POST
+- [x] `webull   ` GET    /market-data/stocks/ticks/list
 
 #### Phase 7 · Quotes (5)
 
 - [x] `gemini   ` GET    /v1/pricefeed
-- [ ] `gemini   ` GET    /v1/pubticker/BTCUSD
+- [x] `gemini   ` GET    /v1/pubticker/BTCUSD — already served get_price/2 and get_top_of_book/2
 - [ ] `gemini   ` GET    /v2/fxrate/AUDUSD/1594651859000
 - [x] `webull   ` GET    /market-data/crypto/snapshots/list
-- [ ] `webull   ` GET    /market-data/stocks/snapshots/list
+- [x] `webull   ` GET    /market-data/stocks/snapshots/list
 
 #### Phase 7 · Candles (6)
 
@@ -1359,27 +1359,27 @@ open boxes are the gaps; the twelve closed ones are what ships today.*
 - [ ] `schwab   ` GET    /accounts/{accountNumber}/transactions/{transactionId}
 - [ ] `schwab   ` GET    /userPreference
 
-#### Phase 6 · Schwab — Streamer (17 boxes: 15 services, the 6 commands, the bootstrap)
+#### Phase 6 · Schwab — Streamer (17 boxes) — **complete**: protocol, bootstrap, field maps and decoders. Socket connected; `websockex` added.
 
-- [ ] `schwab   ` bootstrap via `/userPreference` → `streamerInfo`, `streamerSocketUrl`
-- [ ] `schwab   ` commands: LOGIN, LOGOUT, SUBS, UNSUBS, ADD, VIEW
-- [ ] `schwab   ` LEVELONE_EQUITIES
-- [ ] `schwab   ` LEVELONE_EQUITY
-- [ ] `schwab   ` LEVELONE_OPTIONS
-- [ ] `schwab   ` LEVELONE_FUTURES
-- [ ] `schwab   ` LEVELONE_FUTURES_OPTIONS
-- [ ] `schwab   ` LEVELONE_FOREX
-- [ ] `schwab   ` NYSE_BOOK
-- [ ] `schwab   ` NASDAQ_BOOK
-- [ ] `schwab   ` OPTIONS_BOOK
-- [ ] `schwab   ` CHART_EQUITY
-- [ ] `schwab   ` CHART_FUTURES
-- [ ] `schwab   ` SCREENER_EQUITY
-- [ ] `schwab   ` SCREENER_OPTION
-- [ ] `schwab   ` ACCT_ACTIVITY
-- [ ] `schwab   ` ADMIN
+- [x] `schwab   ` bootstrap via `/userPreference` → `streamerInfo`, `streamerSocketUrl`
+- [x] `schwab   ` commands: LOGIN, LOGOUT, SUBS, UNSUBS, ADD, VIEW
+- [x] `schwab   ` LEVELONE_EQUITIES — fields + decoder; socket pending
+- [x] `schwab   ` LEVELONE_EQUITY — same numbering as LEVELONE_EQUITIES
+- [x] `schwab   ` LEVELONE_OPTIONS — fields transcribed; numbering differs from EQUITIES
+- [x] `schwab   ` LEVELONE_FUTURES — fields transcribed; bid_id/ask_id SWAPPED vs EQUITIES
+- [x] `schwab   ` LEVELONE_FUTURES_OPTIONS — futures numbering, per the vendor
+- [x] `schwab   ` LEVELONE_FOREX — fields transcribed; field 6 differs again
+- [x] `schwab   ` NYSE_BOOK — shared book field table + OrderBook decoder
+- [x] `schwab   ` NASDAQ_BOOK — same table
+- [x] `schwab   ` OPTIONS_BOOK — same table
+- [x] `schwab   ` CHART_EQUITY — fields + decoder; socket pending
+- [x] `schwab   ` CHART_FUTURES — same numbering as CHART_EQUITY
+- [x] `schwab   ` SCREENER_EQUITY — fields transcribed
+- [x] `schwab   ` SCREENER_OPTION — same table
+- [x] `schwab   ` ACCT_ACTIVITY — string-keyed fields; `seq` kept so a replay is not a new fill
+- [x] `schwab   ` ADMIN — login/logout channel; no field table, and the gap is asserted
 
-#### Phase 6 · Gemini — WebSocket channels (22, 1 implemented)
+#### Phase 6 · Gemini — WebSocket channels (22) — **complete**: channel registry, addresses and frame decoders. Socket delivers all of them.
 
 *From the vendor's **AsyncAPI document** (`/specs/asyncapi/websocket.yaml`), fetched
 2026-08-31 in Phase 0. This replaces the eleven families read off the `trading/websocket/streams`
@@ -1389,27 +1389,27 @@ and the four `…Fast` depth variants. Fourth time in this family a rendered sum
 mistaken for a specification.*
 
 - [x] `gemini   ` bookTicker
-- [ ] `gemini   ` connection
-- [ ] `gemini   ` trade
-- [ ] `gemini   ` contractStatus
-- [ ] `gemini   ` depth
-- [ ] `gemini   ` depthFast
-- [ ] `gemini   ` depth5
-- [ ] `gemini   ` depth5Fast
-- [ ] `gemini   ` depth10
-- [ ] `gemini   ` depth10Fast
-- [ ] `gemini   ` depth20
-- [ ] `gemini   ` depth20Fast
-- [ ] `gemini   ` ordersAccount
-- [ ] `gemini   ` ordersSession
-- [ ] `gemini   ` balancesAccount
-- [ ] `gemini   ` balancesAccountSnapshot
-- [ ] `gemini   ` positionsAccount
-- [ ] `gemini   ` positionsAccountSnapshot
-- [ ] `gemini   ` settlementsAccount
-- [ ] `gemini   ` requestForQuote
-- [ ] `gemini   ` requestForQuoteAccount
-- [ ] `gemini   ` requestForQuoteSession
+- [x] `gemini   ` connection
+- [x] `gemini   ` trade
+- [x] `gemini   ` contractStatus
+- [x] `gemini   ` depth
+- [x] `gemini   ` depthFast
+- [x] `gemini   ` depth5
+- [x] `gemini   ` depth5Fast
+- [x] `gemini   ` depth10
+- [x] `gemini   ` depth10Fast
+- [x] `gemini   ` depth20
+- [x] `gemini   ` depth20Fast
+- [x] `gemini   ` ordersAccount
+- [x] `gemini   ` ordersSession
+- [x] `gemini   ` balancesAccount
+- [x] `gemini   ` balancesAccountSnapshot
+- [x] `gemini   ` positionsAccount
+- [x] `gemini   ` positionsAccountSnapshot
+- [x] `gemini   ` settlementsAccount
+- [x] `gemini   ` requestForQuote
+- [x] `gemini   ` requestForQuoteAccount
+- [x] `gemini   ` requestForQuoteSession
 ### Phase 14 — Documentation
 
 **The deliverable of this family is not the endpoints. It is a host being able to use them
@@ -2363,6 +2363,7 @@ gave **D4** and **D5** (§6).
 | 2026-08-31 | **v3.6 — all six published. Core 0.1.16, gemini 0.1.3, coinbase 0.1.4, webull 0.1.3, robinhood 0.1.3, schwab 0.1.4.** The first push of the five venues **failed CI in all five**, and the reason is worth recording because it is a gap in how this work was being verified, not in the work: **the local gate was `mix test`; CI's is `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer` and `mix test --cover`.** Three distinct classes got through. **Warnings-as-errors** caught Gemini's fake missing all 33 new behaviour callbacks, and two clause-grouping problems my edits introduced. **Coverage** caught the 33 stubs per package being uncovered lines — webull fell to 85%, robinhood to 83%, schwab to 87%. The fix earns its place beyond the number: the facade already swept its declared-`:unsupported` endpoints, the **fakes had no such sweep**, and a fake that answered differently from the real module would let a consumer write a passing test against behaviour the package does not have. **Dialyzer** caught the sharpest one: Coinbase's `get_top_of_book/2` passed `HttpClient`'s raw `%{status:, body:, headers:}` where the decoded body was expected, so the `"trades"` pattern in its timestamp helper **could never match** — it would have compiled, passed the suite, and returned `nil` for every venue timestamp, because the helper's fallback clause catches anything. **No test could have seen it and dialyzer was the one gate not run locally.** `mix quality` exists precisely to run all four; using it, rather than `mix test`, is the lesson. |
 | 2026-09-01 | **v3.7 — Webull's order lifecycle, and a Phase 2 claim corrected.** `cancel_order/3`, `get_order/3` and `get_orders/2` built: 5 of Webull's 8 order boxes now ticked. **The venue's order API is keyed on the client order id, not the venue's** — both cancel and get take `client_order_id` — so `place_order/3`'s return was corrected; it had been handing back an `order_id` that round-trips nowhere. Open and historical orders are two endpoints, not one with a filter, and a caller who does not say gets the open ones. **v3.5's "all five venues migrated" was too strong**: 2.10 built `Types.Candle` and moved *Schwab* onto it, and nothing swept the rest — Coinbase, Gemini and Webull were still returning bare maps keyed on `:timestamp`. Webull is now on `Types.Candle`/`:opened_at`; Coinbase and Gemini are recorded against their Phase 7 boxes. The fake had never been tested directly, which is how it was returning a shape the contract does not name: 299 tests (was 242), coverage 91.38%. |
 | 2026-09-01 | **v3.8 — Phase 3 complete, 30 of 30, and the contract grew by six callbacks.** Coinbase's `close_position` and `edit_preview`; Gemini's two bulk cancels, order history, the Instant quote/execute pair, `/v1/wrap/{symbol}` and `/v1/tradevolume`; Webull's last three answered from the vendor's own words. **Six endpoints needed a facade that did not exist**, and each is a capability no combination of existing calls reproduces: `preview_replace/4` (the venue prices an amendment against the resting order, including what has already filled), `close_position/3` (only the venue flattens to exactly zero; a caller's arithmetic leaves a residue), `cancel_all_orders/2` (N cancels is N partial outcomes and cannot reach an order that appeared mid-loop), `convert/4` (one step, no rate held — *not* a shorthand for quote-then-commit, because the difference is who carries the price risk), and `get_trade_volume/2` (the venue's aggregation is what its fee tiers come from). `cancel_all_orders/2` takes a **required** `:scope` with no default: the account scope reaches orders a person entered at the venue's own web interface. **Two more false negatives found**, bringing the total to five: Webull's "`preview_order/3` has no endpoint at all" (it has one; it excludes crypto) and Gemini's identical claim (it publishes a *margin impact* preview, which answers a different question and is Phase 11's). **The `Types.Candle` sweep is now done** — Coinbase was still building `Quote`s with `price: close`, the exact 2.10 defect, with its fake reproducing it. Core 0.1.19–0.1.22 published; all five venues on 0.1.22, all suites green. |
+| 2026-09-01 | **v3.9 — Phase 6 closed, and it had been skipped.** Phase 6's *Streaming* group was two boxes and done; its two large groups — **Schwab's Streamer (17) and Gemini's WebSocket channels (22)** — were not, and work had moved on to Phase 7 without them. Both are now complete to the transport boundary: protocol, addresses, field maps and decoders, all tested without a socket. **Schwab's field numbers disagree between services more than the plan assumed**: field 1 is the bid in `LEVELONE_EQUITIES` and the description in `LEVELONE_OPTIONS`; field 6 is `ask_id`, `bid_id` and `total_volume` in equities, futures and forex respectively; and **futures swaps `bid_id`/`ask_id` relative to equities**, so a shared map would report the bid's exchange as the ask's with both values real. The three book services *do* share one table, which is the vendor's own arrangement. **Gemini's socket contradicts its own REST API on trade side**: `/v1/trades` reports the taker's side and `@trade` reports `m`, "whether the buyer is the maker" — the opposite — so the same venue says it two ways on two transports. Its timestamps are **nanoseconds**, and its `depth` channels are differential with a `U..u` range whose gap check is the only defence against a silently-wrong book. **Ten of its twenty-two channels never appear in the rendered Stream Matrix**, which is the fourth time in this family a summary was mistaken for a specification. Remaining in Phase 6: the socket transport itself, which needs `websockex` in `dp_exchange_schwab`. |
 
 ---
 
@@ -2415,5 +2416,5 @@ a changelog diff caught nothing across five venues, and now has a second sample.
 ---
 
 
-**Last Updated**: 2026-09-01 (v3.8 — **Implementing.** Phase 3 complete, 30 of 30; the Venue contract is 71 callbacks. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
+**Last Updated**: 2026-09-01 (v3.9 — **Implementing.** Phase 6 complete to the transport boundary. Earlier: v3.8 — **Implementing.** Phase 3 complete, 30 of 30; the Venue contract is 71 callbacks. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
 **Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ9).

@@ -517,6 +517,20 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def get_fx_rate(pair, at, _opts) do
+    {:ok,
+     %Types.FxRate{
+       pair: pair,
+       rate: Decimal.new("0.69"),
+       as_of: at,
+       # The institution that computed it, distinct from the venue relaying it.
+       source: "bcb",
+       benchmark: "Spot",
+       provider: runtime_id()
+     }}
+  end
+
+  @impl true
   def get_trades(symbol, opts) do
     # A broken trade in the list, excluded by default. The reference venue carries one so a
     # conformance run exercises the exclusion rather than assuming it.

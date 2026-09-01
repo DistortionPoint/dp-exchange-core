@@ -267,6 +267,44 @@ defmodule DpExchange.Core.VenueTest do
                Decimal.mult(trade.price, trade.quantity)
              )
     end
+
+    test "an FX rate names the SOURCE separately from the venue relaying it" do
+      # Two facts that both look like "where this came from". Collapsing them makes a
+      # Gemini-relayed BCB rate indistinguishable from one Gemini computed itself, and only
+      # the second would be the venue's own claim.
+      assert {:ok, %Types.FxRate{} = rate} =
+               ReferenceVenue.get_fx_rate("AUDUSD", ~U[2020-07-13 15:30:59Z], [])
+
+      assert rate.source == "bcb"
+      assert rate.provider == :reference_venue
+      refute rate.source == to_string(rate.provider)
+    end
+
+    test "as_of is the instant asked for, not when it was fetched" do
+      # A rate without its instant is a number with no time attached, which is not a rate.
+      at = ~U[2020-07-13 15:30:59Z]
+      assert {:ok, rate} = ReferenceVenue.get_fx_rate("AUDUSD", at, [])
+
+      assert rate.as_of == at
+    end
+
+    test "the benchmark is carried, because two sources can legitimately disagree" do
+      assert {:ok, rate} = ReferenceVenue.get_fx_rate("AUDUSD", ~U[2020-07-13 15:30:59Z], [])
+      assert rate.benchmark == "Spot"
+    end
+
+    test "convert/2 multiplies without rounding" do
+      assert {:ok, rate} = ReferenceVenue.get_fx_rate("AUDUSD", ~U[2020-07-13 15:30:59Z], [])
+
+      assert Decimal.equal?(
+               Types.FxRate.convert(rate, Decimal.new("100")),
+               Decimal.mult(Decimal.new("100"), rate.rate)
+             )
+    end
+
+    test "an FX rate is peripheral, and says it is not the venue's own market" do
+      assert Venue.peripheral_endpoints()[{:get_fx_rate, 3}] =~ "relaying"
+    end
   end
 
   describe "not_supported/0" do

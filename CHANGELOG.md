@@ -23,6 +23,22 @@ an acceptable changelog line.
 
 ### Added
 
+- **`get_fx_rate/3` and `Types.FxRate`.** Gemini publishes `GET /v2/fxrate/{pair}/{ts}` and
+  the family had no shape for it.
+
+  **It is not a rate the venue trades at.** Gemini's own documentation says it *"does not
+  offer foreign exchange services"* and that the endpoint is *"for historical reference
+  only"*; the number comes from a third party the venue names. So `:source` and `:benchmark`
+  are carried alongside the rate, and `:provider` — the venue relaying it — is a **separate
+  field**. Collapsing them would make a Gemini-relayed BCB rate indistinguishable from one
+  Gemini computed itself, and only the second would be the venue's own claim. **Two venues
+  relaying the same pair at the same instant can legitimately disagree**, and a caller
+  reconciling them needs to know it is comparing sources rather than finding a bug.
+
+  `:as_of` is the instant asked for, echoed by the venue. A rate without it is a number with
+  no time attached, which is not a rate.
+
+
 - **`get_trades/2` — the public tape.** `Types.Trade` already existed and nothing could
   return it; two venues publish the tape and the family had no callback for it.
 
