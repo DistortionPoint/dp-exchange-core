@@ -1015,19 +1015,19 @@ Raised as **OQ8** rather than decided here.
 
 #### Phase 4 · Accounts and balances (4)
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/accounts
-- [ ] `coinbase ` GET    /api/v3/brokerage/accounts/{account_uuid}
-- [ ] `webull   ` GET    /trading/accounts/list
-- [ ] `webull   ` GET    /trading/assets/balances/get
+- [x] `coinbase ` GET    /api/v3/brokerage/accounts
+- [x] `coinbase ` GET    /api/v3/brokerage/accounts/{account_uuid}
+- [x] `webull   ` GET    /trading/accounts/list
+- [x] `webull   ` GET    /trading/assets/balances/get
 
 #### Phase 4 · Positions (1)
 
-- [ ] `webull   ` GET    /trading/assets/positions/list
+- [x] `webull   ` GET    /trading/assets/positions/list
 
 #### Phase 5 · Fills and transactions (2)
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/orders/historical/fills
-- [ ] `webull   ` GET    /trading/activities/cash-activities/list
+- [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/fills
+- [x] `webull   ` GET    /trading/activities/cash-activities/list
 
 #### Phase 6 · Streaming (2)
 
