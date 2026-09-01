@@ -532,6 +532,24 @@ defmodule DpExchange.Core.ReferenceVenue do
     do: {:ok, Map.merge(%{"id" => "bank-3", "status" => "pending"}, details)}
 
   @impl true
+  def get_payment_method(_credentials, id, _opts),
+    do: {:ok, %{"id" => id, "status" => "verified", "type" => "bank"}}
+
+  @impl true
+  def get_notional_balances(_credentials, currency, _opts) do
+    # The quantity and its valuation are separate keys, and stay that way. Merging them is
+    # the mistake the callback's doc is about.
+    {:ok,
+     [
+       %{"currency" => "BTC", "amount" => "1", "amountNotional" => "40000", "in" => currency}
+     ]}
+  end
+
+  @impl true
+  def list_custody_fees(_credentials, _opts),
+    do: {:ok, [%{"currency" => "BTC", "amount" => "0.0001", "timestampms" => 1_700_000_000_000}]}
+
+  @impl true
   def transfer_internal(asset, amount, opts, _request_opts) do
     case {Keyword.get(opts, :from), Keyword.get(opts, :to)} do
       {nil, _to} -> {:error, {:missing_option, :from}}

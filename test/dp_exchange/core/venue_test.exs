@@ -352,6 +352,32 @@ defmodule DpExchange.Core.VenueTest do
       assert method["status"] == "pending"
     end
 
+    test "a payment method is read by id, because a listing is a snapshot" do
+      # A method's verification state changes without the account doing anything. Selecting
+      # the row out of an earlier listing reads a status that may have been true an hour ago.
+      assert {:ok, method} = ReferenceVenue.get_payment_method(%{}, "bank-1", [])
+      assert method["id"] == "bank-1"
+      assert method["status"]
+    end
+
+    test "a notional balance keeps the quantity and the valuation apart" do
+      # The quantity is the venue's ledger; the notional figure is the venue's valuation at
+      # a rate it chose and need not publish. One struct would invite reading either as the
+      # other, and the valuation is the one that is only ever an estimate.
+      assert {:ok, [row]} = ReferenceVenue.get_notional_balances(%{}, "USD", [])
+      assert row["amount"] != row["amountNotional"]
+      refute is_nil(row["amount"])
+      refute is_nil(row["amountNotional"])
+    end
+
+    test "custody fees are their own list, because they have no trade behind them" do
+      # A fee taken out of the balance directly is a reduction a consumer reconciling
+      # against fills alone cannot explain.
+      assert {:ok, [fee]} = ReferenceVenue.list_custody_fees(%{}, [])
+      assert fee["currency"]
+      assert fee["amount"]
+    end
+
     test "transfer_internal/4 is not withdraw/5, and both are callbacks" do
       # Conflating them is dangerous in both directions: reaching for withdraw/5 for an
       # internal move pays a network fee it did not need to, and reaching for this

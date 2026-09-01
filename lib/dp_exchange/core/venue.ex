@@ -406,6 +406,54 @@ defmodule DpExchange.Core.Venue do
   @callback add_payment_method(map(), keyword()) :: result(map())
 
   @doc """
+  One funding source by the venue's own identifier.
+
+  Optional. Returns the venue's map, the same shape `list_payment_methods/2` returns rows
+  in — not a normalised struct, for the reason given there.
+
+  **This is the call that answers whether a method is still usable**, and the list is not.
+  A method's verification state changes without the account doing anything: a bank can be
+  closed, a card can expire, a venue can suspend a rail. A caller holding an identifier
+  from an earlier listing and moving fiat against it without re-reading is acting on a
+  status that may have been true an hour ago.
+
+  A venue that has no such identifier — or no per-method read — returns
+  `{:error, :not_supported}`. Selecting the matching row out of `list_payment_methods/2`
+  is not this function: the list is a snapshot and this is a read.
+  """
+  @callback get_payment_method(credentials(), String.t(), keyword()) :: result(map())
+
+  @doc """
+  Every balance the account holds, each **also** valued in one notional currency.
+
+  Optional, and **it is not `get_balances/2` in another unit**. The quantity of the asset
+  is the venue's ledger; the notional figure beside it is the venue's *valuation* of that
+  quantity at a rate the venue chose and does not have to publish. Two venues will disagree
+  about the notional value of the same holding and both be right about the balance.
+
+  Rows are the venue's own maps for that reason: flattening a quantity and a valuation into
+  one struct invites a caller to read one as the other, and the notional figure is the one
+  that is only ever an estimate.
+
+  Callers reconciling a position use `get_balances/2`. This is for reporting.
+  """
+  @callback get_notional_balances(credentials(), String.t(), keyword()) :: result([map()])
+
+  @doc """
+  The fees a venue charged for *holding* assets, as opposed to trading them.
+
+  Optional. Custody fees are periodic and are taken out of the balance directly, so they
+  appear as a reduction with no trade behind it. A consumer reconciling balances against
+  fills alone will find a gap it cannot explain, and this is what explains it.
+
+  Rows are the venue's own maps. **An empty list means the venue charged nothing in the
+  window asked for — it never means the venue does not charge.** A venue with no custody
+  product at all returns `{:error, :not_supported}`, which is the answer that distinguishes
+  the two.
+  """
+  @callback list_custody_fees(credentials(), keyword()) :: result([map()])
+
+  @doc """
   Moves `amount` of `asset` between two accounts **held at the same venue**.
 
   Optional. **Not `withdraw/5`**: nothing leaves the venue, no chain is involved, and no
@@ -1063,6 +1111,19 @@ defmodule DpExchange.Core.Venue do
         "not load-bearing — registering a bank account is usually completed by a person " <>
           "out of band, so a consumer doing it through the venue's own interface loses " <>
           "nothing; irreplaceable where the venue exposes it",
+      {:get_payment_method, 3} =>
+        "irreplaceable and not load-bearing — only the venue knows whether a funding " <>
+          "source it holds is still usable, and picking the row out of " <>
+          "list_payment_methods/2 reads a snapshot rather than the current status",
+      {:get_notional_balances, 3} =>
+        "replaceable and not load-bearing — a consumer holding a rate can value " <>
+          "get_balances/2 itself, and will get a different number than the venue did; " <>
+          "this is the venue's own valuation, which is what a venue statement reconciles " <>
+          "against",
+      {:list_custody_fees, 2} =>
+        "irreplaceable and not load-bearing — only the venue records what it charged for " <>
+          "custody, and a consumer that holds nothing in custody is complete without it; " <>
+          "an empty list is 'nothing charged', never 'no such fee'",
       {:transfer_internal, 4} =>
         "irreplaceable and not load-bearing — only the venue moves funds between its own " <>
           "accounts, and it is NOT withdraw/5: nothing leaves the venue and no chain is " <>

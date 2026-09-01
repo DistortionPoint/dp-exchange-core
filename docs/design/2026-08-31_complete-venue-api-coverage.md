@@ -1096,19 +1096,19 @@ candle box is not done until it returns `Types.Candle` with `:opened_at`.
 
 - [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods
 - [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods/{payment_method_id}
-- [ ] `gemini   ` POST   /v1/account/transfer/btc
+- [x] `gemini   ` POST   /v1/account/transfer/btc
 - [x] `gemini   ` POST   /v1/addresses/bitcoin — same list as newAddress; get_deposit_address/3 uses the generator
 - [x] `gemini   ` POST   /v1/approvedAddresses/account/ethereum
-- [ ] `gemini   ` POST   /v1/approvedAddresses/ethereum/remove
-- [ ] `gemini   ` POST   /v1/approvedAddresses/ethereum/request
+- [x] `gemini   ` POST   /v1/approvedAddresses/ethereum/remove
+- [x] `gemini   ` POST   /v1/approvedAddresses/ethereum/request
 - [x] `gemini   ` POST   /v1/balances
 - [ ] `gemini   ` POST   /v1/custodyaccountfees
 - [x] `gemini   ` POST   /v1/deposit/bitcoin/newAddress
 - [ ] `gemini   ` POST   /v1/notionalbalances/usd
-- [ ] `gemini   ` POST   /v1/payments/addbank
-- [ ] `gemini   ` POST   /v1/payments/addbank/cad
-- [ ] `gemini   ` POST   /v1/payments/methods
-- [ ] `gemini   ` POST   /v1/transactions
+- [x] `gemini   ` POST   /v1/payments/addbank
+- [x] `gemini   ` POST   /v1/payments/addbank/cad
+- [x] `gemini   ` POST   /v1/payments/methods
+- [x] `gemini   ` POST   /v1/transactions
 - [x] `gemini   ` POST   /v2/transfers — get_transfers/2, migrated in the D6 sweep
 - [x] `gemini   ` POST   /v2/withdraw/ethereum/eth
 - [x] `gemini   ` POST   /v2/withdraw/ethereum/eth/feeEstimate

@@ -23,6 +23,28 @@ an acceptable changelog line.
 
 ### Added
 
+- **Three more account-and-funding callbacks**: `get_payment_method/3`,
+  `get_notional_balances/3` and `list_custody_fees/2`.
+
+  **`get_payment_method/3` exists because a listing is a snapshot.** A funding source's
+  verification state changes without the account doing anything — a bank closes, a card
+  expires, a venue suspends a rail. Picking the row out of an earlier
+  `list_payment_methods/2` result reads a status that may have been true an hour ago, and
+  moving fiat against it is the failure that produces.
+
+  **`get_notional_balances/3` is not `get_balances/2` in another unit.** The quantity is the
+  venue's ledger; the notional figure beside it is the venue's *valuation* of that quantity
+  at a rate the venue chose and does not have to publish. Two venues will disagree about the
+  notional value of the same holding and both be right about the balance. Rows stay the
+  venue's own maps so the two numbers cannot be read as one — the valuation is the one that
+  is only ever an estimate. Reconcile positions with `get_balances/2`; this is for reporting.
+
+  **`list_custody_fees/2` explains a balance reduction with no trade behind it.** Custody
+  fees are periodic and come straight out of the balance, so a consumer reconciling against
+  fills alone finds a gap it cannot account for. An empty list means the venue charged
+  nothing in the window asked for — it never means the venue does not charge. A venue with
+  no custody product returns `{:error, :not_supported}`, which is what tells the two apart.
+
 - **Six money-movement callbacks**: `list_payment_methods/2`, `add_payment_method/2`,
   `transfer_internal/4`, `request_approved_address/4`, `remove_approved_address/3` and
   `get_transactions/2`.
