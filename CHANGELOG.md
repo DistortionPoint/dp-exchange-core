@@ -44,6 +44,17 @@ an acceptable changelog line.
   does not serve them returns `not_supported()` as before.
 
 ### Changed
+
+- **`Types.Order`'s `side`, `order_type`, `quantity` and `status` admit `nil` in the
+  typespec.** They always could in practice — a venue sending a status this package does
+  not recognise has produced `nil` since the beginning — and the typespec said otherwise,
+  which meant dialyzer accepted the wrong thing and rejected the right one.
+
+  Coinbase's `close_position/3` is where it surfaced: the venue never states the side of a
+  closing order, and the type left no way to say so. The keys stay enforced, so a
+  constructor must still decide; the types now allow that decision to be "the venue did not
+  say".
+
 - **BREAKING: `Core.Types.Quote` no longer carries `:bid` and `:ask`.** They are order book
   data — resting orders — and `Quote` is trade data. Every venue package in the family was
   filling them, and one read `price || ask` from a best-bid/ask endpoint, producing a quote

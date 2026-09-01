@@ -10,6 +10,21 @@ defmodule DpExchange.Core.Types.Order do
   union here is what the contract can *express*; what a given venue can actually accept
   is declared by that package's `capabilities/0`, and asking for one it does not support
   is an error rather than a silent downgrade to the nearest available type.
+
+  ## Why four enforced keys still admit `nil`
+
+  `side`, `order_type`, `quantity` and `status` are enforced, and their types allow `nil`.
+  That is not laxity — it is the same rule as everywhere else here: **the venue's word, or
+  nothing.**
+
+  A venue sending a status this package does not recognise gets `nil`, never the nearest
+  atom a caller might branch on. Coinbase's `close_position/3` returns an order whose side
+  the venue never states — the venue worked the side out from a position this package did
+  not read — and filling in `:sell` because closing is usually selling is wrong exactly
+  where it matters, on a short.
+
+  The keys stay enforced so a constructor must *decide*. The types admit `nil` so the
+  decision can be "the venue did not say".
   """
 
   @enforce_keys [:id, :symbol, :side, :order_type, :quantity, :status, :provider]
@@ -57,13 +72,13 @@ defmodule DpExchange.Core.Types.Order do
   @type t :: %__MODULE__{
           id: String.t(),
           symbol: String.t(),
-          side: side(),
-          order_type: order_type(),
+          side: side() | nil,
+          order_type: order_type() | nil,
           time_in_force: atom() | nil,
-          quantity: Decimal.t(),
+          quantity: Decimal.t() | nil,
           price: Decimal.t() | nil,
           stop_price: Decimal.t() | nil,
-          status: status(),
+          status: status() | nil,
           filled_quantity: Decimal.t() | nil,
           average_price: Decimal.t() | nil,
           fee: Decimal.t() | nil,
