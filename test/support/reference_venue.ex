@@ -517,6 +517,50 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def list_payment_methods(_credentials, _opts) do
+    # One usable and one pending, because a caller filtering on presence rather than status
+    # picks one the venue will refuse.
+    {:ok,
+     [
+       %{"id" => "bank-1", "type" => "bank", "status" => "verified"},
+       %{"id" => "bank-2", "type" => "bank", "status" => "pending"}
+     ]}
+  end
+
+  @impl true
+  def add_payment_method(details, _opts),
+    do: {:ok, Map.merge(%{"id" => "bank-3", "status" => "pending"}, details)}
+
+  @impl true
+  def transfer_internal(asset, amount, opts, _request_opts) do
+    case {Keyword.get(opts, :from), Keyword.get(opts, :to)} do
+      {nil, _to} -> {:error, {:missing_option, :from}}
+      {_from, nil} -> {:error, {:missing_option, :to}}
+      {from, to} -> {:ok, %{"asset" => asset, "amount" => amount, "from" => from, "to" => to}}
+    end
+  end
+
+  @impl true
+  def request_approved_address(network, address, label, _opts) do
+    # `pending` and nothing else. A successful response is not permission to withdraw.
+    {:ok, %{"network" => network, "address" => address, "label" => label, "status" => "pending"}}
+  end
+
+  @impl true
+  def remove_approved_address(network, address, _opts),
+    do: {:ok, %{"network" => network, "address" => address, "status" => "removed"}}
+
+  @impl true
+  def get_transactions(_credentials, _opts) do
+    {:ok,
+     [
+       %{"type" => "Trade", "amount" => "1"},
+       %{"type" => "Deposit", "amount" => "100"},
+       %{"type" => "Fee", "amount" => "-0.5"}
+     ]}
+  end
+
+  @impl true
   def list_networks(asset, opts) do
     case {asset, Keyword.get(opts, :network)} do
       {nil, nil} -> {:error, :asset_or_network_required}

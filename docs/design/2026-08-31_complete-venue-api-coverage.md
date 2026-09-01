@@ -1097,21 +1097,21 @@ candle box is not done until it returns `Types.Candle` with `:opened_at`.
 - [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods
 - [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods/{payment_method_id}
 - [ ] `gemini   ` POST   /v1/account/transfer/btc
-- [ ] `gemini   ` POST   /v1/addresses/bitcoin
-- [ ] `gemini   ` POST   /v1/approvedAddresses/account/ethereum
+- [x] `gemini   ` POST   /v1/addresses/bitcoin — same list as newAddress; get_deposit_address/3 uses the generator
+- [x] `gemini   ` POST   /v1/approvedAddresses/account/ethereum
 - [ ] `gemini   ` POST   /v1/approvedAddresses/ethereum/remove
 - [ ] `gemini   ` POST   /v1/approvedAddresses/ethereum/request
 - [x] `gemini   ` POST   /v1/balances
 - [ ] `gemini   ` POST   /v1/custodyaccountfees
-- [ ] `gemini   ` POST   /v1/deposit/bitcoin/newAddress
+- [x] `gemini   ` POST   /v1/deposit/bitcoin/newAddress
 - [ ] `gemini   ` POST   /v1/notionalbalances/usd
 - [ ] `gemini   ` POST   /v1/payments/addbank
 - [ ] `gemini   ` POST   /v1/payments/addbank/cad
 - [ ] `gemini   ` POST   /v1/payments/methods
 - [ ] `gemini   ` POST   /v1/transactions
-- [ ] `gemini   ` POST   /v2/transfers
-- [ ] `gemini   ` POST   /v2/withdraw/ethereum/eth
-- [ ] `gemini   ` POST   /v2/withdraw/ethereum/eth/feeEstimate
+- [x] `gemini   ` POST   /v2/transfers — get_transfers/2, migrated in the D6 sweep
+- [x] `gemini   ` POST   /v2/withdraw/ethereum/eth
+- [x] `gemini   ` POST   /v2/withdraw/ethereum/eth/feeEstimate
 
 #### Phase 10 · Staking — Gemini 6, Coinbase Prime 9 (15)
 

@@ -379,6 +379,83 @@ defmodule DpExchange.Core.Venue do
               result(Types.Withdrawal.t())
 
   @doc """
+  The funding sources this account can move fiat through.
+
+  Optional. Rows are the venue's own maps: a bank account, a card and a balance are
+  different things with different fields, and flattening them into one struct would drop
+  whichever the caller needed.
+
+  **A payment method being listed does not mean it is usable.** Venues hold new bank
+  accounts pending verification, and the status lives in the row. A caller that filters on
+  presence rather than status will pick one the venue will refuse.
+  """
+  @callback list_payment_methods(credentials(), keyword()) :: result([map()])
+
+  @doc """
+  Registers a funding source — typically a bank account.
+
+  Optional, and **this is a write that a person usually has to complete**: venues verify a
+  new bank account out of band, by micro-deposit or an open-banking flow, and the API call
+  only starts that. A caller treating a successful response as a usable method will find
+  the first transfer refused.
+
+  `details` is the venue's own shape. Bank details differ by country — a US routing number,
+  a Canadian transit and institution number, an IBAN — and a normalised struct would be
+  wrong for every country but one.
+  """
+  @callback add_payment_method(map(), keyword()) :: result(map())
+
+  @doc """
+  Moves `amount` of `asset` between two accounts **held at the same venue**.
+
+  Optional. **Not `withdraw/5`**: nothing leaves the venue, no chain is involved, and no
+  address is required. Conflating the two is dangerous in both directions — a caller that
+  reaches for `withdraw/5` for an internal move pays a network fee it did not need to, and
+  one that reaches for this expecting an external transfer sends nothing anywhere.
+
+  Which accounts a venue exposes and how they are named is the venue's own; `opts` carries
+  its source and destination identifiers.
+  """
+  @callback transfer_internal(String.t(), Decimal.t(), keyword(), keyword()) :: result(map())
+
+  @doc """
+  Asks the venue to add `address` to the withdrawal allowlist for `network`.
+
+  Optional, and **the most consequential write in this contract**: an address on the
+  allowlist is one funds can be sent to. Venues therefore hold new entries under a time
+  lock, and this call *requests* rather than grants — see
+  `Types.ApprovedAddress.usable?/2`, which answers `nil` for an address whose lock has no
+  stated end.
+
+  A caller must not treat a successful response as permission to withdraw. The allowlist is
+  read back with `list_approved_addresses/1`.
+  """
+  @callback request_approved_address(String.t(), String.t(), String.t() | nil, keyword()) ::
+              result(map())
+
+  @doc """
+  Removes `address` from the withdrawal allowlist for `network`.
+
+  Optional. Removal is generally immediate where addition is not, which is the asymmetry a
+  caller should expect: the venue is slow to widen what funds may reach and quick to narrow
+  it.
+  """
+  @callback remove_approved_address(String.t(), String.t(), keyword()) :: result(map())
+
+  @doc """
+  The account's transaction history — everything that moved, not only trades.
+
+  Optional. **Wider than `get_trade_history/2` and wider than `get_transfers/2`**: it
+  includes fees, interest, dividends, adjustments and credits alongside deposits and fills.
+  Rows are the venue's own maps, because the kinds do not share a shape and a struct would
+  be mostly `nil` for every one of them.
+
+  **Summing this is not a balance.** A caller reconciling should use `get_balances/2` as the
+  authority and this as the explanation.
+  """
+  @callback get_transactions(credentials(), keyword()) :: result([map()])
+
+  @doc """
   The option chain for an underlying — expiry × strike, both sides.
 
   Returns `Types.OptionChain`. Two-dimensional deliberately: a flat list of contracts is
@@ -978,6 +1055,29 @@ defmodule DpExchange.Core.Venue do
           "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
           "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
           "own volume is complete without it",
+      {:list_payment_methods, 2} =>
+        "irreplaceable and not load-bearing — only the venue knows which funding sources " <>
+          "it holds for this account, and a consumer that never moves fiat is complete " <>
+          "without it",
+      {:add_payment_method, 2} =>
+        "not load-bearing — registering a bank account is usually completed by a person " <>
+          "out of band, so a consumer doing it through the venue's own interface loses " <>
+          "nothing; irreplaceable where the venue exposes it",
+      {:transfer_internal, 4} =>
+        "irreplaceable and not load-bearing — only the venue moves funds between its own " <>
+          "accounts, and it is NOT withdraw/5: nothing leaves the venue and no chain is " <>
+          "involved",
+      {:request_approved_address, 4} =>
+        "irreplaceable and not load-bearing — only the venue holds its own allowlist, and " <>
+          "a consumer withdrawing only to addresses added through the venue's interface " <>
+          "never needs it; a successful response is NOT permission to withdraw",
+      {:remove_approved_address, 3} =>
+        "irreplaceable and not load-bearing — the inverse of the above, and generally " <>
+          "immediate where addition is not",
+      {:get_transactions, 2} =>
+        "replaceable — a consumer that records its own activity has the same history, and " <>
+          "wider than both get_trade_history/2 and get_transfers/2; summing it is not a " <>
+          "balance",
       {:list_networks, 2} =>
         "irreplaceable and not load-bearing — only the venue says which chains it credits, " <>
           "and a caller that never moves funds is complete without it; a wrong network on " <>

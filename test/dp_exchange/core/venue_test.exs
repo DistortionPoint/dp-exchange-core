@@ -335,6 +335,82 @@ defmodule DpExchange.Core.VenueTest do
     end
   end
 
+  describe "the money-movement writes" do
+    test "a payment method is listed with its status, because presence is not usability" do
+      # Venues hold new bank accounts pending verification. A caller filtering on presence
+      # picks one the venue will refuse.
+      assert {:ok, methods} = ReferenceVenue.list_payment_methods(%{}, [])
+
+      assert Enum.any?(methods, &(&1["status"] == "verified"))
+      assert Enum.any?(methods, &(&1["status"] == "pending"))
+    end
+
+    test "a newly added payment method is PENDING, not usable" do
+      # Venues verify a new bank account out of band; the API call only starts that. A
+      # caller treating success as a usable method finds the first transfer refused.
+      assert {:ok, method} = ReferenceVenue.add_payment_method(%{"iban" => "GB…"}, [])
+      assert method["status"] == "pending"
+    end
+
+    test "transfer_internal/4 is not withdraw/5, and both are callbacks" do
+      # Conflating them is dangerous in both directions: reaching for withdraw/5 for an
+      # internal move pays a network fee it did not need to, and reaching for this
+      # expecting an external transfer sends nothing anywhere.
+      callbacks = Venue.behaviour_info(:callbacks)
+
+      assert {:transfer_internal, 4} in callbacks
+      assert {:withdraw, 5} in callbacks
+      assert Venue.peripheral_endpoints()[{:transfer_internal, 4}] =~ "no chain is"
+    end
+
+    test "an internal transfer needs both ends" do
+      assert {:error, {:missing_option, :from}} =
+               ReferenceVenue.transfer_internal("BTC", Decimal.new("1"), [to: "b"], [])
+
+      assert {:error, {:missing_option, :to}} =
+               ReferenceVenue.transfer_internal("BTC", Decimal.new("1"), [from: "a"], [])
+
+      assert {:ok, %{"from" => "a", "to" => "b"}} =
+               ReferenceVenue.transfer_internal("BTC", Decimal.new("1"), [from: "a", to: "b"], [])
+    end
+
+    test "requesting an approved address returns PENDING — it is not permission" do
+      # An address on the allowlist is one funds can be sent to, so venues hold new entries
+      # under a time lock. A caller must not treat success here as permission to withdraw.
+      assert {:ok, requested} =
+               ReferenceVenue.request_approved_address("ethereum", "0xabc", "desk", [])
+
+      assert requested["status"] == "pending"
+      refute requested["status"] == "active"
+    end
+
+    test "the allowlist write says a successful response is not permission" do
+      assert Venue.peripheral_endpoints()[{:request_approved_address, 4}] =~
+               "NOT permission to withdraw"
+    end
+
+    test "removal is its own callback, and the asymmetry is stated" do
+      # The venue is slow to widen what funds may reach and quick to narrow it.
+      assert {:ok, %{"status" => "removed"}} =
+               ReferenceVenue.remove_approved_address("ethereum", "0xabc", [])
+
+      assert Venue.peripheral_endpoints()[{:remove_approved_address, 3}] =~ "immediate"
+    end
+
+    test "transactions are wider than fills and wider than transfers" do
+      # It includes fees, interest, dividends and adjustments alongside deposits and fills,
+      # and summing it is not a balance.
+      assert {:ok, rows} = ReferenceVenue.get_transactions(%{}, [])
+
+      kinds = Enum.map(rows, & &1["type"])
+      assert "Trade" in kinds
+      assert "Deposit" in kinds
+      assert "Fee" in kinds
+
+      assert Venue.peripheral_endpoints()[{:get_transactions, 2}] =~ "not a balance"
+    end
+  end
+
   describe "not_supported/0" do
     test "is the atom, never the string" do
       # The source this was extracted from used both — in one module, both forms — so a

@@ -23,6 +23,31 @@ an acceptable changelog line.
 
 ### Added
 
+- **Six money-movement callbacks**: `list_payment_methods/2`, `add_payment_method/2`,
+  `transfer_internal/4`, `request_approved_address/4`, `remove_approved_address/3` and
+  `get_transactions/2`.
+
+  **`transfer_internal/4` is not `withdraw/5`.** Nothing leaves the venue, no chain is
+  involved and no address is required. Conflating them is dangerous **in both directions**:
+  a caller reaching for `withdraw/5` for an internal move pays a network fee it did not need
+  to, and one reaching for this expecting an external transfer sends nothing anywhere.
+
+  **`request_approved_address/4` is the most consequential write in this contract** — an
+  address on the allowlist is one funds can be sent to. It *requests* rather than grants:
+  venues hold new entries under a time lock, and **a successful response is not permission
+  to withdraw**. Removal is separate and generally immediate, which is the asymmetry to
+  expect — a venue is slow to widen what funds may reach and quick to narrow it.
+
+  **A payment method being listed does not mean it is usable**, and a newly added one is
+  pending: venues verify a bank account out of band and the API call only starts that.
+  `details` stays the venue's own shape, because bank details differ by country and a
+  normalised struct would be wrong for every country but one.
+
+  **`get_transactions/2` is wider than both `get_trade_history/2` and `get_transfers/2`** —
+  fees, interest, dividends and adjustments alongside deposits and fills. Summing it is not
+  a balance; `get_balances/2` is the authority and this is the explanation.
+
+
 - **`list_networks/2` and `list_fee_promos/1`.**
 
   **`list_networks/2` is what `get_deposit_address/3` needs before it can be called.** That
