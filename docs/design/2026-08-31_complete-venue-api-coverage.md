@@ -947,7 +947,7 @@ of what implementing keeps finding by accident** — and finding them this way c
 whole capability surface being wrong in the meantime.
 **This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
 call, it is finding which of the venue's combinations do not exist and refusing them.
-#### Phase 3 · Orders (30) — **complete**
+#### Phase 3 · Orders (30) — 27 of 30; Webull's last three are blocked on its asset classes
 
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
@@ -974,14 +974,16 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `webull   ` GET    /trading/orders/get
 - [x] `webull   ` GET    /trading/orders/historical-orders/list
 - [x] `webull   ` GET    /trading/orders/open-orders/list
-- [x] `webull   ` POST   /trading/orders/batch-place — **stocks only**, see note
+- [ ] `webull   ` POST   /trading/orders/batch-place — **stocks only**, see note
 - [x] `webull   ` POST   /trading/orders/cancel
 - [x] `webull   ` POST   /trading/orders/place
-- [x] `webull   ` POST   /trading/orders/preview — **not for crypto**, see note
-- [x] `webull   ` POST   /trading/orders/replace — **not for crypto**, see note
+- [ ] `webull   ` POST   /trading/orders/preview — **not for crypto**, see note
+- [ ] `webull   ` POST   /trading/orders/replace — **not for crypto**, see note
 
-**Webull's last three order endpoints exist and exclude crypto, which is all this package
-serves.** Read from the vendor's own reference pages, 2026-09-01:
+**Webull's last three order endpoints exclude crypto — and crypto is not the limit of what
+this family serves.**
+
+Read from the vendor's own reference pages, 2026-09-01:
 
 | endpoint | what the vendor says |
 |---|---|
@@ -989,20 +991,27 @@ serves.** Read from the vendor's own reference pages, 2026-09-01:
 | `/trading/orders/replace` | "Modifies equity, options and futures orders […] For crypto trading, this feature is currently not supported." |
 | `/trading/orders/batch-place` | "A maximum of 50 orders can be submitted once, Currently only stocks are supported. This service is not currently available to all clients." |
 
-Ticked as **investigated and answered**, not as implemented. The answer is that there is
-nothing to implement at this package's declared asset class, and that is now recorded in
-`webull.ex` where a reader of `@unsupported` will find it.
+**These three stay OPEN.** An earlier revision of this note ticked them as "investigated
+and answered, there is nothing to implement at this package's declared asset class" — which
+was wrong, and wrong in the way §0 warns about: it read a *current package declaration* as
+a *permanent scope*. `dp_exchange_webull` declares `asset_classes: [:crypto]` today, and
+this very checklist schedules its stock, futures and event-contract surfaces (Phases 7, 8
+and 11). Two other venues in the family already serve equities. The endpoints are
+reachable; what is missing is the asset class in this package, and that is planned work
+rather than an answer.
 
-**It also corrected a false claim.** The comment there said `preview_order/3` "has no
-endpoint at all" — a statement about the venue that the venue contradicts. The true
-statement is narrower: the endpoint is documented, and documented as excluding crypto.
+The finding that stands is the correction to `webull.ex`, which had claimed
+`preview_order/3` "has no endpoint at all". The endpoint is documented; it excludes crypto.
 That is the fourth false negative this plan has found (after Schwab's streaming, Schwab's
 order book, and Coinbase's preview and atomic replace), and the same shape every time — a
 package asserting a venue lacks something, with nothing behind the assertion.
 
-`/trading/orders/batch-place` has no counterpart in the `Venue` behaviour either: the
-contract has no batch-place callback, so even on an equities venue there is currently no
-facade for it. Raised as **OQ8** rather than decided here.
+**These three unblock when Webull's asset classes widen.** Recorded as **OQ9** so the
+sequencing is the architect's rather than assumed here.
+
+`/trading/orders/batch-place` has a second blocker independent of asset class: the `Venue`
+behaviour has no batch-place callback, so there is currently no facade for it on any venue.
+Raised as **OQ8** rather than decided here.
 
 #### Phase 4 · Accounts and balances (4)
 
@@ -2246,6 +2255,23 @@ unit, and N requests is N partial outcomes a caller has to reconcile. Adding
 phase's. Recorded rather than decided; none of the three is reachable at those venues'
 current crypto entitlements anyway, so nothing is blocked on the answer.
 
+**OQ9 — when do the venue packages widen past the asset class they declare today?**
+`dp_exchange_webull` declares `asset_classes: [:crypto]`, and Webull publishes stocks,
+options, futures and event contracts; this checklist schedules all four (Phases 7, 8, 11).
+`dp_exchange_gemini` is crypto-only and its venue is too, so nothing is pending there —
+but Webull, Schwab and Robinhood each serve more than one class and only Schwab's package
+says so.
+
+**This is not a scope question, it is a sequencing one.** D7 already puts what the venue
+provides in scope, and the endpoints are enumerated in this document. What is open is
+whether a package widens as each capability group is implemented, or in one declared step
+before the groups that need it — the second matters because `capabilities/0`'s
+`asset_classes` is what a consumer routes on, and a package that declares `[:crypto, :us_equity]`
+while only its crypto half works has declared something untrue.
+
+Three Phase 3 boxes are held on the answer (Webull's preview, replace and batch-place),
+and considerably more of Phases 7, 8 and 11.
+
 ## 8. Risk Assessment
 
 **The facade bloats.** The real risk, and a design one rather than a delivery one. Twenty
@@ -2387,4 +2413,4 @@ a changelog diff caught nothing across five venues, and now has a second sample.
 
 
 **Last Updated**: 2026-09-01 (v3.8 — **Implementing.** Phase 3 complete, 30 of 30; the Venue contract is 71 callbacks. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
-**Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ8).
+**Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ9).
