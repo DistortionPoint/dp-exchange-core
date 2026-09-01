@@ -231,6 +231,44 @@ defmodule DpExchange.Core.VenueTest do
     end
   end
 
+  describe "the public tape" do
+    test "get_trades/2 excludes broken trades by default" do
+      # An exchange that busts an erroneous print has said it did not stand. Leaving it in
+      # a series puts a phantom high or low into every range and volatility figure built on
+      # it, and none of them will error.
+      assert {:ok, trades} = ReferenceVenue.get_trades("BTC-USD", [])
+
+      assert length(trades) == 1
+      refute Enum.any?(trades, & &1.broken)
+    end
+
+    test "asking for them includes them, rather than hiding a bust entirely" do
+      assert {:ok, trades} = ReferenceVenue.get_trades("BTC-USD", include_broken: true)
+
+      assert length(trades) == 2
+      assert Enum.any?(trades, & &1.broken)
+    end
+
+    test "a tape trade is not a fill, and the contract has both" do
+      # A Fill is your execution and carries an order id because you placed the order. A
+      # tape trade has no order of yours behind it.
+      callbacks = Venue.behaviour_info(:callbacks)
+
+      assert {:get_trades, 2} in callbacks
+      assert {:get_trade_history, 2} in callbacks
+      assert Venue.peripheral_endpoints()[{:get_trades, 2}] =~ "own fills"
+    end
+
+    test "notional is price times quantity, unrounded" do
+      assert {:ok, [trade]} = ReferenceVenue.get_trades("BTC-USD", [])
+
+      assert Decimal.equal?(
+               Types.Trade.notional(trade),
+               Decimal.mult(trade.price, trade.quantity)
+             )
+    end
+  end
+
   describe "not_supported/0" do
     test "is the atom, never the string" do
       # The source this was extracted from used both — in one module, both forms — so a

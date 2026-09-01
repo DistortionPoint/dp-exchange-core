@@ -427,6 +427,24 @@ defmodule DpExchange.Core.Venue do
   @callback get_order_book(symbol(), keyword()) :: result(Types.OrderBook.t())
 
   @doc """
+  Recent public trades for `symbol` — the tape.
+
+  Optional. **This is not `get_trade_history/2`**, which returns the credential's *own*
+  fills. The tape is everyone's executions and has no order of yours behind it; a package
+  answering one with the other would hand a caller a filtered view of the market and call
+  it the market.
+
+  **Broken trades are excluded unless `opts[:include_broken]` says otherwise.** An exchange
+  that busts an erroneous print has said it did not stand, and leaving it in a series puts a
+  phantom high or low into every range and volatility figure built on it — none of which
+  will error. Venues with no concept of busts have nothing to exclude.
+
+  `opts[:since]` and `opts[:limit]` narrow the window where a venue supports them, and go
+  to the venue rather than being applied to the page it returned.
+  """
+  @callback get_trades(symbol(), keyword()) :: result([Types.Trade.t()])
+
+  @doc """
   The order imbalance published ahead of an opening or closing auction.
 
   Optional. `opts[:auction]` is `:opening` or `:closing` and is **required** — the two are
@@ -917,6 +935,10 @@ defmodule DpExchange.Core.Venue do
           "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
           "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
           "own volume is complete without it",
+      {:get_trades, 2} =>
+        "replaceable — the public tape is carried by every market-data provider, and a " <>
+          "consumer already reading one elsewhere does not need the venue's; NOT the same " <>
+          "question as get_trade_history/2, which is the credential's own fills",
       {:get_auction_imbalance, 2} =>
         "irreplaceable and not load-bearing — only the exchange running the auction " <>
           "publishes its imbalance, and a consumer that never trades an auction is " <>

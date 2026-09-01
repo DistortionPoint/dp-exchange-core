@@ -1034,7 +1034,7 @@ behind an invented open question. See OQ9, closed.
 - [x] `webull   ` POST   /market-data/streaming/subscribe
 - [x] `webull   ` POST   /market-data/streaming/unsubscribe
 
-#### Phase 7 · Order book and depth (8)
+#### Phase 7 · Order book and depth (8) — **complete**
 
 - [x] `coinbase ` GET    /api/v3/brokerage/best_bid_ask
 - [x] `coinbase ` GET    /api/v3/brokerage/market/product_book
@@ -1042,7 +1042,7 @@ behind an invented open question. See OQ9, closed.
 - [x] `gemini   ` GET    /v1/book/BTCUSD
 - [x] `webull   ` GET    /market-data/stocks/depths/list
 - [x] `webull   ` GET    /market-data/stocks/footprints/list
-- [ ] `webull   ` GET    /market-data/stocks/noii-bars/list
+- [x] `webull   ` GET    /market-data/stocks/noii-bars/list
 - [x] `webull   ` GET    /market-data/stocks/noii-snapshots/list
 
 #### Phase 7 · Public trades (4)

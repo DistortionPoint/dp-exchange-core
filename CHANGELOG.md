@@ -22,6 +22,25 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Added
+
+- **`get_trades/2` — the public tape.** `Types.Trade` already existed and nothing could
+  return it; two venues publish the tape and the family had no callback for it.
+
+  **It is not `get_trade_history/2`**, which returns the credential's own fills. The tape is
+  everyone's executions and has no order of yours behind it — answering one with the other
+  hands a caller a filtered view of the market and calls it the market.
+
+- **`Types.Trade` gains `:broken`, defaulting to `false`.** Exchanges bust erroneous prints,
+  and **a broken trade did not stand**: its price is not a price the market traded at.
+  Leaving one in a series puts a phantom high or low into every range, breakout and
+  volatility figure built on it, and none of them will error. `get_trades/2` excludes them
+  unless `opts[:include_broken]` says otherwise — hiding them entirely would conceal that
+  the exchange made a correction.
+
+  The moduledoc now also records what `:side` means: venues report **the taker's** side, so
+  Gemini's `buy` means an ask was removed by an incoming buy order. A package mapping that
+  to "the maker was selling" inverts every entry while every number stays real.
+
 - **`get_auction_imbalance/2` and `get_volume_profile/3`, with `Types.AuctionImbalance` and
   `Types.VolumeProfile`.** Two equity-microstructure capabilities Webull publishes that the
   family had no facade or shape for.

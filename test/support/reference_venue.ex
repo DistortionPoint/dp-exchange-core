@@ -517,6 +517,40 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def get_trades(symbol, opts) do
+    # A broken trade in the list, excluded by default. The reference venue carries one so a
+    # conformance run exercises the exclusion rather than assuming it.
+    trades = [
+      %Types.Trade{
+        symbol: symbol,
+        id: "5335307668",
+        price: Decimal.new("3610.85"),
+        quantity: Decimal.new("0.27413495"),
+        side: :buy,
+        timestamp: ~U[2026-08-28 12:00:00Z],
+        broken: false,
+        provider: runtime_id()
+      },
+      %Types.Trade{
+        symbol: symbol,
+        id: "5335307669",
+        price: Decimal.new("9999.99"),
+        quantity: Decimal.new("1"),
+        side: :sell,
+        timestamp: ~U[2026-08-28 12:00:01Z],
+        broken: true,
+        provider: runtime_id()
+      }
+    ]
+
+    if Keyword.get(opts, :include_broken, false) do
+      {:ok, trades}
+    else
+      {:ok, Enum.reject(trades, & &1.broken)}
+    end
+  end
+
+  @impl true
   def get_volume_profile(symbol, timeframe, _opts) do
     {:ok,
      [
