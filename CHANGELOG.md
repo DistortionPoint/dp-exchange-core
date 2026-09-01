@@ -22,6 +22,22 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Added
+- **`cancel_all_orders/2` on `Venue`.** Gemini publishes two bulk cancels and the family had
+  no facade for either.
+
+  **`opts[:scope]` is required and has no default.** `:session` cancels what this
+  credential's session opened; `:account` cancels everything the account has open,
+  including orders placed by another key or by a person at the venue's own web interface.
+  A default would make the wider, destructive reading the answer to a question nobody
+  asked, and the narrower one would silently leave orders running. The caller states it.
+
+  It is not `get_orders/2` plus `cancel_order/3` in a loop: that is N requests with N
+  partial outcomes and cannot reach an order that appeared between the listing and the
+  cancels.
+
+  Returns `%{cancelled: [id], rejected: [id]}`. **A non-empty `rejected` is not a failed
+  call** — the venue answered and some orders were already gone.
+
 - **`preview_replace/4` and `close_position/3` on `Venue`.** Both are Coinbase endpoints
   the family had no facade for, and both are the kind that cannot be assembled from the
   calls that already exist.

@@ -447,6 +447,22 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def cancel_all_orders(_credentials, opts) do
+    # No default scope. The reference venue enforces the contract's own rule, so a
+    # conformance run against it fails a package that quietly picked one.
+    case Keyword.get(opts, :scope) do
+      scope when scope in [:session, :account] ->
+        {:ok, %{cancelled: ["ref-order-1"], rejected: []}}
+
+      nil ->
+        {:error, :scope_required}
+
+      other ->
+        {:error, {:unsupported_scope, other}}
+    end
+  end
+
+  @impl true
   def get_order(_credentials, id, _opts) do
     {:ok,
      %Types.Order{

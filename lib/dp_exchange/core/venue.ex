@@ -441,6 +441,29 @@ defmodule DpExchange.Core.Venue do
   @callback cancel_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
 
   @doc """
+  Cancels open orders in bulk, at a scope the caller must state.
+
+  Optional. **`opts[:scope]` is required and has no default** — `:session` cancels what
+  this credential's session opened, `:account` cancels everything the account has open
+  including orders placed by another key or by a person at the venue's own web interface.
+
+  The two are not interchangeable and the wider one is destructive in a way a caller may
+  not expect, so a missing scope is an error rather than a choice made here. Gemini's own
+  documentation recommends the narrow one; that is guidance for the caller, not licence
+  for this contract to pick.
+
+  **This is not `get_orders/2` followed by `cancel_order/3` in a loop.** That is N requests
+  with N partial outcomes, and it cannot cancel an order that appeared between the listing
+  and the cancels. Only the venue closes the set it holds.
+
+  Returns `%{cancelled: [id], rejected: [id]}`. **A non-empty `rejected` is not a failed
+  call** — the venue answered and some orders were already gone. Returning an error there
+  would tell a caller nothing was cancelled when most of it was.
+  """
+  @callback cancel_all_orders(credentials(), keyword()) ::
+              result(%{cancelled: [String.t()], rejected: [String.t()]})
+
+  @doc """
   Validates an order **without placing it**, returning the venue's own estimate of what
   it would cost.
 
@@ -803,6 +826,10 @@ defmodule DpExchange.Core.Venue do
       {:preview_replace, 4} =>
         "not load-bearing — absence means amending without a dry run; the amendment " <>
           "itself is what bears risk, and that is replace_order/4's entry",
+      {:cancel_all_orders, 2} =>
+        "irreplaceable and not load-bearing — get_orders/2 plus cancel_order/3 in a loop " <>
+          "is N partial outcomes and cannot reach an order that appeared between the two, " <>
+          "but a caller that never needs a bulk cancel is complete without it",
       {:close_position, 3} =>
         "irreplaceable and not load-bearing — get_positions/1 plus place_order/3 leaves a " <>
           "residue when the position moves between the read and the order, and only the " <>

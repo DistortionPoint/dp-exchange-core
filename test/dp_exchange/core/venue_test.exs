@@ -1,7 +1,7 @@
 defmodule DpExchange.Core.VenueTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.Venue
+  alias DpExchange.Core.{ReferenceVenue, Venue}
 
   doctest Venue
 
@@ -180,6 +180,28 @@ defmodule DpExchange.Core.VenueTest do
 
       assert reason =~ "irreplaceable"
       assert reason =~ "residue"
+    end
+
+    test "cancel_all_orders/2 refuses without a scope, and does not pick one" do
+      # The wide scope reaches orders the caller never placed, including ones entered by a
+      # person at the venue's own interface. A default here would make that the answer to a
+      # question nobody asked.
+      assert {:error, :scope_required} = ReferenceVenue.cancel_all_orders(%{}, [])
+
+      assert {:ok, %{cancelled: _ids, rejected: _rejects}} =
+               ReferenceVenue.cancel_all_orders(%{}, scope: :session)
+
+      assert {:ok, _result} = ReferenceVenue.cancel_all_orders(%{}, scope: :account)
+    end
+
+    test "a rejected order is reported, not turned into a failed call" do
+      # The venue answered, and some orders were already gone. An error here would tell a
+      # caller nothing was cancelled when most of it was.
+      assert {:ok, %{cancelled: cancelled, rejected: rejected}} =
+               ReferenceVenue.cancel_all_orders(%{}, scope: :session)
+
+      assert is_list(cancelled)
+      assert is_list(rejected)
     end
   end
 
