@@ -433,6 +433,20 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def preview_replace(_credentials, id, changes, _opts) do
+    # Priced against the resting order, which is the whole difference from preview_order/3.
+    {:ok, %{order_id: id, estimated_commission: Decimal.new("0.00"), changes: changes}}
+  end
+
+  @impl true
+  def close_position(credentials, symbol, opts) do
+    # The venue picks the side and the size; a caller never states them.
+    with {:ok, order} <- get_order(credentials, "close-#{symbol}", opts) do
+      {:ok, %{order | symbol: symbol, side: :sell, status: :pending}}
+    end
+  end
+
+  @impl true
   def get_order(_credentials, id, _opts) do
     {:ok,
      %Types.Order{

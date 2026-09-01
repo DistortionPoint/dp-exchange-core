@@ -929,18 +929,34 @@ rejection; reading the status code alone would report an order that does not exi
 order rather than placing a second — so a caller's own id is passed through, and a v4 UUID
 is generated from the VM's CSPRNG when absent.
 
+
+**A third and fourth false negative, found by implementing rather than by auditing.**
+Coinbase's facade said *"this venue publishes no order-preview endpoint"* and *"this venue
+has no atomic replace; a caller cancels and re-places"*, with `supports_order_preview` and
+`supports_order_replace` both declared `false` on the strength of those claims. **It
+publishes `/orders/preview` and `/orders/edit`.**
+
+The replace one is the worse of the two. The moduledoc called `supports_order_replace: false`
+*"a claim about **risk** rather than convenience"* — because cancel-then-replace opens a
+window in which no order is live. The risk was real and the claim was wrong: **the package
+was describing a hazard it was creating by not implementing the endpoint that avoids it.**
+
+That is now three venues and four claims: Schwab's streaming, Schwab's order book, and
+Coinbase's preview and replace. **Phase 14's negative-claim audit is the systematic version
+of what implementing keeps finding by accident** — and finding them this way costs a venue's
+whole capability surface being wrong in the meantime.
 **This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
 call, it is finding which of the venue's combinations do not exist and refusing them.
 #### Phase 3 · Orders (30)
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
-- [ ] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
+- [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
 - [x] `coinbase ` POST   /api/v3/brokerage/orders
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders/batch_cancel
+- [x] `coinbase ` POST   /api/v3/brokerage/orders/batch_cancel
 - [ ] `coinbase ` POST   /api/v3/brokerage/orders/close_position
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders/edit
+- [x] `coinbase ` POST   /api/v3/brokerage/orders/edit
 - [ ] `coinbase ` POST   /api/v3/brokerage/orders/edit_preview
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders/preview
+- [x] `coinbase ` POST   /api/v3/brokerage/orders/preview
 - [x] `gemini   ` POST   /v1/heartbeat
 - [ ] `gemini   ` POST   /v1/instant/execute
 - [ ] `gemini   ` POST   /v1/instant/quote
@@ -955,14 +971,38 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [ ] `gemini   ` POST   /v1/orders/history
 - [ ] `gemini   ` POST   /v1/tradevolume
 - [ ] `gemini   ` POST   /v1/wrap/GUSDUSD
-- [ ] `webull   ` GET    /trading/orders/get
-- [ ] `webull   ` GET    /trading/orders/historical-orders/list
-- [ ] `webull   ` GET    /trading/orders/open-orders/list
-- [ ] `webull   ` POST   /trading/orders/batch-place
-- [ ] `webull   ` POST   /trading/orders/cancel
-- [ ] `webull   ` POST   /trading/orders/place
-- [ ] `webull   ` POST   /trading/orders/preview
-- [ ] `webull   ` POST   /trading/orders/replace
+- [x] `webull   ` GET    /trading/orders/get
+- [x] `webull   ` GET    /trading/orders/historical-orders/list
+- [x] `webull   ` GET    /trading/orders/open-orders/list
+- [x] `webull   ` POST   /trading/orders/batch-place — **stocks only**, see note
+- [x] `webull   ` POST   /trading/orders/cancel
+- [x] `webull   ` POST   /trading/orders/place
+- [x] `webull   ` POST   /trading/orders/preview — **not for crypto**, see note
+- [x] `webull   ` POST   /trading/orders/replace — **not for crypto**, see note
+
+**Webull's last three order endpoints exist and exclude crypto, which is all this package
+serves.** Read from the vendor's own reference pages, 2026-09-01:
+
+| endpoint | what the vendor says |
+|---|---|
+| `/trading/orders/preview` | "For crypto trading, this feature is currently not supported." |
+| `/trading/orders/replace` | "Modifies equity, options and futures orders […] For crypto trading, this feature is currently not supported." |
+| `/trading/orders/batch-place` | "A maximum of 50 orders can be submitted once, Currently only stocks are supported. This service is not currently available to all clients." |
+
+Ticked as **investigated and answered**, not as implemented. The answer is that there is
+nothing to implement at this package's declared asset class, and that is now recorded in
+`webull.ex` where a reader of `@unsupported` will find it.
+
+**It also corrected a false claim.** The comment there said `preview_order/3` "has no
+endpoint at all" — a statement about the venue that the venue contradicts. The true
+statement is narrower: the endpoint is documented, and documented as excluding crypto.
+That is the fourth false negative this plan has found (after Schwab's streaming, Schwab's
+order book, and Coinbase's preview and atomic replace), and the same shape every time — a
+package asserting a venue lacks something, with nothing behind the assertion.
+
+`/trading/orders/batch-place` has no counterpart in the `Venue` behaviour either: the
+contract has no batch-place callback, so even on an equities venue there is currently no
+facade for it. Raised as **OQ8** rather than decided here.
 
 #### Phase 4 · Accounts and balances (4)
 
@@ -1012,6 +1052,15 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [ ] `webull   ` GET    /market-data/stocks/snapshots/list
 
 #### Phase 7 · Candles (6)
+
+**The `Types.Candle` migration is only done on Schwab.** 2.10 built the type and moved
+Schwab onto it, because Schwab was where the `price: close` defect was found. It did not
+sweep the other venues, and the checklist above does not say so. Coinbase, Gemini and
+Webull returned bare maps keyed on `:timestamp` — a name that does not say *which* end of
+the interval it is, so a caller reading it as the close is off by exactly one interval in a
+value that looks entirely reasonable. **Webull is migrated** (2026-09-01, with its order
+lifecycle). Coinbase and Gemini are migrated as their boxes below are ticked; a venue's
+candle box is not done until it returns `Types.Candle` with `:opened_at`.
 
 - [x] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}/candles
 - [ ] `coinbase ` GET    /api/v3/brokerage/products/{product_id}/candles
@@ -2188,6 +2237,15 @@ unknown**, and cannot be established here for want of a credential. This is the 
 as Gemini's vanished WebSocket endpoint: working code pointing at documentation that moved,
 with nothing watching. **OQ7.**
 
+**OQ8 — the contract has no batch-place callback, and two venues document one.** Webull's
+`/trading/orders/batch-place` takes up to 50 orders in a request (stocks only, and gated
+per client); Gemini and Coinbase have their own multi-order surfaces. `place_order/3` in a
+loop is *not* the same thing: a batch is one request the venue accepts or rejects as a
+unit, and N requests is N partial outcomes a caller has to reconcile. Adding
+`place_orders/3` to `Venue` is a contract change, so it is the architect's, not this
+phase's. Recorded rather than decided; none of the three is reachable at those venues'
+current crypto entitlements anyway, so nothing is blocked on the answer.
+
 ## 8. Risk Assessment
 
 **The facade bloats.** The real risk, and a design one rather than a delivery one. Twenty
@@ -2274,6 +2332,7 @@ gave **D4** and **D5** (§6).
 | 2026-08-31 | **v3.4 — Phase 2 complete and Core published. 66 callbacks, 30 types, up from 32 and 6.** **The architect rejected the four skip proposals, and the reasoning was wrong at the root rather than at the margin.** They argued "not on the trading path", "issuer data rather than venue data", "running an account rather than trading it" — every one an answer to **a question this project does not ask**. A host trades; **these packages are interfaces to exchanges**, and the scope test is only *does the venue provide it*. D7 already said so and the proposals contradicted it while citing it. Recorded as **D8**, with the consequence stated: nothing may be proposed for skipping because a host would not use it. **The same contamination was inside the contract** — `peripheral_endpoints/0` classified on trading relevance in several entries, *three of which predate this plan*. All rewritten on the axis the classification actually uses: replaceable by another source, or a package is complete without it — usually because **a venue may not offer it at all**, a fact about the venue rather than the caller. 2.9 built in full: 13 callbacks and 6 types for watchlists, financials, corporate events, filings, news, screeners and account administration. `FinancialStatement` keeps the venue's own line-item names, because a fixed schema drops whatever does not fit and a dropped line on a balance sheet is one that no longer balances. `CorporateEvent` has **no `:date` field** — a dividend's ex-, record- and pay-dates are days apart and one field would make every caller guess which it held. **2.11 published**, and two packaging problems were caught first: `mix.exs` ships `docs/guides`, where the raw Schwab capture would have put **7.5 MB into the tarball** (now 121 KB), and that capture is Schwab's own compiled JS and CSS — **gitignored rather than committed, because this repo is public and history is not retractable**. |
 | 2026-08-31 | **v3.5 — Phase 2 complete, all five venues migrated to Core 0.1.16.** 2.0a moved every venue's bid/ask off `Quote` and onto `get_top_of_book/2`, and **found the same defect twice more while doing it**. Phase 1 had caught Robinhood reading `price \|\| ask`; the migration surfaced **Gemini's socket** (`price: message["c"] \|\| bid`, defended in a comment as better than inventing a value) and **Webull's socket** (`price: bid \|\| ask`, defended as *"a real quoted number, labelled as the bid too"*). **Three venues, three independent instances, each with a comment explaining why it was acceptable** — which is the argument for a type that cannot hold the wrong value. Book frames on both venues now deliver `TopOfBook`; where Gemini's also carries a last trade it delivers that separately as a `Quote`. **The fakes carried it too**: Robinhood's set `price: ask` citing "as the real adapter uses", reproducing the defect the adapter had — a suite agreeing with itself and wrong twice. Every fake's spread now straddles the traded price and equals neither side. **Schwab's candles were 2.10's finding in the wild**: `get_historical_prices/4` built Quotes with `price: close`, discarding open, high and low where no caller could see it; now `Types.Candle`, and the validation order changed so an undated bar still reports `:missing_venue_timestamp` rather than a shape error about a different problem. Suites: core 368, schwab 249, gemini 329, webull 223, coinbase 161, robinhood 114 — **1,444 tests, 0 failures**, credo clean and formatted across all six. |
 | 2026-08-31 | **v3.6 — all six published. Core 0.1.16, gemini 0.1.3, coinbase 0.1.4, webull 0.1.3, robinhood 0.1.3, schwab 0.1.4.** The first push of the five venues **failed CI in all five**, and the reason is worth recording because it is a gap in how this work was being verified, not in the work: **the local gate was `mix test`; CI's is `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer` and `mix test --cover`.** Three distinct classes got through. **Warnings-as-errors** caught Gemini's fake missing all 33 new behaviour callbacks, and two clause-grouping problems my edits introduced. **Coverage** caught the 33 stubs per package being uncovered lines — webull fell to 85%, robinhood to 83%, schwab to 87%. The fix earns its place beyond the number: the facade already swept its declared-`:unsupported` endpoints, the **fakes had no such sweep**, and a fake that answered differently from the real module would let a consumer write a passing test against behaviour the package does not have. **Dialyzer** caught the sharpest one: Coinbase's `get_top_of_book/2` passed `HttpClient`'s raw `%{status:, body:, headers:}` where the decoded body was expected, so the `"trades"` pattern in its timestamp helper **could never match** — it would have compiled, passed the suite, and returned `nil` for every venue timestamp, because the helper's fallback clause catches anything. **No test could have seen it and dialyzer was the one gate not run locally.** `mix quality` exists precisely to run all four; using it, rather than `mix test`, is the lesson. |
+| 2026-09-01 | **v3.7 — Webull's order lifecycle, and a Phase 2 claim corrected.** `cancel_order/3`, `get_order/3` and `get_orders/2` built: 5 of Webull's 8 order boxes now ticked. **The venue's order API is keyed on the client order id, not the venue's** — both cancel and get take `client_order_id` — so `place_order/3`'s return was corrected; it had been handing back an `order_id` that round-trips nowhere. Open and historical orders are two endpoints, not one with a filter, and a caller who does not say gets the open ones. **v3.5's "all five venues migrated" was too strong**: 2.10 built `Types.Candle` and moved *Schwab* onto it, and nothing swept the rest — Coinbase, Gemini and Webull were still returning bare maps keyed on `:timestamp`. Webull is now on `Types.Candle`/`:opened_at`; Coinbase and Gemini are recorded against their Phase 7 boxes. The fake had never been tested directly, which is how it was returning a shape the contract does not name: 299 tests (was 242), coverage 91.38%. |
 
 ---
 
@@ -2326,5 +2385,5 @@ a changelog diff caught nothing across five venues, and now has a second sample.
 ---
 
 
-**Last Updated**: 2026-08-31 (v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
-**Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ7).
+**Last Updated**: 2026-09-01 (v3.7 — **Implementing.** Phase 3 at 20 of 30. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
+**Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ8).

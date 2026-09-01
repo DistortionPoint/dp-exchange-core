@@ -163,6 +163,24 @@ defmodule DpExchange.Core.VenueTest do
     test "historical prices are peripheral, and demonstrably replaceable" do
       assert Venue.peripheral_endpoints()[{:get_historical_prices, 4}] =~ "replaceable"
     end
+
+    test "preview_replace/4 and preview_order/3 are both callbacks, and different ones" do
+      # The tempting simplification is one preview callback with an optional order id. It
+      # would be wrong: the venue prices an amendment against the resting order's own
+      # state, including whatever of it has already filled, so the two calls do not answer
+      # the same question with different arguments.
+      callbacks = Venue.behaviour_info(:callbacks)
+
+      assert {:preview_order, 3} in callbacks
+      assert {:preview_replace, 4} in callbacks
+    end
+
+    test "close_position/3 states why get_positions + place_order does not replace it" do
+      reason = Venue.peripheral_endpoints()[{:close_position, 3}]
+
+      assert reason =~ "irreplaceable"
+      assert reason =~ "residue"
+    end
   end
 
   describe "not_supported/0" do

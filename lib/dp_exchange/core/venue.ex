@@ -444,7 +444,7 @@ defmodule DpExchange.Core.Venue do
   Validates an order **without placing it**, returning the venue's own estimate of what
   it would cost.
 
-  Optional, and only Schwab serves it. It is the one call in the family that checks an
+  Optional. Schwab and Coinbase serve it. It is the call that checks an
   order against the venue's rules before committing to it — which matters most exactly
   where order writes are rate-limited and reads are not.
 
@@ -464,6 +464,42 @@ defmodule DpExchange.Core.Venue do
   `supports_order_replace` rather than being inferred from the callback existing.
   """
   @callback replace_order(credentials(), String.t(), map(), keyword()) :: result(Types.Order.t())
+
+  @doc """
+  Validates a *change* to an open order without making it, returning the venue's estimate
+  of the amended order.
+
+  Optional, and distinct from `preview_order/3` in the way that matters: `preview_order/3`
+  asks what an order that does not exist would cost, and this asks what an order that
+  **does** exist would cost after a change. A caller cannot get the second by asking the
+  first — the venue prices an amendment against the resting order's own state, including
+  whatever of it has already filled.
+
+  The reason to have it at all is the same one behind `replace_order/4`. Amending is
+  irreversible at the venue, and a caller who cannot price the amendment first is choosing
+  between committing blind and cancel-then-place, which reopens the very window
+  `replace_order/4` exists to close.
+
+  Declared through `supports_order_preview`, alongside `preview_order/3`.
+  """
+  @callback preview_replace(credentials(), String.t(), map(), keyword()) :: result(map())
+
+  @doc """
+  Closes an open position on `symbol` by placing the order that flattens it.
+
+  Optional. **This is an order, not a query** — the venue works out the side and the size
+  from the position it holds and then places the order itself, which is why it returns an
+  `Order` like `place_order/3` does.
+
+  That is also why it is not replaceable by `get_positions/1` plus `place_order/3`: the
+  size a caller computes is the size as of the caller's last read, and the venue's is the
+  size now. On a position that moved in between, the caller's arithmetic leaves a residue
+  or overshoots into a position the other way. Only the venue can flatten to exactly zero.
+
+  A venue that does not carry positions has nothing to close, and says so through
+  `capabilities/0` rather than through this returning an empty success.
+  """
+  @callback close_position(credentials(), symbol(), keyword()) :: result(Types.Order.t())
 
   @doc "One order's current state."
   @callback get_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
@@ -764,6 +800,13 @@ defmodule DpExchange.Core.Venue do
       {:replace_order, 4} =>
         "not load-bearing, but it is RISK-bearing — absence means cancel-then-place, " <>
           "which works and opens a window in which no order is live",
+      {:preview_replace, 4} =>
+        "not load-bearing — absence means amending without a dry run; the amendment " <>
+          "itself is what bears risk, and that is replace_order/4's entry",
+      {:close_position, 3} =>
+        "irreplaceable and not load-bearing — get_positions/1 plus place_order/3 leaves a " <>
+          "residue when the position moves between the read and the order, and only the " <>
+          "venue flattens to exactly zero; a venue carrying no positions has nothing to close",
       {:subscribe_notices, 1} =>
         "not load-bearing — losing notices costs visibility into the stream, not the stream"
     }

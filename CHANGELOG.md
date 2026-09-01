@@ -21,6 +21,28 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+- **`preview_replace/4` and `close_position/3` on `Venue`.** Both are Coinbase endpoints
+  the family had no facade for, and both are the kind that cannot be assembled from the
+  calls that already exist.
+
+  **`preview_replace/4` is not `preview_order/3` with an order id.** The venue prices an
+  amendment against the resting order's own state, including whatever of it has already
+  filled. A caller who asks what a fresh order would cost is asking a different question
+  and getting a different number. Without it the choice is committing to an irreversible
+  amendment blind, or cancel-then-place — which reopens the window `replace_order/4`
+  exists to close.
+
+  **`close_position/3` is not `get_positions/1` plus `place_order/3`.** The size a caller
+  computes is the size as of the caller's last read; the venue's is the size now. On a
+  position that moved in between, the caller's arithmetic leaves a residue or overshoots
+  into a position the other way. Only the venue flattens to exactly zero, which is why it
+  returns an `Order` — it *is* an order, placed on the caller's behalf with a side and size
+  the caller never states.
+
+  Both are peripheral, both record which of the two tests they fail, and every venue that
+  does not serve them returns `not_supported()` as before.
+
 ### Changed
 - **BREAKING: `Core.Types.Quote` no longer carries `:bid` and `:ask`.** They are order book
   data — resting orders — and `Quote` is trade data. Every venue package in the family was
