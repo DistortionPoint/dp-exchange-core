@@ -1171,135 +1171,153 @@ moduledocs (recorded from a real response) and the host adapter; Prime's paths f
 vendor's pages on 2026-08-31 and its signing scheme from documentation, never probed. D7
 tier 4: money-moving endpoints are answered in production by a consumer.
 
-#### Phase 11 · Options (4)
+#### Phase 11 · Options (4) — **complete**
 
-- [ ] `webull   ` GET    /market-data/options/bars/list
-- [ ] `webull   ` GET    /market-data/options/snapshots/list
-- [ ] `webull   ` GET    /market-data/options/ticks/list
-- [ ] `webull   ` GET    /trading/instruments/options/contracts/list
+- [x] `webull   ` GET    /market-data/options/bars/list
+- [x] `webull   ` GET    /market-data/options/snapshots/list
+- [x] `webull   ` GET    /market-data/options/ticks/list
+- [x] `webull   ` GET    /trading/instruments/options/contracts/list
 
-#### Phase 11 · Derivatives, futures and event contracts (34)
+**Three of these four were recorded as refusals, and all three were false negatives.** The
+Webull package held that `US_OPTION` "is refused: the vendor states the stock snapshot does
+not serve it" — true of the *stock* snapshot, wrong about the venue, which publishes
+`/market-data/options/snapshots/list`, `/market-data/options/bars/list` and
+`/market-data/options/ticks/list` beside their stock equivalents. **Three tests asserted the
+refusal**, which is how a wrong claim about a venue survives a green suite. That brings the
+running total of false-negative capability claims found by this plan to **nine**.
+
+**The chain had to be rebuilt, not passed through.** Webull publishes a flat contract list;
+`Types.OptionChain` is expiry × strike. A contract whose expiry, strike or right cannot be
+read is refused, naming the keys the venue actually sent, because a dropped row leaves a
+chain with a hole in it that looks complete.
+
+**`get_option_greeks/2` stays absent and that one is real.** No Webull endpoint publishes a
+delta, a gamma or an implied volatility. Computing them needs a rate and a volatility surface
+the venue does not publish either — every number would be this package's model presented as
+the venue's, which is D4 at its most tempting.
+
+#### Phase 11 · Derivatives, futures and event contracts (34) — **complete**
 
 *Coinbase's six `intx/*` endpoints are **`APPROVED-SKIP` under D1** (deprecated) and are
 deliberately absent below. They are listed in §8's skip register, not here — a skipped
 endpoint must never appear as a work item.*
 
-- [ ] `coinbase ` DELETE /api/v3/brokerage/cfm/sweeps
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/balance_summary
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/intraday/current_margin_window
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/intraday/margin_setting
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/positions
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/positions/{product_id}
-- [ ] `coinbase ` GET    /api/v3/brokerage/cfm/sweeps
-- [ ] `coinbase ` POST   /api/v3/brokerage/cfm/intraday/margin_setting
-- [ ] `coinbase ` POST   /api/v3/brokerage/cfm/sweeps/schedule
-- [ ] `gemini   ` GET    /v1/fundingamount/BTCGUSDPERP
-- [ ] `gemini   ` GET    /v1/fundingamountreport/records.xlsx
-- [ ] `gemini   ` GET    /v1/nextfundingtimestamp/BTCGUSDPERP
-- [ ] `gemini   ` GET    /v1/perpetuals/fundingpaymentreport/records.xlsx
-- [ ] `gemini   ` GET    /v1/riskstats/BTCGUSDPERP
-- [ ] `gemini   ` POST   /v1/margin
-- [ ] `gemini   ` POST   /v1/perpetuals/fundingPayment
-- [ ] `gemini   ` POST   /v1/perpetuals/fundingpaymentreport/records.json
-- [ ] `gemini   ` POST   /v1/positions
-- [ ] `webull   ` GET    /market-data/event-contracts/bars/list
-- [ ] `webull   ` GET    /market-data/event-contracts/depths/list
-- [ ] `webull   ` GET    /market-data/event-contracts/snapshots/list
-- [ ] `webull   ` GET    /market-data/event-contracts/ticks/list
-- [ ] `webull   ` GET    /market-data/futures/bars/list
-- [ ] `webull   ` GET    /market-data/futures/depths/list
-- [ ] `webull   ` GET    /market-data/futures/footprints/list
-- [ ] `webull   ` GET    /market-data/futures/snapshots/list
-- [ ] `webull   ` GET    /market-data/futures/ticks/list
-- [ ] `webull   ` GET    /trading/instruments/event-contracts/categories/list
-- [ ] `webull   ` GET    /trading/instruments/event-contracts/events/list
-- [ ] `webull   ` GET    /trading/instruments/event-contracts/markets/list
-- [ ] `webull   ` GET    /trading/instruments/event-contracts/series/list
-- [ ] `webull   ` GET    /trading/instruments/futures/contracts/list
-- [ ] `webull   ` GET    /trading/instruments/futures/product-classes/list
-- [ ] `webull   ` GET    /trading/instruments/futures/product-codes/list
+- [x] `coinbase ` DELETE /api/v3/brokerage/cfm/sweeps
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/balance_summary
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/intraday/current_margin_window
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/intraday/margin_setting
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/positions
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/positions/{product_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/cfm/sweeps
+- [x] `coinbase ` POST   /api/v3/brokerage/cfm/intraday/margin_setting
+- [x] `coinbase ` POST   /api/v3/brokerage/cfm/sweeps/schedule
+- [x] `gemini   ` GET    /v1/fundingamount/BTCGUSDPERP
+- [x] `gemini   ` GET    /v1/fundingamountreport/records.xlsx
+- [x] `gemini   ` GET    /v1/nextfundingtimestamp/BTCGUSDPERP
+- [x] `gemini   ` GET    /v1/perpetuals/fundingpaymentreport/records.xlsx
+- [x] `gemini   ` GET    /v1/riskstats/BTCGUSDPERP
+- [x] `gemini   ` POST   /v1/margin
+- [x] `gemini   ` POST   /v1/perpetuals/fundingPayment
+- [x] `gemini   ` POST   /v1/perpetuals/fundingpaymentreport/records.json
+- [x] `gemini   ` POST   /v1/positions
+- [x] `webull   ` GET    /market-data/event-contracts/bars/list
+- [x] `webull   ` GET    /market-data/event-contracts/depths/list
+- [x] `webull   ` GET    /market-data/event-contracts/snapshots/list
+- [x] `webull   ` GET    /market-data/event-contracts/ticks/list
+- [x] `webull   ` GET    /market-data/futures/bars/list
+- [x] `webull   ` GET    /market-data/futures/depths/list
+- [x] `webull   ` GET    /market-data/futures/footprints/list
+- [x] `webull   ` GET    /market-data/futures/snapshots/list
+- [x] `webull   ` GET    /market-data/futures/ticks/list
+- [x] `webull   ` GET    /trading/instruments/event-contracts/categories/list
+- [x] `webull   ` GET    /trading/instruments/event-contracts/events/list
+- [x] `webull   ` GET    /trading/instruments/event-contracts/markets/list
+- [x] `webull   ` GET    /trading/instruments/event-contracts/series/list
+- [x] `webull   ` GET    /trading/instruments/futures/contracts/list
+- [x] `webull   ` GET    /trading/instruments/futures/product-classes/list
+- [x] `webull   ` GET    /trading/instruments/futures/product-codes/list
 
-#### Phase 11 · Margin (3)
+#### Phase 11 · Margin (3) — **complete**
 
-- [ ] `gemini   ` POST   /v1/margin/account
-- [ ] `gemini   ` POST   /v1/margin/order/preview
-- [ ] `gemini   ` POST   /v1/margin/rates
+- [x] `gemini   ` POST   /v1/margin/account
+- [x] `gemini   ` POST   /v1/margin/order/preview
+- [x] `gemini   ` POST   /v1/margin/rates
 
-#### Phase 11 · Clearing (8)
+#### Phase 11 · Clearing (8) — **complete**
 
-- [ ] `gemini   ` POST   /v1/clearing/broker/list
-- [ ] `gemini   ` POST   /v1/clearing/broker/new
-- [ ] `gemini   ` POST   /v1/clearing/cancel
-- [ ] `gemini   ` POST   /v1/clearing/confirm
-- [ ] `gemini   ` POST   /v1/clearing/list
-- [ ] `gemini   ` POST   /v1/clearing/new
-- [ ] `gemini   ` POST   /v1/clearing/status
-- [ ] `gemini   ` POST   /v1/clearing/trades
+- [x] `gemini   ` POST   /v1/clearing/broker/list
+- [x] `gemini   ` POST   /v1/clearing/broker/new
+- [x] `gemini   ` POST   /v1/clearing/cancel
+- [x] `gemini   ` POST   /v1/clearing/confirm
+- [x] `gemini   ` POST   /v1/clearing/list
+- [x] `gemini   ` POST   /v1/clearing/new
+- [x] `gemini   ` POST   /v1/clearing/status
+- [x] `gemini   ` POST   /v1/clearing/trades
 
-#### Phase 11 · Convert (3)
+#### Phase 11 · Convert (3) — **complete**
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/convert/trade/{trade_id}
-- [ ] `coinbase ` POST   /api/v3/brokerage/convert/quote
-- [ ] `coinbase ` POST   /api/v3/brokerage/convert/trade/{trade_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/convert/trade/{trade_id}
+- [x] `coinbase ` POST   /api/v3/brokerage/convert/quote
+- [x] `coinbase ` POST   /api/v3/brokerage/convert/trade/{trade_id}
 
-#### Phase 11 · Portfolios (6)
+#### Phase 11 · Portfolios (6) — **complete**
 
-- [ ] `coinbase ` DELETE /api/v3/brokerage/portfolios/{portfolio_uuid}
-- [ ] `coinbase ` GET    /api/v3/brokerage/portfolios
-- [ ] `coinbase ` GET    /api/v3/brokerage/portfolios/{portfolio_uuid}
-- [ ] `coinbase ` POST   /api/v3/brokerage/portfolios
+- [x] `coinbase ` DELETE /api/v3/brokerage/portfolios/{portfolio_uuid}
+- [x] `coinbase ` GET    /api/v3/brokerage/portfolios
+- [x] `coinbase ` GET    /api/v3/brokerage/portfolios/{portfolio_uuid}
+- [x] `coinbase ` POST   /api/v3/brokerage/portfolios
 - [x] `coinbase ` POST   /api/v3/brokerage/portfolios/move_funds
-- [ ] `coinbase ` PUT    /api/v3/brokerage/portfolios/{portfolio_uuid}
+- [x] `coinbase ` PUT    /api/v3/brokerage/portfolios/{portfolio_uuid}
 
-#### Phase 11 · Fees (1)
+#### Phase 11 · Fees (1) — **complete**
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/transaction_summary
+- [x] `coinbase ` GET    /api/v3/brokerage/transaction_summary
 
-#### Phase 8 · Reference data (30)
+#### Phase 8 · Reference data (30) — **complete**
 
-- [ ] `webull   ` GET    /market-data/fundamentals/analysis/ratings/get
-- [ ] `webull   ` GET    /market-data/fundamentals/analysis/target-prices/get
-- [ ] `webull   ` GET    /market-data/fundamentals/balance-sheets/get
-- [ ] `webull   ` GET    /market-data/fundamentals/capital-flows/get
-- [ ] `webull   ` GET    /market-data/fundamentals/cash-flows/get
-- [ ] `webull   ` GET    /market-data/fundamentals/company-profiles/get
-- [ ] `webull   ` GET    /market-data/fundamentals/dividend-calendars/list
-- [ ] `webull   ` GET    /market-data/fundamentals/earnings-calendars/list
-- [ ] `webull   ` GET    /market-data/fundamentals/filings/list
-- [ ] `webull   ` GET    /market-data/fundamentals/financial-alerts/get
-- [ ] `webull   ` GET    /market-data/fundamentals/forecast-eps/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-allocations/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-brief/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-dividends/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-files/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-holdings/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-net-values/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-performances/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-ratings/get
-- [ ] `webull   ` GET    /market-data/fundamentals/fund-splits/get
-- [ ] `webull   ` GET    /market-data/fundamentals/income-statements/get
-- [ ] `webull   ` GET    /market-data/fundamentals/indicators/get
-- [ ] `webull   ` GET    /market-data/fundamentals/industry-comparisons/get
-- [ ] `webull   ` GET    /market-data/screeners/gainers-losers/list
-- [ ] `webull   ` GET    /market-data/screeners/high-dividend-ranks/list
-- [ ] `webull   ` GET    /market-data/screeners/market-sectors/get
-- [ ] `webull   ` GET    /market-data/screeners/market-sectors/list
-- [ ] `webull   ` GET    /market-data/screeners/top-actives/list
-- [ ] `webull   ` GET    /market-data/screeners/week52-high-low/list
-- [ ] `webull   ` POST   /market-data/news/summaries/get
+- [x] `webull   ` GET    /market-data/fundamentals/analysis/ratings/get
+- [x] `webull   ` GET    /market-data/fundamentals/analysis/target-prices/get
+- [x] `webull   ` GET    /market-data/fundamentals/balance-sheets/get
+- [x] `webull   ` GET    /market-data/fundamentals/capital-flows/get
+- [x] `webull   ` GET    /market-data/fundamentals/cash-flows/get
+- [x] `webull   ` GET    /market-data/fundamentals/company-profiles/get
+- [x] `webull   ` GET    /market-data/fundamentals/dividend-calendars/list
+- [x] `webull   ` GET    /market-data/fundamentals/earnings-calendars/list
+- [x] `webull   ` GET    /market-data/fundamentals/filings/list
+- [x] `webull   ` GET    /market-data/fundamentals/financial-alerts/get
+- [x] `webull   ` GET    /market-data/fundamentals/forecast-eps/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-allocations/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-brief/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-dividends/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-files/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-holdings/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-net-values/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-performances/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-ratings/get
+- [x] `webull   ` GET    /market-data/fundamentals/fund-splits/get
+- [x] `webull   ` GET    /market-data/fundamentals/income-statements/get
+- [x] `webull   ` GET    /market-data/fundamentals/indicators/get
+- [x] `webull   ` GET    /market-data/fundamentals/industry-comparisons/get
+- [x] `webull   ` GET    /market-data/screeners/gainers-losers/list
+- [x] `webull   ` GET    /market-data/screeners/high-dividend-ranks/list
+- [x] `webull   ` GET    /market-data/screeners/market-sectors/get
+- [x] `webull   ` GET    /market-data/screeners/market-sectors/list
+- [x] `webull   ` GET    /market-data/screeners/top-actives/list
+- [x] `webull   ` GET    /market-data/screeners/week52-high-low/list
+- [x] `webull   ` POST   /market-data/news/summaries/get
 
-#### Phase 8 · Watchlists (8)
+#### Phase 8 · Watchlists (8) — **complete**
 
-- [ ] `webull   ` GET    /market-data/watchlists/instruments/list
-- [ ] `webull   ` GET    /market-data/watchlists/list
-- [ ] `webull   ` POST   /market-data/watchlists/create
-- [ ] `webull   ` POST   /market-data/watchlists/delete
-- [ ] `webull   ` POST   /market-data/watchlists/instruments/add
-- [ ] `webull   ` POST   /market-data/watchlists/instruments/remove
-- [ ] `webull   ` POST   /market-data/watchlists/instruments/update
-- [ ] `webull   ` POST   /market-data/watchlists/update
+- [x] `webull   ` GET    /market-data/watchlists/instruments/list
+- [x] `webull   ` GET    /market-data/watchlists/list
+- [x] `webull   ` POST   /market-data/watchlists/create
+- [x] `webull   ` POST   /market-data/watchlists/delete
+- [x] `webull   ` POST   /market-data/watchlists/instruments/add
+- [x] `webull   ` POST   /market-data/watchlists/instruments/remove
+- [x] `webull   ` POST   /market-data/watchlists/instruments/update
+- [x] `webull   ` POST   /market-data/watchlists/update
 
-#### Phase 12 · Admin (7)
+#### Phase 12 · Admin (7) — **complete**
 
 *Gemini's five are `rest-api/common/admin`, **paths read from the vendor's pages on
 2026-08-31**, not inferred. Gemini's private API is uniformly `POST` with a signed
@@ -1310,15 +1328,15 @@ model and cites `/v1/account/create`, `/v1/account/list` and `/v1/account/transf
 which are counted elsewhere. That is why admin contributes five endpoints and six pages,
 and it drops Gemini's in-scope total from 76 to **75**.*
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/key_permissions
-- [ ] `coinbase ` GET    /api/v3/brokerage/time
+- [x] `coinbase ` GET    /api/v3/brokerage/key_permissions
+- [x] `coinbase ` GET    /api/v3/brokerage/time
 - [x] `gemini   ` POST   /v1/account                  admin/get-account-detail
-- [ ] `gemini   ` POST   /v1/account/create           admin/create-new-account
-- [ ] `gemini   ` POST   /v1/account/rename           admin/rename-account
-- [ ] `gemini   ` POST   /v1/account/list             admin/list-accounts-in-group
-- [ ] `gemini   ` POST   /v1/roles                    admin/roles-endpoint
+- [x] `gemini   ` POST   /v1/account/create           admin/create-new-account
+- [x] `gemini   ` POST   /v1/account/rename           admin/rename-account
+- [x] `gemini   ` POST   /v1/account/list             admin/list-accounts-in-group
+- [x] `gemini   ` POST   /v1/roles                    admin/roles-endpoint
 
-#### Phase 12 · Token lifecycle (5)
+#### Phase 12 · Token lifecycle (5) — **complete**
 
 *Every path here was read from the vendor's own page on 2026-08-31.*
 
@@ -1331,11 +1349,11 @@ OAuth**: it exchanges the authorization code the host obtained, and refreshes th
 same URL serves both sides. §6.0 draws the line at credential *use*, which is why these
 five are in scope while the consent redirects are not.*
 
-- [ ] `webull   ` POST   /auth/tokens/check
-- [ ] `webull   ` POST   /auth/tokens/create
-- [ ] `gemini   ` POST   exchange.gemini.com/auth/token        oauth/refresh-access-token
-- [ ] `gemini   ` POST   api.gemini.com/v1/oauth/revokeByToken oauth/revoke-access-token
-- [ ] `webull   ` POST   /oauth2/tokens/create                 connect-api/create-and-refresh-token
+- [x] `webull   ` POST   /auth/tokens/check
+- [x] `webull   ` POST   /auth/tokens/create
+- [x] `gemini   ` POST   exchange.gemini.com/auth/token        oauth/refresh-access-token
+- [x] `gemini   ` POST   api.gemini.com/v1/oauth/revokeByToken oauth/revoke-access-token
+- [x] `webull   ` POST   /oauth2/tokens/create                 connect-api/create-and-refresh-token
 
 #### Phase 13 · Robinhood — the whole v2 surface (9)
 
@@ -1355,7 +1373,7 @@ venue has.*
 - [ ] `robinhood` GET    /api/v2/crypto/trading/trading_pairs/
 
 
-#### Phase 13 · Schwab — REST (23)
+#### Phase 13 · Schwab — REST (23) — **complete**
 
 *Listed in full, implemented and not, so this venue reads like every other. The eleven
 open boxes are the gaps; the twelve closed ones are what ships today.*
@@ -1372,17 +1390,17 @@ open boxes are the gaps; the twelve closed ones are what ships today.*
 - [x] `schwab   ` DELETE /accounts/{accountNumber}/orders/{orderId}
 - [x] `schwab   ` PUT    /accounts/{accountNumber}/orders/{orderId}
 - [x] `schwab   ` POST   /accounts/{accountNumber}/previewOrder
-- [ ] `schwab   ` GET    /{symbol_id}/quotes
-- [ ] `schwab   ` GET    /chains
-- [ ] `schwab   ` GET    /expirationchain
-- [ ] `schwab   ` GET    /movers/{symbol_id}
-- [ ] `schwab   ` GET    /markets/{market_id}
-- [ ] `schwab   ` GET    /instruments/{cusip_id}
-- [ ] `schwab   ` GET    /accounts
-- [ ] `schwab   ` GET    /orders
-- [ ] `schwab   ` GET    /accounts/{accountNumber}/transactions
-- [ ] `schwab   ` GET    /accounts/{accountNumber}/transactions/{transactionId}
-- [ ] `schwab   ` GET    /userPreference
+- [x] `schwab   ` GET    /{symbol_id}/quotes
+- [x] `schwab   ` GET    /chains
+- [x] `schwab   ` GET    /expirationchain
+- [x] `schwab   ` GET    /movers/{symbol_id}
+- [x] `schwab   ` GET    /markets/{market_id}
+- [x] `schwab   ` GET    /instruments/{cusip_id}
+- [x] `schwab   ` GET    /accounts
+- [x] `schwab   ` GET    /orders
+- [x] `schwab   ` GET    /accounts/{accountNumber}/transactions
+- [x] `schwab   ` GET    /accounts/{accountNumber}/transactions/{transactionId}
+- [x] `schwab   ` GET    /userPreference
 
 #### Phase 6 · Schwab — Streamer (17 boxes) — **complete**: protocol, bootstrap, field maps and decoders. Socket connected; `websockex` added.
 

@@ -23,6 +23,15 @@ an acceptable changelog line.
 
 ### Changed
 
+- **`Types.Order`'s `:symbol` and `:id` now admit `nil`**, joining the four that already
+  did.
+
+  Robinhood acknowledges a cancel request without describing the order it cancelled: there
+  is an id and nothing else. Inventing a symbol to satisfy a type would put a guess where
+  the venue was silent, which is the one thing this type's enforced-but-nullable keys exist
+  to prevent. The keys stay enforced so a constructor must decide; the types admit `nil` so
+  the decision can be "the venue did not say".
+
 - **`asset_classes/0`'s vocabulary widened** from `[:crypto, :equity]` to
   `[:crypto, :equity, :option, :future, :event_contract]`, and the conformance suite's
   known-classes assertion with it.
