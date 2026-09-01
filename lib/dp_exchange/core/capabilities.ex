@@ -345,7 +345,12 @@ defmodule DpExchange.Core.Capabilities do
     :mutual_fund,
     :bond,
     :forex,
-    :cash_equivalent
+    :cash_equivalent,
+    # A binary contract on an outcome — Webull lists these as EVENT and settles them at 0
+    # or 1. **Not an option and not a future**: there is no strike, no underlying to
+    # deliver, and the payoff is a step rather than a curve. Declaring one as `:option`
+    # would hand a caller a Greeks-shaped hole where the instrument has no Greeks.
+    :event_contract
   ]
 
   # Which trading session an order is for. Empty for a venue that trades continuously,

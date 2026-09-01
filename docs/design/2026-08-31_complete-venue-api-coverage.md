@@ -947,7 +947,7 @@ of what implementing keeps finding by accident** — and finding them this way c
 whole capability surface being wrong in the meantime.
 **This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
 call, it is finding which of the venue's combinations do not exist and refusing them.
-#### Phase 3 · Orders (30) — 27 of 30; Webull's last three are blocked on its asset classes
+#### Phase 3 · Orders (30) — 29 of 30; batch-place waits on a contract callback (OQ8)
 
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
@@ -974,16 +974,14 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `webull   ` GET    /trading/orders/get
 - [x] `webull   ` GET    /trading/orders/historical-orders/list
 - [x] `webull   ` GET    /trading/orders/open-orders/list
-- [ ] `webull   ` POST   /trading/orders/batch-place — **stocks only**, see note
+- [ ] `webull   ` POST   /trading/orders/batch-place — no batch callback in the contract (OQ8)
 - [x] `webull   ` POST   /trading/orders/cancel
 - [x] `webull   ` POST   /trading/orders/place
-- [ ] `webull   ` POST   /trading/orders/preview — **not for crypto**, see note
-- [ ] `webull   ` POST   /trading/orders/replace — **not for crypto**, see note
+- [x] `webull   ` POST   /trading/orders/preview
+- [x] `webull   ` POST   /trading/orders/replace
 
-**Webull's last three order endpoints exclude crypto — and crypto is not the limit of what
-this family serves.**
-
-Read from the vendor's own reference pages, 2026-09-01:
+**Webull's preview and replace exclude crypto — and this package now serves more than
+crypto.** Read from the vendor's own reference pages, 2026-09-01:
 
 | endpoint | what the vendor says |
 |---|---|
@@ -991,27 +989,29 @@ Read from the vendor's own reference pages, 2026-09-01:
 | `/trading/orders/replace` | "Modifies equity, options and futures orders […] For crypto trading, this feature is currently not supported." |
 | `/trading/orders/batch-place` | "A maximum of 50 orders can be submitted once, Currently only stocks are supported. This service is not currently available to all clients." |
 
-**These three stay OPEN.** An earlier revision of this note ticked them as "investigated
-and answered, there is nothing to implement at this package's declared asset class" — which
-was wrong, and wrong in the way §0 warns about: it read a *current package declaration* as
-a *permanent scope*. `dp_exchange_webull` declares `asset_classes: [:crypto]` today, and
-this very checklist schedules its stock, futures and event-contract surfaces (Phases 7, 8
-and 11). Two other venues in the family already serve equities. The endpoints are
-reachable; what is missing is the asset class in this package, and that is planned work
-rather than an answer.
+**Preview and replace are implemented** (2026-09-01). Getting there meant widening the order
+builder past crypto: the type/time-in-force matrix is now per instrument type —
 
-The finding that stands is the correction to `webull.ex`, which had claimed
-`preview_order/3` "has no endpoint at all". The endpoint is documented; it excludes crypto.
-That is the fourth false negative this plan has found (after Schwab's streaming, Schwab's
-order book, and Coinbase's preview and atomic replace), and the same shape every time — a
-package asserting a venue lacks something, with nothing behind the assertion.
+    CRYPTO   MARKET/IOC, LIMIT/DAY|GTC, STOP_LOSS_LIMIT/DAY|GTC
+    EQUITY   MARKET, LIMIT, STOP_LOSS, STOP_LOSS_LIMIT, TRAILING_STOP_LOSS × DAY|GTC
+    OPTION   as EQUITY minus TRAILING_STOP_LOSS ("Options not supported")
+    FUTURES  as OPTION
+    EVENT    LIMIT only, and DAY|GTC|IOC|GTD|FOK
 
-**These three unblock when Webull's asset classes widen.** Recorded as **OQ9** so the
-sequencing is the architect's rather than assumed here.
+— and both endpoints refuse a crypto request before sending it, naming the venue's own
+reason. `asset_classes` is now `[:crypto, :equity]`, `supported_instrument_types` names spot,
+option, future and event contract, and the fake enforces the same matrix from the same source
+rather than a hand-copied list that drifts.
 
-`/trading/orders/batch-place` has a second blocker independent of asset class: the `Venue`
-behaviour has no batch-place callback, so there is currently no facade for it on any venue.
-Raised as **OQ8** rather than decided here.
+**Two earlier revisions of this note were wrong, in the same way twice.** The first said
+`preview_order/3` "has no endpoint at all" — false, and contradicted by the vendor. The second
+ticked all three boxes as "nothing to implement at this package's declared asset class" —
+which read a *current package declaration* as a *permanent scope*, and parked real work
+behind an invented open question. See OQ9, closed.
+
+`/trading/orders/batch-place` stays open on its own blocker, not an asset-class one: the
+`Venue` behaviour has no batch-place callback, so there is no facade for it on any venue.
+**OQ8**.
 
 #### Phase 4 · Accounts and balances (4)
 
@@ -2255,22 +2255,25 @@ unit, and N requests is N partial outcomes a caller has to reconcile. Adding
 phase's. Recorded rather than decided; none of the three is reachable at those venues'
 current crypto entitlements anyway, so nothing is blocked on the answer.
 
-**OQ9 — when do the venue packages widen past the asset class they declare today?**
-`dp_exchange_webull` declares `asset_classes: [:crypto]`, and Webull publishes stocks,
-options, futures and event contracts; this checklist schedules all four (Phases 7, 8, 11).
-`dp_exchange_gemini` is crypto-only and its venue is too, so nothing is pending there —
-but Webull, Schwab and Robinhood each serve more than one class and only Schwab's package
-says so.
 
-**This is not a scope question, it is a sequencing one.** D7 already puts what the venue
-provides in scope, and the endpoints are enumerated in this document. What is open is
-whether a package widens as each capability group is implemented, or in one declared step
-before the groups that need it — the second matters because `capabilities/0`'s
-`asset_classes` is what a consumer routes on, and a package that declares `[:crypto, :us_equity]`
-while only its crypto half works has declared something untrue.
+**OQ9 — CLOSED, 2026-09-01, and it should not have been opened.** The question was "when do
+the venue packages widen past the asset class they declare today", and it was raised to hold
+three Webull order boxes. **The architect's answer: that is not a question, it is the work.**
+D7 already puts what the venue provides in scope and this checklist already enumerates
+Webull's stock, options, futures and event-contract endpoints; raising an OQ over it was
+skipping with extra steps.
 
-Three Phase 3 boxes are held on the answer (Webull's preview, replace and batch-place),
-and considerably more of Phases 7, 8 and 11.
+The sequencing worry behind it was real but small, and answers itself: **implement, then
+declare.** A package must not announce an asset class whose half does not work, so the
+declaration follows the code rather than leading it. `dp_exchange_webull` now declares
+`[:crypto, :equity]` because its order builder serves all five of the venue's instrument
+types, not in anticipation of doing so; per-endpoint truth stays in `capabilities/0`'s
+`endpoints` map, which is why that map exists.
+
+Widening also found a real gap in Core: **the instrument-type vocabulary had no term for an
+event contract**, so a package serving one had to declare something untrue. `:event_contract`
+added — it is not an option and not a future, having no strike, nothing to deliver and a
+step payoff rather than a curve.
 
 ## 8. Risk Assessment
 

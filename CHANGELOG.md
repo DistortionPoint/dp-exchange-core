@@ -22,6 +22,15 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Added
+
+- **`:event_contract` in the instrument-type vocabulary.** Webull lists event contracts as a
+  tradable instrument type and the vocabulary had no term for one, so a package serving them
+  had to declare something untrue.
+
+  **It is not an option and not a future.** There is no strike, no underlying to deliver,
+  and the payoff is a step at 0 or 1 rather than a curve — declaring one as `:option` would
+  hand a caller a Greeks-shaped hole where the instrument has no Greeks.
+
 - **`convert/4` and `get_trade_volume/2` on `Venue`.** Two more Gemini endpoints with no
   facade.
 
