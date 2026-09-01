@@ -953,9 +953,9 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
 - [x] `coinbase ` POST   /api/v3/brokerage/orders
 - [x] `coinbase ` POST   /api/v3/brokerage/orders/batch_cancel
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders/close_position
+- [x] `coinbase ` POST   /api/v3/brokerage/orders/close_position
 - [x] `coinbase ` POST   /api/v3/brokerage/orders/edit
-- [ ] `coinbase ` POST   /api/v3/brokerage/orders/edit_preview
+- [x] `coinbase ` POST   /api/v3/brokerage/orders/edit_preview
 - [x] `coinbase ` POST   /api/v3/brokerage/orders/preview
 - [x] `gemini   ` POST   /v1/heartbeat
 - [ ] `gemini   ` POST   /v1/instant/execute
@@ -963,12 +963,12 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `gemini   ` POST   /v1/mytrades
 - [x] `gemini   ` POST   /v1/notionalvolume
 - [x] `gemini   ` POST   /v1/order/cancel
-- [ ] `gemini   ` POST   /v1/order/cancel/all
-- [ ] `gemini   ` POST   /v1/order/cancel/session
+- [x] `gemini   ` POST   /v1/order/cancel/all
+- [x] `gemini   ` POST   /v1/order/cancel/session
 - [x] `gemini   ` POST   /v1/order/new
 - [x] `gemini   ` POST   /v1/order/status
 - [x] `gemini   ` POST   /v1/orders
-- [ ] `gemini   ` POST   /v1/orders/history
+- [x] `gemini   ` POST   /v1/orders/history
 - [ ] `gemini   ` POST   /v1/tradevolume
 - [ ] `gemini   ` POST   /v1/wrap/GUSDUSD
 - [x] `webull   ` GET    /trading/orders/get
@@ -1064,7 +1064,7 @@ candle box is not done until it returns `Types.Candle` with `:opened_at`.
 
 - [x] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}/candles
 - [ ] `coinbase ` GET    /api/v3/brokerage/products/{product_id}/candles
-- [ ] `gemini   ` GET    /v2/candles/BTCUSD/15m
+- [x] `gemini   ` GET    /v2/candles/BTCUSD/15m
 - [ ] `gemini   ` GET    /v2/derivatives/candles/BTCGUSDPERP/1m
 - [x] `webull   ` GET    /market-data/crypto/bars/list
 - [ ] `webull   ` POST   /market-data/stocks/bars/list

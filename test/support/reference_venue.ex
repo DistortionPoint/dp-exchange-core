@@ -463,6 +463,28 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def convert(from, to, amount, _opts) do
+    # One step, already settled. The reference venue offers both forms so a conformance run
+    # exercises each; a real venue usually has one.
+    {:ok,
+     %Types.Conversion{
+       id: "ref-convert-1",
+       status: :settled,
+       from_asset: from,
+       to_asset: to,
+       from_amount: amount,
+       to_amount: amount,
+       rate: Decimal.new("1"),
+       provider: runtime_id()
+     }}
+  end
+
+  @impl true
+  def get_trade_volume(_credentials, _opts) do
+    {:ok, [%{symbol: "BTC-USD", total_volume_base: Decimal.new("10.5")}]}
+  end
+
+  @impl true
   def get_order(_credentials, id, _opts) do
     {:ok,
      %Types.Order{

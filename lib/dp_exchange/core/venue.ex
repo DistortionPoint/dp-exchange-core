@@ -273,6 +273,27 @@ defmodule DpExchange.Core.Venue do
   @callback get_conversion(String.t(), keyword()) :: result(Types.Conversion.t())
 
   @doc """
+  Converts `amount` of `from` into `to` in **one call**, with no quote to accept first.
+
+  Optional, and deliberately separate from `quote_conversion/4` plus `commit_conversion/2`
+  rather than a shorthand for them.
+
+  **The difference is who carries the price risk, and it is not a detail.** The two-step
+  form shows a rate and holds it: the caller sees the number before anything moves, and a
+  stale quote is refused. This form executes at whatever the venue's price is when it
+  arrives, and the caller learns the rate from the result. A venue offering only one of the
+  two cannot be made to offer the other by a package wrapping it — quoting a rate this
+  package computed and calling it held would be a promise the venue never made.
+
+  So a venue declares each independently, and a caller that must see a price first uses
+  `quote_conversion/4` or does without.
+
+  Returns a `Conversion` already `:settled` — it has happened.
+  """
+  @callback convert(String.t(), String.t(), Decimal.t(), keyword()) ::
+              result(Types.Conversion.t())
+
+  @doc """
   The portfolios this credential can address.
 
   A portfolio is **where** you ask, not what you get back: balances, orders and positions
@@ -532,6 +553,24 @@ defmodule DpExchange.Core.Venue do
 
   @doc "Past fills for the credential."
   @callback get_trade_history(credentials(), keyword()) :: result([Types.Fill.t()])
+
+  @doc """
+  The credential's own traded volume, as the venue aggregates it.
+
+  Optional. **This is the account's volume, not the market's** — `get_market_overview/1`
+  answers the second question and this one answers "what have I traded".
+
+  It is not `get_trade_history/2` summed. The venue's aggregation is the one its own fee
+  tiers are computed from, and reproducing it means fetching every fill over the reporting
+  window — on a venue that requires a symbol per request, that is one request per symbol
+  per period, and the result would still be this package's arithmetic rather than the
+  venue's ledger. Where the two disagree, the venue's is the one that decides what a
+  caller is charged.
+
+  Shape is the venue's own, so `map()`: the fields differ enough between venues that a
+  normalised struct would be mostly `nil` on all of them.
+  """
+  @callback get_trade_volume(credentials(), keyword()) :: result([map()])
 
   # --- Streaming ---------------------------------------------------------
 
@@ -826,6 +865,15 @@ defmodule DpExchange.Core.Venue do
       {:preview_replace, 4} =>
         "not load-bearing — absence means amending without a dry run; the amendment " <>
           "itself is what bears risk, and that is replace_order/4's entry",
+      {:convert, 4} =>
+        "irreplaceable and not load-bearing — only the venue converts on the venue, and a " <>
+          "consumer that never converts is complete without it; NOT a shorthand for " <>
+          "quote_conversion/4 plus commit_conversion/2, which hold a rate this one does not",
+      {:get_trade_volume, 2} =>
+        "irreplaceable and not load-bearing — the venue's own aggregation is what its fee " <>
+          "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
+          "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
+          "own volume is complete without it",
       {:cancel_all_orders, 2} =>
         "irreplaceable and not load-bearing — get_orders/2 plus cancel_order/3 in a loop " <>
           "is N partial outcomes and cannot reach an order that appeared between the two, " <>

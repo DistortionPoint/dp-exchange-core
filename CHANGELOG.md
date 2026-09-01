@@ -22,6 +22,24 @@ an acceptable changelog line.
 ## [Unreleased]
 
 ### Added
+- **`convert/4` and `get_trade_volume/2` on `Venue`.** Two more Gemini endpoints with no
+  facade.
+
+  **`convert/4` is not a shorthand for `quote_conversion/4` plus `commit_conversion/2`,
+  and the difference is who carries the price risk.** The two-step form shows a rate and
+  holds it: the caller sees the number before anything moves. `convert/4` executes at
+  whatever the venue's price is on arrival and the caller learns the rate from the result.
+  A package cannot manufacture the first from the second — quoting a rate it computed
+  itself and calling it held would be a promise the venue never made — so a venue declares
+  each independently. Gemini's `/v1/wrap/{symbol}` is the one-step form.
+
+  **`get_trade_volume/2` is the account's own volume, not the market's**, and not
+  `get_trade_history/2` summed. The venue's aggregation is what its fee tiers are computed
+  from; reproducing it means every fill over the reporting window — one request per symbol
+  on a venue that requires one — and the result would still be this package's arithmetic
+  rather than the venue's ledger. Where they disagree, the venue's decides what a caller
+  is charged.
+
 - **`cancel_all_orders/2` on `Venue`.** Gemini publishes two bulk cancels and the family had
   no facade for either.
 

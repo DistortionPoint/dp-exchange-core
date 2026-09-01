@@ -1,7 +1,7 @@
 defmodule DpExchange.Core.VenueTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{ReferenceVenue, Venue}
+  alias DpExchange.Core.{ReferenceVenue, Types, Venue}
 
   doctest Venue
 
@@ -202,6 +202,32 @@ defmodule DpExchange.Core.VenueTest do
 
       assert is_list(cancelled)
       assert is_list(rejected)
+    end
+
+    test "convert/4 is not a shorthand for the two-step form, and both are callbacks" do
+      # The difference is who carries the price risk: the two-step form shows a rate and
+      # holds it, and this one executes at whatever the price is on arrival. A package
+      # cannot manufacture the first from the second — quoting a rate it computed itself
+      # and calling it held would be a promise the venue never made.
+      callbacks = Venue.behaviour_info(:callbacks)
+
+      assert {:convert, 4} in callbacks
+      assert {:quote_conversion, 4} in callbacks
+      assert {:commit_conversion, 2} in callbacks
+
+      assert Venue.peripheral_endpoints()[{:convert, 4}] =~ "NOT a shorthand"
+    end
+
+    test "convert/4 returns a conversion that has already happened" do
+      assert {:ok, %Types.Conversion{status: :settled}} =
+               ReferenceVenue.convert("USD", "BTC", Decimal.new("100"), [])
+    end
+
+    test "get_trade_volume/2 says why summing get_trade_history/2 is not the same" do
+      reason = Venue.peripheral_endpoints()[{:get_trade_volume, 2}]
+
+      assert reason =~ "fee"
+      assert reason =~ "ledger"
     end
   end
 
