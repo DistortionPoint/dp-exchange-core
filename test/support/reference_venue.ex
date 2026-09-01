@@ -491,20 +491,22 @@ defmodule DpExchange.Core.ReferenceVenue do
     case Keyword.get(opts, :auction) do
       auction when auction in [:opening, :closing] ->
         {:ok,
-         %Types.AuctionImbalance{
-           symbol: symbol,
-           auction: auction,
-           paired_quantity: Decimal.new("701859"),
-           imbalance_quantity: Decimal.new("5715"),
-           # The venue's own value, unmapped — see Types.AuctionImbalance.
-           side: "2",
-           reference_price: Decimal.new("253.83"),
-           near_price: Decimal.new("253.93"),
-           far_price: Decimal.new("253.98"),
-           venue_time: ~U[2026-08-28 19:59:59Z],
-           observed_at: ~U[2026-08-28 20:00:00Z],
-           provider: runtime_id()
-         }}
+         [
+           %Types.AuctionImbalance{
+             symbol: symbol,
+             auction: auction,
+             paired_quantity: Decimal.new("701859"),
+             imbalance_quantity: Decimal.new("5715"),
+             # The venue's own value, unmapped — see Types.AuctionImbalance.
+             side: "2",
+             reference_price: Decimal.new("253.83"),
+             near_price: Decimal.new("253.93"),
+             far_price: Decimal.new("253.98"),
+             venue_time: ~U[2026-08-28 19:59:59Z],
+             observed_at: ~U[2026-08-28 20:00:00Z],
+             provider: runtime_id()
+           }
+         ]}
 
       nil ->
         {:error, :auction_required}

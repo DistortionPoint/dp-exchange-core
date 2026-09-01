@@ -46,6 +46,15 @@ an acceptable changelog line.
   some prints as neither aggressive buy nor sell reports numbers that do not reconcile, and
   that gap is information about its classifier rather than a fault to paper over.
 
+  **`get_auction_imbalance/2` returns a list**, newest first, because the venue publishes a
+  *series*: the imbalance updates every few seconds through the auction window, and how it
+  moved is the point. `opts[:history]` selects the published series where a venue serves
+  the snapshot and the series separately — the same shape `get_orders/2` uses for resting
+  versus closed orders. **A series entry may carry less than a snapshot**: Webull's NOII
+  bars publish the three prices and the time and *not* the quantities or the side, which
+  come back `nil` — the venue did not publish them there, rather than the imbalance being
+  zero.
+
 
 - **`:event_contract` in the instrument-type vocabulary.** Webull lists event contracts as a
   tradable instrument type and the vocabulary had no term for one, so a package serving them

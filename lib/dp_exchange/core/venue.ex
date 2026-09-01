@@ -433,6 +433,17 @@ defmodule DpExchange.Core.Venue do
   different auctions with different windows, and a venue asked for neither has nothing to
   answer.
 
+  **Returns a list**, newest first, because the venue publishes a series and not only a
+  latest value: the imbalance updates every few seconds through the auction window and how
+  it moved is the point. `opts[:history]` selects the published series where a venue serves
+  the snapshot and the series separately — the same shape `get_orders/2` uses for resting
+  versus closed orders.
+
+  **A series entry may carry less than a snapshot.** Webull's NOII bars publish the three
+  auction prices and the time and *not* the paired quantity, the imbalance quantity or the
+  side; those come back `nil`, which means the venue did not publish them on that endpoint
+  rather than that the imbalance was zero.
+
   **Not derivable from `get_order_book/2`.** During an auction the continuous book stops
   being the price: what matters is how much can be matched, how much cannot, and where the
   auction would clear. A caller reading a continuous quote at 15:59 is reading a book that
@@ -442,7 +453,7 @@ defmodule DpExchange.Core.Venue do
   the last one it published, which is why `Types.AuctionImbalance` carries both the venue's
   own time and when it was observed.
   """
-  @callback get_auction_imbalance(symbol(), keyword()) :: result(Types.AuctionImbalance.t())
+  @callback get_auction_imbalance(symbol(), keyword()) :: result([Types.AuctionImbalance.t()])
 
   @doc """
   Traded volume split by price and by side, one entry per interval.
