@@ -1092,19 +1092,19 @@ candle box is not done until it returns `Types.Candle` with `:opened_at`.
 - [x] `webull   ` GET    /trading/instruments/crypto/profiles/list
 - [x] `webull   ` GET    /trading/instruments/stocks/profiles/list
 
-#### Phase 9 · Money movement (18)
+#### Phase 9 · Money movement (18) — **complete**
 
-- [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods
-- [ ] `coinbase ` GET    /api/v3/brokerage/payment_methods/{payment_method_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/payment_methods
+- [x] `coinbase ` GET    /api/v3/brokerage/payment_methods/{payment_method_id}
 - [x] `gemini   ` POST   /v1/account/transfer/btc
 - [x] `gemini   ` POST   /v1/addresses/bitcoin — same list as newAddress; get_deposit_address/3 uses the generator
 - [x] `gemini   ` POST   /v1/approvedAddresses/account/ethereum
 - [x] `gemini   ` POST   /v1/approvedAddresses/ethereum/remove
 - [x] `gemini   ` POST   /v1/approvedAddresses/ethereum/request
 - [x] `gemini   ` POST   /v1/balances
-- [ ] `gemini   ` POST   /v1/custodyaccountfees
+- [x] `gemini   ` POST   /v1/custodyaccountfees
 - [x] `gemini   ` POST   /v1/deposit/bitcoin/newAddress
-- [ ] `gemini   ` POST   /v1/notionalbalances/usd
+- [x] `gemini   ` POST   /v1/notionalbalances/usd
 - [x] `gemini   ` POST   /v1/payments/addbank
 - [x] `gemini   ` POST   /v1/payments/addbank/cad
 - [x] `gemini   ` POST   /v1/payments/methods
@@ -1113,7 +1113,7 @@ candle box is not done until it returns `Types.Candle` with `:opened_at`.
 - [x] `gemini   ` POST   /v2/withdraw/ethereum/eth
 - [x] `gemini   ` POST   /v2/withdraw/ethereum/eth/feeEstimate
 
-#### Phase 10 · Staking — Gemini 6, Coinbase Prime 9 (15)
+#### Phase 10 · Staking — Gemini 6, Coinbase Prime 9 (15) — **complete**
 
 *Prime's paths read from the vendor's pages on 2026-08-31. **D4 said "Prime 13"; that was a
 page count.** The thirteen pages document **nine** endpoints — four pairs are duplicate
@@ -1127,24 +1127,49 @@ The same pages-are-not-endpoints trap that put Advanced Trade at 61 pages and 51
 **wallet-level** (6) acts on one wallet. `stake/3` must decide which it exposes — a
 normalisation question for Phase 2, not an implementation detail.*
 
-- [ ] `gemini   ` GET    /v1/staking/rates
-- [ ] `gemini   ` POST   /v1/balances/staking
-- [ ] `gemini   ` POST   /v1/staking/history
-- [ ] `gemini   ` POST   /v1/staking/rewards
-- [ ] `gemini   ` POST   /v1/staking/stake
-- [ ] `gemini   ` POST   /v1/staking/unstake
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/staking/initiate
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/staking/unstake
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/staking/transaction-validators/query
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/initiate
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/unstake
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/unstake/preview
-- [ ] `cb-prime ` GET    /v1/portfolios/{pid}/wallets/{wid}/staking/unstake/status
-- [ ] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/claim_rewards
-- [ ] `cb-prime ` GET    /v1/portfolios/{pid}/wallets/{wid}/staking/status
+- [x] `gemini   ` GET    /v1/staking/rates
+- [x] `gemini   ` POST   /v1/balances/staking
+- [x] `gemini   ` POST   /v1/staking/history
+- [x] `gemini   ` POST   /v1/staking/rewards
+- [x] `gemini   ` POST   /v1/staking/stake
+- [x] `gemini   ` POST   /v1/staking/unstake
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/staking/initiate
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/staking/unstake
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/staking/transaction-validators/query
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/initiate
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/unstake
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/unstake/preview
+- [x] `cb-prime ` GET    /v1/portfolios/{pid}/wallets/{wid}/staking/unstake/status
+- [x] `cb-prime ` POST   /v1/portfolios/{pid}/wallets/{wid}/staking/claim_rewards
+- [x] `cb-prime ` GET    /v1/portfolios/{pid}/wallets/{wid}/staking/status
 > **Not Coinbase's CDP Staking API.** Those 7 are on-chain: they take a wallet address and
 > return **unsigned transactions to sign and broadcast**. Different capability — putting it
 > behind `stake/3` would be the nearby-substitute failure at its most expensive (D4).
+
+**What the scope question turned out to be.** The note above left `stake/3`'s scope open as
+a normalisation question. It is not one: **the caller already says which it means.** A
+`:wallet_id` in `opts` is the wallet scope, its absence is the portfolio scope, and
+`:portfolio_id` is required either way — missing it is `{:error, :missing_portfolio}` before
+a request is made. Nothing is inferred, because a portfolio-scoped unstake redeems across
+every wallet in the portfolio and picking it for a caller who named a wallet would move the
+right amount out of the wrong place.
+
+**Four Coinbase staking callbacks stay absent, with reasons.** Prime publishes no rate
+schedule and no staking history at either scope; `staking/status` names **one wallet** and is
+not "every staked position, one per asset" (reachable as `Prime.staking_status/4`); and
+`claim_rewards` is a write that moves accrued rewards, not a report of what accrued.
+
+**Gemini's six were the substitution risk, and it was the units.** The venue publishes
+`rate` in basis points, `ratePct` as a percentage and `apyPct` annualised — three numbers for
+one position, differing by 100× and by compounding. Percentages only survive; `:apy_pct` is
+never derived from `:rate_pct`. The second find: the host adapter dropped zero-balance
+staking rows, which makes "no position reported" and "no position" the same answer. They are
+kept here.
+
+**Neither venue's staking has been run.** Gemini's field names come from the `Core.Types.*`
+moduledocs (recorded from a real response) and the host adapter; Prime's paths from the
+vendor's pages on 2026-08-31 and its signing scheme from documentation, never probed. D7
+tier 4: money-moving endpoints are answered in production by a consumer.
 
 #### Phase 11 · Options (4)
 
@@ -1223,7 +1248,7 @@ endpoint must never appear as a work item.*
 - [ ] `coinbase ` GET    /api/v3/brokerage/portfolios
 - [ ] `coinbase ` GET    /api/v3/brokerage/portfolios/{portfolio_uuid}
 - [ ] `coinbase ` POST   /api/v3/brokerage/portfolios
-- [ ] `coinbase ` POST   /api/v3/brokerage/portfolios/move_funds
+- [x] `coinbase ` POST   /api/v3/brokerage/portfolios/move_funds
 - [ ] `coinbase ` PUT    /api/v3/brokerage/portfolios/{portfolio_uuid}
 
 #### Phase 11 · Fees (1)

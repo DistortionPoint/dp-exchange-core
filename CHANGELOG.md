@@ -21,6 +21,18 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`asset_classes/0`'s vocabulary widened** from `[:crypto, :equity]` to
+  `[:crypto, :equity, :option, :future, :event_contract]`, and the conformance suite's
+  known-classes assertion with it.
+
+  The narrower list was not a decision about scope — it was the set of classes any package
+  had reached so far, frozen into an assertion. The first package to serve option endpoints
+  could not declare it without failing conformance, and **a class a venue serves but cannot
+  declare is a class the host cannot route to.** `asset_classes/0` is a statement about a
+  package today; the contract now says so where it is declared.
+
 ### Added
 
 - **Three more account-and-funding callbacks**: `get_payment_method/3`,

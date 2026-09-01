@@ -225,7 +225,12 @@ defmodule DpExchange.Core.AdapterContract do
           classes = @venue.asset_classes()
 
           assert is_list(classes) and classes != []
-          assert classes -- [:crypto, :equity] == []
+
+          # The vocabulary a host switches on. It widened from `[:crypto, :equity]` on
+          # 2026-09-01, when the first package started serving option, futures and
+          # event-contract endpoints — a class a venue serves and cannot declare is a class
+          # the host cannot route to.
+          assert classes -- [:crypto, :equity, :option, :future, :event_contract] == []
         end
       end
     end

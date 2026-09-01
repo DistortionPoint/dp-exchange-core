@@ -138,7 +138,14 @@ defmodule DpExchange.Core.Venue do
   @doc "The venue's stable identifier, matching its package's namespace segment."
   @callback runtime_id() :: atom()
 
-  @doc "Which asset classes this venue trades, e.g. `[:crypto]` or `[:crypto, :equity]`."
+  @doc """
+  Which asset classes this venue trades — a subset of `[:crypto, :equity, :option, :future,
+  :event_contract]`.
+
+  **A statement about the package today, never a permanent scope boundary.** It widens as
+  endpoints land, and a class a venue serves but does not declare is a class the host
+  cannot route to.
+  """
   @callback asset_classes() :: [atom()]
 
   @doc """
