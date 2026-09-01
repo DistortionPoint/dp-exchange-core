@@ -79,6 +79,10 @@ an acceptable changelog line.
 
 ### Changed
 
+
+
+
+
 - **`Types.Order`'s `side`, `order_type`, `quantity` and `status` admit `nil` in the
   typespec.** They always could in practice — a venue sending a status this package does
   not recognise has produced `nil` since the beginning — and the typespec said otherwise,

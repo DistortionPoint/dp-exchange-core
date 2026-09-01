@@ -947,7 +947,7 @@ of what implementing keeps finding by accident** — and finding them this way c
 whole capability surface being wrong in the meantime.
 **This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
 call, it is finding which of the venue's combinations do not exist and refusing them.
-#### Phase 3 · Orders (30)
+#### Phase 3 · Orders (30) — **complete**
 
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
@@ -958,8 +958,8 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `coinbase ` POST   /api/v3/brokerage/orders/edit_preview
 - [x] `coinbase ` POST   /api/v3/brokerage/orders/preview
 - [x] `gemini   ` POST   /v1/heartbeat
-- [ ] `gemini   ` POST   /v1/instant/execute
-- [ ] `gemini   ` POST   /v1/instant/quote
+- [x] `gemini   ` POST   /v1/instant/execute
+- [x] `gemini   ` POST   /v1/instant/quote
 - [x] `gemini   ` POST   /v1/mytrades
 - [x] `gemini   ` POST   /v1/notionalvolume
 - [x] `gemini   ` POST   /v1/order/cancel
@@ -969,8 +969,8 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `gemini   ` POST   /v1/order/status
 - [x] `gemini   ` POST   /v1/orders
 - [x] `gemini   ` POST   /v1/orders/history
-- [ ] `gemini   ` POST   /v1/tradevolume
-- [ ] `gemini   ` POST   /v1/wrap/GUSDUSD
+- [x] `gemini   ` POST   /v1/tradevolume
+- [x] `gemini   ` POST   /v1/wrap/GUSDUSD
 - [x] `webull   ` GET    /trading/orders/get
 - [x] `webull   ` GET    /trading/orders/historical-orders/list
 - [x] `webull   ` GET    /trading/orders/open-orders/list
@@ -2333,6 +2333,7 @@ gave **D4** and **D5** (§6).
 | 2026-08-31 | **v3.5 — Phase 2 complete, all five venues migrated to Core 0.1.16.** 2.0a moved every venue's bid/ask off `Quote` and onto `get_top_of_book/2`, and **found the same defect twice more while doing it**. Phase 1 had caught Robinhood reading `price \|\| ask`; the migration surfaced **Gemini's socket** (`price: message["c"] \|\| bid`, defended in a comment as better than inventing a value) and **Webull's socket** (`price: bid \|\| ask`, defended as *"a real quoted number, labelled as the bid too"*). **Three venues, three independent instances, each with a comment explaining why it was acceptable** — which is the argument for a type that cannot hold the wrong value. Book frames on both venues now deliver `TopOfBook`; where Gemini's also carries a last trade it delivers that separately as a `Quote`. **The fakes carried it too**: Robinhood's set `price: ask` citing "as the real adapter uses", reproducing the defect the adapter had — a suite agreeing with itself and wrong twice. Every fake's spread now straddles the traded price and equals neither side. **Schwab's candles were 2.10's finding in the wild**: `get_historical_prices/4` built Quotes with `price: close`, discarding open, high and low where no caller could see it; now `Types.Candle`, and the validation order changed so an undated bar still reports `:missing_venue_timestamp` rather than a shape error about a different problem. Suites: core 368, schwab 249, gemini 329, webull 223, coinbase 161, robinhood 114 — **1,444 tests, 0 failures**, credo clean and formatted across all six. |
 | 2026-08-31 | **v3.6 — all six published. Core 0.1.16, gemini 0.1.3, coinbase 0.1.4, webull 0.1.3, robinhood 0.1.3, schwab 0.1.4.** The first push of the five venues **failed CI in all five**, and the reason is worth recording because it is a gap in how this work was being verified, not in the work: **the local gate was `mix test`; CI's is `mix compile --warnings-as-errors`, `mix credo --strict`, `mix dialyzer` and `mix test --cover`.** Three distinct classes got through. **Warnings-as-errors** caught Gemini's fake missing all 33 new behaviour callbacks, and two clause-grouping problems my edits introduced. **Coverage** caught the 33 stubs per package being uncovered lines — webull fell to 85%, robinhood to 83%, schwab to 87%. The fix earns its place beyond the number: the facade already swept its declared-`:unsupported` endpoints, the **fakes had no such sweep**, and a fake that answered differently from the real module would let a consumer write a passing test against behaviour the package does not have. **Dialyzer** caught the sharpest one: Coinbase's `get_top_of_book/2` passed `HttpClient`'s raw `%{status:, body:, headers:}` where the decoded body was expected, so the `"trades"` pattern in its timestamp helper **could never match** — it would have compiled, passed the suite, and returned `nil` for every venue timestamp, because the helper's fallback clause catches anything. **No test could have seen it and dialyzer was the one gate not run locally.** `mix quality` exists precisely to run all four; using it, rather than `mix test`, is the lesson. |
 | 2026-09-01 | **v3.7 — Webull's order lifecycle, and a Phase 2 claim corrected.** `cancel_order/3`, `get_order/3` and `get_orders/2` built: 5 of Webull's 8 order boxes now ticked. **The venue's order API is keyed on the client order id, not the venue's** — both cancel and get take `client_order_id` — so `place_order/3`'s return was corrected; it had been handing back an `order_id` that round-trips nowhere. Open and historical orders are two endpoints, not one with a filter, and a caller who does not say gets the open ones. **v3.5's "all five venues migrated" was too strong**: 2.10 built `Types.Candle` and moved *Schwab* onto it, and nothing swept the rest — Coinbase, Gemini and Webull were still returning bare maps keyed on `:timestamp`. Webull is now on `Types.Candle`/`:opened_at`; Coinbase and Gemini are recorded against their Phase 7 boxes. The fake had never been tested directly, which is how it was returning a shape the contract does not name: 299 tests (was 242), coverage 91.38%. |
+| 2026-09-01 | **v3.8 — Phase 3 complete, 30 of 30, and the contract grew by six callbacks.** Coinbase's `close_position` and `edit_preview`; Gemini's two bulk cancels, order history, the Instant quote/execute pair, `/v1/wrap/{symbol}` and `/v1/tradevolume`; Webull's last three answered from the vendor's own words. **Six endpoints needed a facade that did not exist**, and each is a capability no combination of existing calls reproduces: `preview_replace/4` (the venue prices an amendment against the resting order, including what has already filled), `close_position/3` (only the venue flattens to exactly zero; a caller's arithmetic leaves a residue), `cancel_all_orders/2` (N cancels is N partial outcomes and cannot reach an order that appeared mid-loop), `convert/4` (one step, no rate held — *not* a shorthand for quote-then-commit, because the difference is who carries the price risk), and `get_trade_volume/2` (the venue's aggregation is what its fee tiers come from). `cancel_all_orders/2` takes a **required** `:scope` with no default: the account scope reaches orders a person entered at the venue's own web interface. **Two more false negatives found**, bringing the total to five: Webull's "`preview_order/3` has no endpoint at all" (it has one; it excludes crypto) and Gemini's identical claim (it publishes a *margin impact* preview, which answers a different question and is Phase 11's). **The `Types.Candle` sweep is now done** — Coinbase was still building `Quote`s with `price: close`, the exact 2.10 defect, with its fake reproducing it. Core 0.1.19–0.1.22 published; all five venues on 0.1.22, all suites green. |
 
 ---
 
@@ -2385,5 +2386,5 @@ a changelog diff caught nothing across five venues, and now has a second sample.
 ---
 
 
-**Last Updated**: 2026-09-01 (v3.7 — **Implementing.** Phase 3 at 20 of 30. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
+**Last Updated**: 2026-09-01 (v3.8 — **Implementing.** Phase 3 complete, 30 of 30; the Venue contract is 71 callbacks. Earlier: v3.0 — **Implementing.** Phase 1 corrected Schwab's false streaming claims, migrated Webull's five undocumented paths and Gemini's transfers, added deprecation guards — and found Robinhood using an ask as a trade price, asserted as correct by its own tests.)
 **Next Review**: architect review of §7 (dispositions) and §8 (OQ1–OQ8).
