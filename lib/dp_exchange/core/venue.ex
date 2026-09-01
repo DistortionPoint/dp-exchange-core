@@ -318,6 +318,36 @@ defmodule DpExchange.Core.Venue do
   @callback get_deposit_address(String.t(), String.t(), keyword()) ::
               result(Types.DepositAddress.t())
 
+  @doc """
+  The blockchain networks an asset can move over, or the assets a network carries.
+
+  Optional. **This is what `get_deposit_address/3` needs before it can be called**: that
+  callback takes a network, and nothing else in the contract says which networks a venue
+  will accept for a given asset. Guessing one produces an address on a chain the venue does
+  not credit, and **funds sent to it are gone** — the single most expensive mistake in this
+  family's surface.
+
+  Two directions, because venues publish both and they answer different questions:
+
+    * `list_networks("USDC", [])` — which networks carry this asset
+    * `list_networks(nil, network: "ethereum")` — which assets this network carries
+
+  Rows are the venue's own maps. Network naming is not standardised across venues — one
+  venue's `ethereum` is another's `ERC20` — and normalising here would invent a vocabulary
+  that no venue accepts back.
+  """
+  @callback list_networks(String.t() | nil, keyword()) :: result([map()])
+
+  @doc """
+  Symbols currently carrying a promotional fee.
+
+  Optional, and **not `get_fees/2`**: that returns the schedule applying to a credential,
+  and this is a public list of symbols where the venue is charging something other than its
+  published schedule. A caller computing cost from the schedule alone is wrong for exactly
+  the symbols on this list.
+  """
+  @callback list_fee_promos(keyword()) :: result([map()])
+
   @doc "Addresses on the withdrawal allow-list, with whether each is usable yet."
   @callback list_approved_addresses(keyword()) :: result([Types.ApprovedAddress.t()])
 
@@ -948,6 +978,14 @@ defmodule DpExchange.Core.Venue do
           "tiers are computed from, and summing get_trade_history/2 gives this package's " <>
           "arithmetic rather than the venue's ledger; a consumer that never reports on its " <>
           "own volume is complete without it",
+      {:list_networks, 2} =>
+        "irreplaceable and not load-bearing — only the venue says which chains it credits, " <>
+          "and a caller that never moves funds is complete without it; a wrong network on " <>
+          "get_deposit_address/3 sends funds to a chain the venue does not credit",
+      {:list_fee_promos, 1} =>
+        "not load-bearing — a venue running no promotions has an empty list, and a caller " <>
+          "that pays the published schedule is merely over-estimating cost; irreplaceable " <>
+          "where it does, since only the venue knows what it is currently discounting",
       {:get_fx_rate, 3} =>
         "replaceable — an FX reference rate is a third party's number that the venue is " <>
           "relaying, and the source publishes it directly; NOT the venue's own market, " <>

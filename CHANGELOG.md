@@ -23,6 +23,25 @@ an acceptable changelog line.
 
 ### Added
 
+- **`list_networks/2` and `list_fee_promos/1`.**
+
+  **`list_networks/2` is what `get_deposit_address/3` needs before it can be called.** That
+  callback takes a network, and nothing else in the contract said which networks a venue
+  accepts for an asset. **Guessing one produces an address on a chain the venue does not
+  credit, and funds sent there are gone** — the single most expensive mistake available in
+  this surface. It answers both directions, because venues publish both and they are
+  different questions: which networks carry an asset, and which assets a network carries.
+
+  Rows stay the venue's own maps. **Network naming is not standardised** — one venue's
+  `ethereum` is another's `ERC20` — and normalising here would invent a vocabulary no venue
+  accepts back.
+
+  **`list_fee_promos/1` is not `get_fees/2`.** That returns the schedule applying to a
+  credential; this is a public list of symbols where the venue charges something other than
+  its published schedule. A caller computing cost from the schedule alone is wrong for
+  exactly the symbols on this list.
+
+
 - **`get_fx_rate/3` and `Types.FxRate`.** Gemini publishes `GET /v2/fxrate/{pair}/{ts}` and
   the family had no shape for it.
 

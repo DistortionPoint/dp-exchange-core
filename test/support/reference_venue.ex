@@ -517,6 +517,18 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
+  def list_networks(asset, opts) do
+    case {asset, Keyword.get(opts, :network)} do
+      {nil, nil} -> {:error, :asset_or_network_required}
+      {nil, network} -> {:ok, [%{"network" => network, "assets" => ["USDC", "USDT"]}]}
+      {asset, _network} -> {:ok, [%{"asset" => asset, "networks" => ["ethereum", "solana"]}]}
+    end
+  end
+
+  @impl true
+  def list_fee_promos(_opts), do: {:ok, [%{"symbol" => "BTCUSD", "maker_fee_bps" => 0}]}
+
+  @impl true
   def get_fx_rate(pair, at, _opts) do
     {:ok,
      %Types.FxRate{

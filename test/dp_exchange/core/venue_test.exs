@@ -305,6 +305,34 @@ defmodule DpExchange.Core.VenueTest do
     test "an FX rate is peripheral, and says it is not the venue's own market" do
       assert Venue.peripheral_endpoints()[{:get_fx_rate, 3}] =~ "relaying"
     end
+
+    test "list_networks/2 answers both directions and refuses neither" do
+      # get_deposit_address/3 takes a network and nothing else in the contract says which
+      # networks a venue accepts. Guessing one produces an address on a chain the venue does
+      # not credit, and funds sent there are gone.
+      assert {:ok, [%{"asset" => "USDC"}]} = ReferenceVenue.list_networks("USDC", [])
+
+      assert {:ok, [%{"network" => "ethereum"}]} =
+               ReferenceVenue.list_networks(nil, network: "ethereum")
+
+      assert {:error, :asset_or_network_required} = ReferenceVenue.list_networks(nil, [])
+    end
+
+    test "list_networks/2 says why a wrong network costs money" do
+      assert Venue.peripheral_endpoints()[{:list_networks, 2}] =~ "does not credit"
+    end
+
+    test "list_fee_promos/1 is not get_fees/2" do
+      # get_fees/2 is the schedule applying to a credential; this is a public list of
+      # symbols where the venue charges something other than that schedule. A caller
+      # computing cost from the schedule alone is wrong for exactly these symbols.
+      callbacks = Venue.behaviour_info(:callbacks)
+
+      assert {:list_fee_promos, 1} in callbacks
+      assert {:get_fees, 2} in callbacks
+
+      assert {:ok, [%{"symbol" => "BTCUSD"}]} = ReferenceVenue.list_fee_promos([])
+    end
   end
 
   describe "not_supported/0" do

@@ -1052,15 +1052,15 @@ behind an invented open question. See OQ9, closed.
 - [x] `gemini   ` GET    /v1/trades/BTCUSD — it is GET, not POST
 - [x] `webull   ` GET    /market-data/stocks/ticks/list
 
-#### Phase 7 · Quotes (5)
+#### Phase 7 · Quotes (5) — **complete**
 
 - [x] `gemini   ` GET    /v1/pricefeed
 - [x] `gemini   ` GET    /v1/pubticker/BTCUSD — already served get_price/2 and get_top_of_book/2
-- [ ] `gemini   ` GET    /v2/fxrate/AUDUSD/1594651859000
+- [x] `gemini   ` GET    /v2/fxrate/AUDUSD/1594651859000
 - [x] `webull   ` GET    /market-data/crypto/snapshots/list
 - [x] `webull   ` GET    /market-data/stocks/snapshots/list
 
-#### Phase 7 · Candles (6)
+#### Phase 7 · Candles (6) — **complete**
 
 **The `Types.Candle` migration is only done on Schwab.** 2.10 built the type and moved
 Schwab onto it, because Schwab was where the `price: close` defect was found. It did not
@@ -1072,25 +1072,25 @@ lifecycle). Coinbase and Gemini are migrated as their boxes below are ticked; a 
 candle box is not done until it returns `Types.Candle` with `:opened_at`.
 
 - [x] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}/candles
-- [ ] `coinbase ` GET    /api/v3/brokerage/products/{product_id}/candles
+- [x] `coinbase ` GET    /api/v3/brokerage/products/{product_id}/candles
 - [x] `gemini   ` GET    /v2/candles/BTCUSD/15m
-- [ ] `gemini   ` GET    /v2/derivatives/candles/BTCGUSDPERP/1m
+- [x] `gemini   ` GET    /v2/derivatives/candles/BTCGUSDPERP/1m
 - [x] `webull   ` GET    /market-data/crypto/bars/list
-- [ ] `webull   ` POST   /market-data/stocks/bars/list
+- [x] `webull   ` POST   /market-data/stocks/bars/list
 
 #### Phase 8 · Instruments and search (11)
 
 - [x] `coinbase ` GET    /api/v3/brokerage/market/products
-- [ ] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}
-- [ ] `coinbase ` GET    /api/v3/brokerage/products
-- [ ] `coinbase ` GET    /api/v3/brokerage/products/{product_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/market/products/{product_id}
+- [x] `coinbase ` GET    /api/v3/brokerage/products
+- [x] `coinbase ` GET    /api/v3/brokerage/products/{product_id}
 - [ ] `gemini   ` GET    /v1/feepromos
 - [x] `gemini   ` GET    /v1/symbols
 - [ ] `gemini   ` GET    /v1/wrap/:symbol
 - [ ] `gemini   ` GET    /v2/network/USDC
 - [ ] `gemini   ` GET    /v2/networks/
 - [x] `webull   ` GET    /trading/instruments/crypto/profiles/list
-- [ ] `webull   ` GET    /trading/instruments/stocks/profiles/list
+- [x] `webull   ` GET    /trading/instruments/stocks/profiles/list
 
 #### Phase 9 · Money movement (18)
 
