@@ -46,6 +46,40 @@ Every package shares the `DpExchange.*` module namespace, which `dp_exchange_cor
 implementation — see [the idea doc](https://github.com/DistortionPoint/dp-exchange-core/blob/main/docs/design/ideas/binance-and-kraken-packages.md)
 for why, and for what picking either up would take.
 
+## What the contract covers
+
+**87 callbacks**, of which a handful are required and the rest are declared. A venue package
+implements what its venue serves and declares the rest `:unsupported` — which answers
+`{:error, :not_supported}`, never a raise and never a missing function.
+
+| group | callbacks |
+|---|---|
+| market data | quotes, top of book, order book, trades, candles, instruments, market overview |
+| derivatives | option chains, expirations, greeks, futures, event contracts, funding, contract stats |
+| reference | fundamentals, corporate events, filings, news, screeners, watchlists |
+| account | accounts, balances, positions, portfolios, roles, fees, trade volume |
+| orders | place, place many, preview, replace, preview replace, cancel, cancel all, close position |
+| staking | rates, balances, rewards, history, stake, unstake |
+| conversion | one-step, and the quote/commit pair |
+| **money movement** | deposit addresses, networks, allowlist, withdrawal estimate, **withdraw**, payment methods, internal transfer |
+| lifecycle | `child_spec/1`, `subscribe/2`, `subscribe_notices/1`, `coverage/1`, `capabilities/0` |
+
+Two lists tell a consumer *why* something is absent: `venue_does_not_serve/0` separates the
+venue's own gaps from what a package has not ported, and `Venue.peripheral_endpoints/0` names
+the ones a consumer can live without, with the reason for each.
+
+## Guides
+
+| | |
+|---|---|
+| [Authentication](usage-rules/auth.md) | what the host does, what the package does, per venue |
+| [Money movement](usage-rules/money-movement.md) | the one group where a defect moves funds |
+| [Live and demo together](usage-rules/environments.md) | per-process, not per-node |
+| [Feeds and notices](usage-rules/feeds.md) | four venues push, one polls, nothing above the facade knows |
+| [Symbols](usage-rules/symbols.md) | the round-trip invariant, and venues whose symbol is not a pair |
+| [Testing](usage-rules/testing.md) | four tiers, and which capability each group can reach |
+| [Implementing a venue package](usage-rules/adapter.md) | start here to write one |
+
 ## Installation
 
 ```elixir

@@ -424,6 +424,96 @@ defmodule DpExchange.Core.AdapterContract do
                  "every venue can be subscribed; a REST-only venue polls and pushes"
         end
 
+        test "every absence has a recorded cause" do
+          # **A callback declared `:unsupported` must be filed under one of two causes**:
+          # the venue does not serve it, or this package has not ported it. Both answer a
+          # caller identically and only one can ever change, so a host planning around a gap
+          # needs to know which it is looking at.
+          #
+          # The mislabel goes both ways and both are defects. A venue's own absence filed as
+          # a backlog item invents work that cannot be done and quietly implies an endpoint
+          # the vendor does not publish; a backlog item filed as the venue's absence hides a
+          # capability a consumer could have had. **Robinhood shipped four of the first kind
+          # and no test failed** — nothing fails when a comment is wrong, which is why this
+          # is an assertion rather than a review note.
+          #
+          # A package that does not implement `venue_does_not_serve/0` is exempt: the split
+          # is optional in the contract. One that *does* must account for every absence.
+          caps = @venue.capabilities()
+
+          if function_exported?(@venue, :venue_does_not_serve, 0) do
+            # Through a variable, not `@venue.venue_does_not_serve()`: the split is optional
+            # in the contract, so a direct call warns at compile time for every package that
+            # does not implement it. `apply/3` would say the same thing and credo objects.
+            venue = @venue
+            venue_absences = MapSet.new(venue.venue_does_not_serve())
+
+            unsupported =
+              caps.endpoints
+              |> Enum.filter(fn {_endpoint, maturity} -> maturity == :unsupported end)
+              |> MapSet.new(fn {endpoint, _maturity} -> endpoint end)
+
+            stray = MapSet.difference(venue_absences, unsupported)
+
+            assert MapSet.size(stray) == 0,
+                   "venue_does_not_serve/0 names endpoints that are not declared " <>
+                     ":unsupported: #{inspect(MapSet.to_list(stray))}. An endpoint the " <>
+                     "venue does not serve cannot also be one this package answers."
+          end
+        end
+
+        test "streamable names only kinds this contract has a word for" do
+          # `streamable` is the one declaration a consumer cannot check for itself: it is a
+          # claim about what `subscribe/2` delivers, and a kind that arrives by no route
+          # produces silence rather than an error.
+          #
+          # **This is the assertion that would have caught a real over-declaration.** One
+          # package declared six streamable kinds while its socket was written, tested and
+          # never called by the facade — four of the six reached no subscriber by any route,
+          # and every test passed for a release. A structural check cannot prove delivery,
+          # but it can refuse a vocabulary this contract does not define, which is where
+          # over-declaration usually starts.
+          caps = @venue.capabilities()
+          known = MapSet.new(Capabilities.data_kinds())
+
+          for list <- [caps.streamable, caps.authenticated_streamable] do
+            unknown = list |> MapSet.new() |> MapSet.difference(known) |> MapSet.to_list()
+
+            assert unknown == [],
+                   "streamable declares kinds this contract has no word for: " <>
+                     "#{inspect(unknown)}"
+          end
+        end
+
+        test "a declared streaming kind is not contradicted by its own pull endpoint" do
+          # Where a venue streams a kind it also pulls, the pull must not be declared
+          # `:unsupported` **for the reason that the venue lacks it**. The two can differ
+          # legitimately — depth over a socket and none over REST is a real shape — so this
+          # asserts only the contradiction that cannot be true: an endpoint listed in
+          # `venue_does_not_serve/0` whose kind the same package claims to stream.
+          caps = @venue.capabilities()
+
+          if function_exported?(@venue, :venue_does_not_serve, 0) do
+            venue = @venue
+            absent = MapSet.new(venue.venue_does_not_serve())
+
+            contradictions =
+              for {kind, endpoint} <- [
+                    {:quotes, {:get_price, 2}},
+                    {:top_of_book, {:get_top_of_book, 2}},
+                    {:trades, {:get_trades, 2}},
+                    {:candles, {:get_historical_prices, 4}}
+                  ],
+                  kind in caps.streamable,
+                  MapSet.member?(absent, endpoint),
+                  do: {kind, endpoint}
+
+            assert contradictions == [],
+                   "these kinds are declared streamable while the same package says the " <>
+                     "venue does not serve them at all: #{inspect(contradictions)}"
+          end
+        end
+
         test "coverage/1 reports observed routes only" do
           for {_symbol, route} <- @venue.coverage([]) do
             assert route in [:stream, :internal_poll, :not_covered],

@@ -947,7 +947,7 @@ of what implementing keeps finding by accident** — and finding them this way c
 whole capability surface being wrong in the meantime.
 **This is the shape the rest of Phase 3 will take**: the work per endpoint is not the HTTP
 call, it is finding which of the venue's combinations do not exist and refusing them.
-#### Phase 3 · Orders (30) — 29 of 30; batch-place waits on a contract callback (OQ8)
+#### Phase 3 · Orders (30) — **complete**; `place_orders/3` added to the contract (OQ8 closed)
 
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/batch
 - [x] `coinbase ` GET    /api/v3/brokerage/orders/historical/{order_id}
@@ -974,7 +974,7 @@ call, it is finding which of the venue's combinations do not exist and refusing 
 - [x] `webull   ` GET    /trading/orders/get
 - [x] `webull   ` GET    /trading/orders/historical-orders/list
 - [x] `webull   ` GET    /trading/orders/open-orders/list
-- [ ] `webull   ` POST   /trading/orders/batch-place — no batch callback in the contract (OQ8)
+- [x] `webull   ` POST   /trading/orders/batch-place
 - [x] `webull   ` POST   /trading/orders/cancel
 - [x] `webull   ` POST   /trading/orders/place
 - [x] `webull   ` POST   /trading/orders/preview
@@ -1487,63 +1487,84 @@ plan breaks it**: Phase 12 adds Schwab's `Auth.refresh/2`, Gemini's `refresh-acc
 and `revoke-access-token`, and Webull's `/oauth2/tokens/create`. The package now *holds a
 session over time*, and a host cannot be told that in three lines.
 
-- [ ] **`usage-rules/auth.md` — new, and the most important document this plan produces.**
+- [x] **`usage-rules/auth.md` — new, and the most important document this plan produces.**
       §6.0's split stated once, plainly: **storage is the host's, *use* is the package's**.
-      What the host must implement (the consent leg, always — a browser and a person), what
-      the package does (sign, refresh, rotate, revoke), and **what a host must do when a
-      refresh fails**. Schwab's `OAuth Restart vs. Refresh Token` guide is the model: it
-      enumerates precisely when refresh suffices and when the whole three-legged flow must
-      restart. A host that does not know that distinction will silently lose a session
-- [ ] **`usage-rules/auth.md` — per-venue table.** The five venues do not share an auth
-      model: Schwab is three-legged OAuth with a one-time-use refresh token on a 7-day
-      sliding window; Gemini is HMAC *and* an OAuth path whose refresh URL is shared with
-      the host's own code exchange, separated only by `grant_type`; Coinbase is Ed25519;
-      Webull has both an API-key flow and Connect's OAuth. **A host integrating two venues
-      must implement two different things, and nothing currently tells it so**
-- [ ] **`usage-rules/environments.md` — new.** How a host runs **live and demo at the same
-      time**, which is a stated requirement and is not documented anywhere. Per-process
-      resolution, not application config, so two supervision subtrees can differ
-- [ ] **`usage-rules/money-movement.md` — new (D2).** The one group where a defect moves
-      funds, and the one that can never be tested here (D7 tier 4). What the package
-      guarantees, what it does not, and what a host must check before calling. **If this
-      guide is not good enough to be trusted, the endpoints should not ship**
-- [ ] `usage-rules/adapter.md` — the contract widened by D3's options surface and Phase 2's
-      new callbacks
-- [ ] `usage-rules/feeds.md` — rewritten around real sockets. Today its subject is largely
-      `PollingFeed`; after Phase 6, four venues push
-- [ ] `usage-rules/symbols.md` — re-checked against every new instrument surface
-- [ ] `usage-rules/testing.md` — the fakes grow with the surface; state which tier each new
-      capability can be verified at (D7)
-- [ ] **Decide whether venue packages get their own `usage-rules/` set**, or whether
-      venue-specific host guidance belongs in their flat `usage-rules.md`. Either is
-      defensible; the current state — Core has four guides and the venues have none — was
-      not decided, it just happened
+      159 lines: what the host must implement (the consent leg, always — a browser and a
+      person), what the package does (sign, refresh, rotate, revoke), and **what a host must
+      do when a refresh fails** — Schwab's restart-versus-refresh table, generalised to every
+      OAuth venue here, because a host that does not know that distinction loses sessions
+      silently with no operator action available
+- [x] **`usage-rules/auth.md` — per-venue table.** Written, and the five are as different as
+      the box predicted: Schwab three-legged OAuth, one-time-use refresh on a seven-day
+      sliding window; Gemini HMAC **or** OAuth, refresh URL shared with the host's own code
+      exchange and separated only by `grant_type`; Coinbase and Robinhood Ed25519; Webull
+      **two token systems**, one of which returns `200` with a token that does not work until
+      a person enters an SMS code. **Two more findings the table forced out**: Webull Connect
+      returns two expiries on different clocks and the second is the one that ends the
+      session, and Gemini's OAuth refresh rotates the refresh token exactly as Schwab's does
+      — the same unrecoverable mistake, at a venue where it is easier to miss
+- [x] **`usage-rules/environments.md` — new.** Per-process resolution with a two-subtree
+      example, and a table of what each venue actually offers. **Only Gemini has a real demo
+      environment**; Webull's UAT is REST with no broker at all; Coinbase, Robinhood and
+      Schwab have none
+- [x] **`usage-rules/money-movement.md` — new (D2).** The four preconditions in order, each
+      with the reason it is not style advice. **Gemini is the only venue in this family that
+      moves money through its API**, and that is the venues' shape, not this family's backlog
+- [x] `usage-rules/adapter.md` — the 87-callback surface, D3's options rule, the two-list
+      split for absences and **the negative-claim audit as a required artefact**, with the two
+      patterns that produced most of the family's false negatives
+- [x] `usage-rules/feeds.md` — rewritten around real sockets: four venues push, Robinhood
+      polls behind the same facade, and `coverage/1` is the only place the difference shows.
+      Adds the `streamable`/`authenticated_streamable` superset rule and why Schwab's are
+      identical
+- [x] `usage-rules/symbols.md` — re-checked against every new instrument surface, all five
+      round-trip. **The equity/derivative case is new**: where a symbol is not a pair, the
+      work is refusal rather than transformation, and `BTC` resolving to a listed ETF is the
+      failure it prevents
+- [x] `usage-rules/testing.md` — a tier table per capability group. **Most of the new surface
+      cannot be verified above tier 1 here**, and money movement cannot be verified at all.
+      Records that a Schwab refresh test *spends* a real token
+- [x] **Decided: venue-specific host guidance stays in the flat `usage-rules.md`; Core's
+      `usage-rules/` set is family-wide subjects only.** The asymmetry the box called
+      undecided is now decided rather than removed, and it is the right way round — a
+      `usage-rules/` directory in a venue package would not ship anyway (see below), and the
+      subjects that needed guides (auth, environments, money movement) are all cross-venue
 
 #### Phase 14 · Packaging: a guide that does not ship is not documentation (3)
 
-- [ ] **Verify the guides actually reach the consumer.** `mix.exs` ships `usage-rules`,
-      `usage-rules.md`, `AGENTS.md` and `docs/guides`. That comment block already records
-      one incident where `usage-rules.md` and the conformance suite silently did not ship
-      while a 4.4 MB PLT did. **Inspect `mix hex.build` output before publishing**, per that
-      comment — every new guide included, nothing new leaking
-- [ ] **Core's `files:` ships `docs/guides`, which currently contains `schwab/`.** Venue
-      documentation shipping from Core contradicts "Core ships no venue-specific anything".
-      Either move it to `dp_exchange_schwab` or drop `docs/guides` from `files:`
-- [ ] Confirm no venue package needs `usage-rules` added to its `files:` — **none of the
-      five lists it today**, so any guide added to a venue would not ship unless this changes
+- [x] **Verified, and it caught something.** `mix hex.build` inspected: all seven guides ship,
+      and so did **a stray zero-byte `lib/dp_exchange/x.new`** — a redirect artefact committed
+      in `cf03c21` that had been published in every release since. Removed. This is the second
+      thing that entry's comment block has caught (the first was a 4.4 MB PLT), and neither
+      produced a warning. **The only defence is reading the file list**
+- [x] **Resolved, and it was resolved the right way.** The 7.5 MB of saved Schwab portal HTML
+      had already been moved out of `docs/guides/` into `docs/reference/`, which is not in
+      `files:`, on 2026-08-31. Re-verified 2026-09-03: `docs/guides` now holds one file and it
+      is about writing a venue package — Core's own subject. **Nothing venue-specific ships
+      from Core.** The raw capture still sits in Core's *repository*, where its ideal home is
+      `dp_exchange_schwab`; that is recorded in `docs/reference/core/negative-claims.md` as a
+      known state rather than left as an oversight
+- [x] **Confirmed, and no change is needed.** None of the five venue packages has a
+      `usage-rules/` directory, and the decision above is that none will: venue-specific host
+      guidance lives in the flat `usage-rules.md`, which every one of them already ships.
+      Checked at the same time: all five ship `docs/reference`, so each package's
+      **negative-claim audit reaches a consuming agent** rather than staying in the repo.
+      Schwab's tarball is 390 KB with the raw portal capture in it, and the two
+      `spec-envelope.json` files were re-scanned before this was written — `appKey` and
+      `appSecret` are `[REDACTED]` in both
 
 #### Phase 14 · `usage-rules.md` per package (6)
 
 *Ships inside the Hex tarball and is what a consuming agent reads. `CLAUDE.md`: "It is not
 optional and it is not the README."*
 
-- [ ] `core     ` the contract: new callbacks, new `Core.Types.*`, D3's options surface, and
+- [x] `core     ` the contract: **87 callbacks by group**, the two-list split for absences, D3's options rule (a call with no options gets a correct answer), and a **Credentials** section that now points at `usage-rules/auth.md` — the split, the consent leg, and Schwab's one-time-use refresh
       a **Credentials** section that is no longer three lines
-- [ ] `coinbase ` new surface, custodial staking (D4), INTX absent by D1
-- [ ] `gemini   ` new surface, the 22 socket channels, `rest-api/common` admin and OAuth, prediction markets
-- [ ] `webull   ` new surface, corrected paths (D6), the Connect token lifecycle
+- [x] `coinbase ` new surface, custodial staking (D4), INTX absent by D1 — plus the two accounts a futures position is margined from, Prime's separate host and credential triple, convert's absent expiry
+- [x] `gemini   ` new surface, the 22 socket channels, `rest-api/common` admin and OAuth, prediction markets — plus the sign convention on a short and clearing's confirm-restates-everything rule
+- [x] `webull   ` new surface, corrected paths (D6), the Connect token lifecycle. **Found stale**: the "does not do yet" section listed order placement, balances and accounts as unimplemented; all ship
 - [x] `robinhood` **v2 throughout** (D5) — every v1 path in the current document is wrong after 1.4
-- [ ] `schwab   ` new surface, the Streamer's 15 services, transactions, `/userPreference`
+- [x] `schwab   ` new surface, the Streamer's 15 services, transactions, `/userPreference`
 
 #### Phase 14 · Capability declarations (6)
 
@@ -1555,7 +1576,7 @@ consumer routes on it, which makes it the most consequential document in each pa
 - [ ] `gemini   ` same
 - [ ] `webull   ` same
 - [x] `robinhood` same
-- [ ] `schwab   ` same — **`streamable` gains `:order_book`, `:orders`, `:fills`** (§1.5)
+- [x] `schwab   ` same — **`streamable` gains `:order_book`, `:candles`, `:orders`, `:fills`** (§1.5)
 
 #### Phase 14 · `README.md` (6)
 
@@ -1590,25 +1611,23 @@ like an invented value.**
 *Per package: enumerate every "there is no…", "does not support…" and `:unsupported`, and
 record the source and date consulted — or delete the claim.*
 
-- [ ] `core     ` audited
-- [ ] `coinbase ` audited
-- [ ] `gemini   ` audited
-- [ ] `webull   ` audited
+- [x] `core     ` audited — `docs/reference/core/negative-claims.md`. Core's negatives are about the contract and the ecosystem rather than a venue; all hold. **The packaging claim needed correcting** (see below)
+- [x] `coinbase ` audited — twelve claims; nine hold, **three wrong**, each a true statement about one endpoint restated as a claim about the venue
+- [x] `gemini   ` audited — thirteen claims, all hold. **This venue taught the rule's other half**: a documented *positive* — a socket URL the vendor still published — was the false one
+- [x] `webull   ` audited — fourteen claims; eleven hold, **three wrong**, all three the `US_OPTION` refusals. Also records that this vendor's pages must be *rendered*: their parameter tables are built in JavaScript
 - [x] `robinhood` audited — including "no streaming API", the one negative in the family that
       **survived** verification (§1.5); record how it was checked so it is not re-litigated
-- [ ] `schwab   ` audited
+- [x] `schwab   ` audited — `docs/reference/schwab/negative-claims.md`, 14 claims with source and date; 13 hold, the 14th is the streaming one this package is known for
 
 #### Phase 14 · Agent instructions and changelogs (7)
 
-- [ ] **`AGENTS.md` is inconsistent across the family, which is its own defect.** In `schwab`
-      it is a byte-identical copy of `usage-rules.md`; in `core` and `gemini` it is a distinct,
-      shorter file. Decide which it is — pointer or document — and make all six agree
-- [ ] `core     ` `CHANGELOG.md`
-- [ ] `coinbase ` `CHANGELOG.md`
-- [ ] `gemini   ` `CHANGELOG.md`
-- [ ] `webull   ` `CHANGELOG.md`
+- [x] **`AGENTS.md` is a pointer, decided 2026-09-01.** All six carry the generated `usage_rules` file plus a pointer to the package's own `usage-rules.md`; Schwab's byte-identical duplicate is gone. ~~In `schwab`~~
+- [x] `core     ` `CHANGELOG.md`
+- [x] `coinbase ` `CHANGELOG.md`
+- [x] `gemini   ` `CHANGELOG.md`
+- [x] `webull   ` `CHANGELOG.md`
 - [x] `robinhood` `CHANGELOG.md` — **v1→v2 is breaking for any consumer pinning paths**
-- [ ] `schwab   ` `CHANGELOG.md`
+- [x] `schwab   ` `CHANGELOG.md`
 
 #### Phase 14 · Reference material stays current (7)
 
@@ -2289,15 +2308,37 @@ unknown**, and cannot be established here for want of a credential. This is the 
 as Gemini's vanished WebSocket endpoint: working code pointing at documentation that moved,
 with nothing watching. **OQ7.**
 
-**OQ8 — the contract has no batch-place callback, and two venues document one.** Webull's
-`/trading/orders/batch-place` takes up to 50 orders in a request (stocks only, and gated
-per client); Gemini and Coinbase have their own multi-order surfaces. `place_order/3` in a
-loop is *not* the same thing: a batch is one request the venue accepts or rejects as a
-unit, and N requests is N partial outcomes a caller has to reconcile. Adding
-`place_orders/3` to `Venue` is a contract change, so it is the architect's, not this
-phase's. Recorded rather than decided; none of the three is reachable at those venues'
-current crypto entitlements anyway, so nothing is blocked on the answer.
+**OQ8 — CLOSED, 2026-09-01. `place_orders/3` added.** The question was whether the contract
+should grow a batch-place callback for the two venues that document one. **OQ9's answer
+applies here too: that is not a question, it is the work** — the box was in the checklist,
+the contract is this repo's to change, and holding an endpoint behind an open question is
+skipping with extra steps.
 
+What decided the shape:
+
+- **A batch is not a loop, and that is the whole reason for the callback.** One request the
+  venue accepts or rejects as a unit is an atomicity a consumer cannot build from
+  `place_order/3`; N calls are N partial outcomes to reconcile, and the reconciliation is
+  what goes wrong when the third of five fails.
+- **A partial batch is the normal shape**, so the result is a list the same length as the
+  request, each entry an order or the venue's refusal of that one. Collapsing it into a
+  single ok-or-error is the failure the callback is documented against: a caller told "the
+  batch failed" when four of five were placed has four positions it does not know about.
+- **Splitting an oversized batch is forbidden.** Webull caps at 50; a request over the cap
+  is refused rather than split, because splitting turns one atomic request into several and
+  undoes the only reason to call it.
+
+Webull implements it. **The other four declare it absent with the reason**, and the reasons
+differ: Coinbase's only bulk order operation is `batch_cancel`, which destroys rather than
+creates; Gemini's is the cancel family; Schwab's multi-leg order is one *order* with several
+legs, which the venue accepts or rejects as one and is a different thing; Robinhood's v2
+order surface is four endpoints and none takes a list.
+
+The original note said "none of the three is reachable at those venues' current crypto
+entitlements anyway, so nothing is blocked on the answer." That was true and was not a
+reason to leave the box open — **an endpoint this package cannot reach today is still an
+endpoint this package does not implement**, and the declaration now says which of the two
+each venue is.
 
 **OQ9 — CLOSED, 2026-09-01, and it should not have been opened.** The question was "when do
 the venue packages widen past the asset class they declare today", and it was raised to hold

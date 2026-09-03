@@ -160,9 +160,65 @@ message that would have stopped them vanished with a restarting process.
 Passed as arguments, per call. A package never reads them from a vault, an environment
 variable or your config, and never stores them. Notices never carry them.
 
+**Storage is yours; *use* is the package's.** Signing, session refresh, token rotation and
+revocation happen inside a venue package — a package that only signed, and handed you an
+expired token back twice an hour, would be unusable for anything unattended. The consent leg
+— a browser, a login page, a person — is always yours, at every venue in this family.
+
+The five venues do not share an auth model, and integrating two of them means implementing
+two different things. **Read [Authentication](usage-rules/auth.md) before writing any of it**;
+in particular the Schwab section, because its refresh token is one-time use and losing the
+rotated value is unrecoverable without a person.
+
+## The contract is 87 callbacks, and a package implements what its venue serves
+
+`Venue.required_callbacks/0` is what the compiler enforces. Everything else is optional, and
+an unimplemented callback **exists and returns `{:error, :not_supported}`** — never a raise,
+never a missing function.
+
+Two things a consumer should read rather than infer:
+
+- **`venue_does_not_serve/0`** splits the `:unsupported` list in two: what the venue does not
+  serve, and what this package has not ported. Both answer identically; only the second can
+  ever change. A host planning around a gap needs to know which it is looking at.
+- **`Venue.peripheral_endpoints/0`** names the endpoints a consumer can live without, with the
+  reason for each. It is the difference between a gap that costs you a feature and one that
+  costs you the migration.
+
+**`asset_classes` is a statement about a package today, never a permanent scope boundary.**
+A venue package serving crypto today may serve options tomorrow, and the only test of scope
+is whether the venue provides it.
+
+## Options in `opts` are the venue's own vocabulary
+
+Callbacks take `keyword()`, and packages read venue-specific keys from it — `category:` on
+Webull, `portfolio:` on Coinbase, `account_number:` on Robinhood. One rule keeps that from
+becoming the coupling this contract removes:
+
+**A call that passes no options gets a correct answer.** Options select among things a venue
+offers; they never carry something the call cannot work without. Where a venue genuinely
+requires a parameter this contract has no word for, the package refuses **locally and by
+name** rather than sending a request the venue will reject less clearly.
+
+An option a package does not recognise is ignored, not an error — a consumer moving between
+venues carries options only one of them reads.
+
+## Money movement is its own subject
+
+One group of callbacks moves funds, one of them cannot be undone by anyone, and none of it is
+ever tested in this family — it is answered in production, with real money.
+
+**Read [Money movement](usage-rules/money-movement.md) before calling any of it.** Its
+preconditions are not style advice: the network is required and never defaulted because
+funds sent to an address on a chain the venue does not credit are gone, and
+`memo_required: nil` means *the venue did not say* rather than *no memo is needed*.
+
 ## Detailed guides
 
-- [Implementing a venue package](usage-rules/adapter.md)
+- [Implementing a venue package](usage-rules/adapter.md) — writing one
+- [Authentication](usage-rules/auth.md) — what you do, what the package does, per venue
+- [Running live and demo at the same time](usage-rules/environments.md)
+- [Money movement](usage-rules/money-movement.md) — the group where a defect moves funds
 - [Symbols and the round-trip invariant](usage-rules/symbols.md)
 - [Feeds, subscriptions and notices](usage-rules/feeds.md)
 - [Testing, fakes and isolation](usage-rules/testing.md)

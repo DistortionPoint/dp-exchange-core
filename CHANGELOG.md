@@ -23,6 +23,82 @@ an acceptable changelog line.
 
 ### Added
 
+- **The conformance suite now asserts coverage rather than accepting it as a claim** (O4).
+  Three new assertions, and the one worth naming exists because the drift it hunts had just
+  happened: a venue package declared six streamable kinds while its socket was written,
+  tested and **never called by the facade**. Four of the six reached no subscriber by any
+  route, and every test passed for a release — the socket's own tests exercise its callbacks
+  directly, and nothing asked what a consumer receives.
+
+  - **Every absence has a recorded cause.** An endpoint named in `venue_does_not_serve/0`
+    must actually be declared `:unsupported`. The mislabel goes both ways and both are
+    defects: a venue's own absence filed as a backlog item invents work that cannot be done,
+    and a backlog item filed as the venue's absence hides a capability a consumer could have
+    had. **Robinhood shipped four of the first kind and no test failed** — nothing fails when
+    a comment is wrong.
+  - **`streamable` names only kinds this contract has a word for.** A structural check cannot
+    prove delivery, but it can refuse a vocabulary the contract does not define, which is
+    where over-declaration usually starts.
+  - **A streamed kind is not contradicted by its own package.** A kind declared streamable
+    while the same package's `venue_does_not_serve/0` says the venue has no such data at all
+    is a contradiction that cannot be true in either direction.
+
+  All five venue packages pass the three today; they were run against each before this
+  landed.
+
+### Fixed
+
+- **A stray zero-byte `lib/dp_exchange/x.new` was shipping in the tarball.** It arrived as a
+  redirect artefact in `cf03c21` and had been published in every release since. Found by
+  doing what `mix.exs`'s own comment block says to do — inspecting `mix hex.build` output
+  before publishing — which is the same check that caught the 4.4 MB PLT. Nothing warns about
+  either; the only defence is reading the file list.
+
+### Documentation
+
+- **Three new guides, and the first is the one this plan most needed.**
+  `usage-rules/auth.md` states the split once, plainly — **storage is the host's, *use* is
+  the package's** — and then does the thing nothing in the family did: **a per-venue table**.
+  Schwab is three-legged OAuth with a one-time-use refresh token on a seven-day sliding
+  window; Gemini is HMAC *or* OAuth, sharing a refresh URL with the host's own code exchange
+  and separated only by `grant_type`; Coinbase and Robinhood are Ed25519; Webull has two
+  token systems, one of which returns `200` with a token that does not work until a person
+  enters an SMS code.
+
+  A host integrating two venues implements two different things, and until now nothing said
+  so. It also carries the **restart-versus-refresh** decision table: a host that does not
+  know that distinction loses sessions silently and has no operator action available.
+
+- **`usage-rules/money-movement.md`** — the group where a defect moves funds, and the only
+  one that can never be tested here. Preconditions in order, with the reason each is not
+  style advice: the network is required and never defaulted because funds sent to a chain the
+  venue does not credit are gone; `memo_required: nil` means the venue did not say, not that
+  no memo is needed; a retry without an idempotency key withdraws twice, which is why this
+  family always sends one rather than waiting to be asked.
+
+- **`usage-rules/environments.md`** — running live and demo in one supervision tree, resolved
+  **per process** rather than per node. Records what each venue actually offers: Gemini's demo
+  is a full exchange with test funds, Webull's UAT has REST and **no broker at all**, and the
+  other three have nothing.
+
+- **The four existing guides are rewritten around the surface that shipped.** `feeds.md` now
+  covers four pushing venues and one polling behind the same facade; `symbols.md` covers
+  venues whose symbol is not a pair, where the work is refusal rather than transformation;
+  `testing.md` states which of the four tiers each capability group can actually reach, and
+  which cannot be reached at all; `adapter.md` covers the options surface, the two-list split
+  for absences, and the negative-claim audit as a required artefact.
+
+- **`docs/reference/core/negative-claims.md`** — Core's negatives are about the contract and
+  the ecosystem rather than a venue, and they are audited the same way. Every one holds. The
+  packaging claim needed correcting: 7.5 MB of saved Schwab portal HTML sat in `docs/guides/`,
+  which **is** in `files:`, and would have published inside a package whose whole premise is
+  that it ships nothing venue-specific.
+
+- **`README.md` states what the contract covers** — 87 callbacks by group — and indexes the
+  seven guides. `AGENTS.md` points at them.
+
+### Added
+
 - **`place_orders/3`** — several orders in one request, which closes OQ8.
 
   **It is not `place_order/3` in a loop.** A batch is one request the venue accepts or

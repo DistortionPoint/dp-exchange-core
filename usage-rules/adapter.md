@@ -98,3 +98,78 @@ reason about.
 Where a moduledoc explains *why* a guard exists, that explanation is the most valuable
 thing in the file. Carry it when the code moves or is copied. A guard without its reason
 reads as defensive padding, and the next person tidying up deletes it.
+
+## The surface is 87 callbacks, and almost all of them are optional
+
+`Venue.required_callbacks/0` is the list the compiler enforces; everything else is declared
+`:unsupported` and answers `{:error, :not_supported}`. **A new package does not implement 87
+functions.** It implements what its venue serves and declares the rest — which is exactly the
+work, because the declaring is where the thinking is.
+
+`Venue.peripheral_endpoints/0` names the ones a consumer can live without, with the reason
+for each. It is what tells a package author which absences are survivable and which will
+cost a consumer the migration.
+
+## Options: `opts` is the venue's own vocabulary, and that is deliberate
+
+The facade takes `keyword()` on nearly every callback, and packages read venue-specific keys
+out of it — `category:` on Webull, `portfolio:` on Coinbase, `account_number:` on Robinhood.
+That looks like the coupling this family exists to remove, and it is not, because of one
+rule:
+
+**A caller that passes no options must get a correct answer.** Options select among things
+the venue offers; they never carry something the call cannot work without. Where a venue
+genuinely requires a parameter this contract has no word for — Robinhood v2's account number
+— the package refuses **locally**, by name, rather than sending a request the venue will
+reject with something less specific.
+
+Two things follow that are worth stating because they are easy to get backwards:
+
+- **Never route on an option the caller did not pass.** Webull's five categories are five
+  separate endpoints with five different parameter sets; guessing which one a caller meant
+  produces a plausible answer from the wrong market.
+- **An option this package does not recognise is ignored, not an error.** A consumer moving
+  between venues carries options that only one of them reads, and refusing them would make
+  the uniform facade unusable for the thing it is for.
+
+## Asset classes are a statement about today
+
+`asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,
+`:future`, `:event_contract`. It is never a permanent scope boundary, and it must never be
+used to justify not implementing something: "this venue's options endpoints are out of scope
+because we declared crypto" is the argument in its wrong form, and it has been made in this
+family and was wrong.
+
+The only test of scope is **does the venue provide it**.
+
+## Two lists, not one: absence has two causes
+
+Split your `:unsupported` endpoints into what the venue does not serve and what this package
+has not ported, and expose the first through `venue_does_not_serve/0`.
+
+Both answer a caller identically. Only one of them can ever change, and a host planning
+around a gap needs to know which it is looking at.
+
+**The mislabel goes both ways, and both are defects.** A venue's absence filed as a backlog
+item invents work that cannot be done and quietly implies an endpoint the vendor does not
+publish. A backlog item filed as the venue's absence hides a capability a consumer could
+have had. Robinhood shipped four of the first kind and they were found by auditing, not by
+tests — nothing fails when a comment is wrong.
+
+## Every negative gets an audit
+
+Write `docs/reference/<venue>/negative-claims.md`, tabulating every place your package says
+the venue *does not* do something, with the source and the date you consulted it.
+
+**An unverified negative is a substitution exactly like an invented value.** "The venue has
+no order book" and "we never looked" produce the same `{:error, :not_supported}`, and only
+one of them is true. Across five venues this audit found **nine false negatives** — every one
+of them a working endpoint a consumer was being refused.
+
+Two patterns produced most of them:
+
+- **A true statement about one endpoint restated as a claim about the venue.** "The stock
+  snapshot does not serve options" is correct; "this venue does not serve options" is not.
+- **A derived artefact read instead of the vendor.** A claim originating in the host
+  application's own adapter, or in a third-party wrapper's README, carried forward until
+  somebody read the vendor's pages.

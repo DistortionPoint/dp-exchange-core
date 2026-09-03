@@ -111,3 +111,65 @@ Three things worth stating because they have each cost a debugging session here:
 - **Synchronise on events, not on elapsed time.** A `Process.sleep/1` before an assertion
   races whatever it is waiting for. Widening the sleep converts a visible flake into a slow
   one.
+
+## Which tier each capability group can actually be verified at
+
+The surface grew to 87 callbacks. **Most of the new ones cannot be verified above tier 1
+here, and saying which is which is the point of this table** — a group that CI cannot reach
+is a group whose correctness rests on the reference documentation and a consumer's
+production use, and a package author should know that before shipping it.
+
+| capability group | highest tier reachable | why |
+|---|---|---|
+| quotes, book, candles, instruments | **2** — live public endpoints | public on every venue but Robinhood and Schwab, which need a credential for everything |
+| options chains, expirations, greeks | **2** on Webull and Schwab | public where the venue publishes them |
+| fundamentals, screeners, news | **2** on Webull | public |
+| accounts, balances, positions, fills | **3** — authenticated, read-only | needs credentials this repo must never hold |
+| order placement and cancellation | **3 on Gemini only** | its demo environment is a full exchange with test funds |
+| order placement everywhere else | **4** | no sandbox exists; the first real call is a real order |
+| staking, custody (Coinbase Prime) | **3**, institutional credentials only | nobody in this project holds them |
+| **money movement** | **4 — never a test** | answered in production by a consumer with real funds; see `usage-rules/money-movement.md` |
+| token refresh and rotation | **3** | needs a live grant, and Schwab's refresh is one-time-use so a test spends it |
+
+**Gemini's demo environment is the one place this changes.** Order placement, cancellation
+and balances move from tier 4 to tier 3 there — real venue machinery, fake money — which is
+why the authenticated endpoints exist in that package at all. See
+`usage-rules/environments.md`.
+
+## A refresh test spends a real token
+
+Schwab's refresh token is one-time use and every refresh mints a replacement. **A test that
+calls `Auth.refresh/2` against the live venue consumes the credential it was given** and
+returns a new one that must be persisted or the account is lost until a person logs in
+again.
+
+So the refresh path is tested at tier 1 against a fake token endpoint, and the tier-3
+version is run by hand, once, by someone holding the credential and ready to write the result
+down. That is not a gap in the suite — it is the honest cost of an at-most-once operation,
+and it is why `refresh/2` forces retries off rather than trusting a test to remember.
+
+## Fakes grow with the surface, and a stale fake is worse than a missing one
+
+Every callback a package implements needs a fake clause. A fake that has not kept up answers
+`{:error, :not_supported}` for something the real adapter now serves — which is **the
+false-negative defect, reproduced inside the test suite**, and it will make a correct
+implementation look broken.
+
+Two rules that fall out of that:
+
+- **Add the fake clause in the same change as the real one.** The conformance suite runs
+  against both, so a missing clause fails immediately; a *wrong* one does not.
+- **A fake never returns an empty success for something unsupported.** `{:ok, []}` for a
+  query it could not parse is the exact silent divergence this guide's thirteen bug reports
+  were mostly made of.
+
+## Coverage is a floor, not a finish line
+
+The threshold is 90 and CI enforces it. Two things it does not measure, both of which have
+bitten this family:
+
+- **A default-argument head counts as a line.** An unused `\\ []` head is counted as missed
+  and can drop a package below the threshold while nothing is actually untested. Delete the
+  head rather than writing a test for it.
+- **Coverage says nothing about whether the fake resembles the venue.** Tier 1 proves your
+  code is self-consistent. Nothing below tier 3 proves it is right.

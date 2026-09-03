@@ -108,3 +108,66 @@ category is the **link**, not the wire beneath it — a venue streaming over MQT
 
 If you take one rule from this file, take that one. It is what `coverage/1` encodes, it is
 why notices are advisory, and it is the shape of nearly every incident behind this contract.
+
+## Four of the five venues push, and the fifth polls behind the same facade
+
+| venue | transport | `streamable` | `coverage/1` reports |
+|---|---|---|---|
+| Coinbase | WebSocket | `[:quotes]` | `:stream` |
+| Gemini | WebSocket, 22 channels | `[:quotes, :top_of_book]` | `:stream` |
+| Webull | **MQTT** | `[:quotes]` | `:stream` |
+| Schwab | WebSocket (Streamer) | `[:quotes, :top_of_book, :order_book, :candles, :orders, :fills]` | `:stream` |
+| Robinhood | **REST poll inside the package** | `[:quotes]` | `:internal_poll` |
+
+**Nothing above the facade branches on that column.** The one visible difference is the value
+`coverage/1` reports, which is a statement about *what is arriving*, never about how — and
+that is the whole design. `:stream` does not mean socket; Webull's `:stream` is an MQTT
+session, and it is nobody's business above the boundary.
+
+Do not build a poll on top of a package that reports `:internal_poll`. It already polls,
+paced against that venue's budget, and a second loop doubles the request count for no extra
+data.
+
+## `streamable` is not `authenticated_streamable`
+
+Two lists, and the second must be a **superset** of the first — `Capabilities.new/1` enforces
+it, because a kind that streams anonymously and not with a credential is not a thing a venue
+does.
+
+Schwab's are identical, and that is itself information: **there is no public market data
+there and no anonymous socket.** Its Streamer login is built from the OAuth session, so every
+kind in the list needs a credential and the two lists cannot differ.
+
+Where they *do* differ, the gap is what a credential buys you on the socket specifically —
+which is not always the same as what it buys on REST.
+
+## A recognised channel that this package does not deliver
+
+Gemini publishes 22 socket channels. Schwab's Streamer publishes services this package
+subscribes to and services it does not. **A package may decode a frame and deliver nothing**,
+and where it does, that is declared: `streamable` names the kinds that reach a subscriber,
+not the kinds the wire carries.
+
+This is the one place where "the socket is connected and healthy" and "you are receiving what
+you asked for" come apart, which is exactly what `coverage/1` exists to expose. Ask it.
+
+## A stream that refuses rather than falls back
+
+Webull's UAT environment has REST and **no broker at all** — `mqtt-uat.webullbroker.com` is
+NXDOMAIN. `subscribe/2` there **refuses**.
+
+It does not quietly connect to production, because a consumer testing against UAT while
+receiving production prices would be reading real market data believing it was fake. That is
+the substitution failure in its most dangerous form, and `Environment.streaming?/1` exists so
+a caller can ask before it commits.
+
+## Reconnection is the package's problem, and the notice is yours
+
+A dropped socket reconnects, resubscribes, and emits link notices along the way —
+`[:dp_exchange, :link, :up | :down | :reconnect_attempt]`. The category is the **link**, not
+the wire beneath it, so an MQTT venue has no "ws" to report.
+
+**What a reconnect cannot promise is that the gap was empty.** A venue that pushed a trade
+while the socket was down did not queue it for you. If a gap matters to your correctness,
+re-read the state through the pull endpoint after a `:up` notice — that is what makes the
+notice a prompt to re-read rather than a record.
