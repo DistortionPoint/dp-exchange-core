@@ -36,7 +36,7 @@ defmodule DpExchange.Core.Config do
 
   A `GenServer` runs in its own process and will not find the caller's dictionary at all,
   because it is not in the caller's `$callers` chain. **Resolve in the caller and put the
-  answer in the message** — `snapshot/2` on the way in, `resolve_snapshot/3` on the way
+  answer in the message** — `snapshot/1` on the way in, `resolve_snapshot/3` on the way
   out. Resolving inside the server is too late, and it fails in the direction that looks
   like it works: production is unaffected, so only the consumer's async suite breaks.
 

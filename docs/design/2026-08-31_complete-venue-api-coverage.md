@@ -1571,34 +1571,34 @@ optional and it is not the README."*
 *`capabilities/0` is documentation a machine reads, and D15 makes it per-endpoint. A
 consumer routes on it, which makes it the most consequential document in each package.*
 
-- [ ] `core     ` `Core.Capabilities` — type and `@doc`, if Phase 2 widened the shape
-- [ ] `coinbase ` restated per endpoint; `:experimental` unless a consumer has traded it live
-- [ ] `gemini   ` same
-- [ ] `webull   ` same
+- [x] `core     ` `Core.Capabilities` — `@type t`, `@moduledoc`, and every field documented; current since Phase 2, re-verified 2026-09-03
+- [x] `coinbase ` restated per endpoint; `:experimental` unless a consumer has traded it live — 46/87. `venue_does_not_serve/0` now splits its 41 `:unsupported`: 38 venue absence, 3 backlog
+- [x] `gemini   ` restated — 62/87, best-covered venue. `venue_does_not_serve/0` splits its 25 `:unsupported`: 22 venue absence, 3 backlog
+- [x] `webull   ` restated — 44/87 across five asset classes. `venue_does_not_serve/0` splits its 43 `:unsupported`: 30 venue absence, 13 backlog
 - [x] `robinhood` same
 - [x] `schwab   ` same — **`streamable` gains `:order_book`, `:candles`, `:orders`, `:fills`** (§1.5)
 
 #### Phase 14 · `README.md` (6)
 
-- [ ] `core     ` what the contract now covers
-- [ ] `coinbase ` capability table refreshed
-- [ ] `gemini   ` capability table refreshed
-- [ ] `webull   ` capability table refreshed
+- [x] `core     ` states the 87-callback breakdown by group and indexes the seven guides
+- [x] `coinbase ` README states current coverage from `capabilities/0`
+- [x] `gemini   ` README states current coverage from `capabilities/0`
+- [x] `webull   ` README states current coverage from `capabilities/0`
 - [x] `robinhood` capability table refreshed
-- [ ] `schwab   ` **delete "There is no order book and no socket"** (`README.md:47`)
+- [x] `schwab   ` deleted — the Streamer is connected to the facade this release; README now describes the fallback route instead
 
 #### Phase 14 · Moduledocs carrying claims that go stale (6)
 
 *`CLAUDE.md`: where a moduledoc explains **why** a guard exists, that explanation is the most
 valuable thing in the file — carry it, do not compress it away.*
 
-- [ ] `schwab   ` `DpExchange.Schwab:33` — "no order book and no socket. Neither specification
+- [x] `schwab   ` `DpExchange.Schwab:33` — rewritten. Three reasons behind one unchanged `:unsupported` are now all stated, and the current one — REST publishes no depth — is the only one still true
       describes depth". The specifications still do not; **the venue does**. Say which source was read
-- [ ] `schwab   ` `Feed` — its premise changes entirely when polling becomes a socket
-- [ ] `webull   ` `Rest:7,71,105,115,121` — every `/openapi/…` path and its measurement note (D6)
+- [x] `schwab   ` `Feed` — rewritten around the socket-with-poll-fallback it now is
+- [x] `webull   ` checked — the one remaining `/openapi/` mention is a dated historical measurement, correctly labelled, not a live path
 - [x] `robinhood` `Rest:53,84` — v1 paths and any prose asserting v1 is the surface
-- [ ] `gemini   ` `Private:94,118` — `/v1/account` **is** documented; `/v1/transfers` → `/v2/transfers`
-- [ ] `coinbase ` `Coinbase:51,188` — "no atomic replace", "no endpoint" re-checked
+- [x] `gemini   ` checked — `/v1/account` is called at `Private.get_accounts/2`, `/v2/transfers` at `Private.get_transfers/2`; both already correct
+- [x] `coinbase ` checked — both already corrected in an earlier phase: `supports_order_preview`/`supports_order_replace` are `true`, and `place_orders/3` carries the real per-order reason
 
 #### Phase 14 · The negative-claim audit (6)
 
@@ -1634,9 +1634,9 @@ record the source and date consulted — or delete the claim.*
 *The five inventories are the evidence base for every count in this plan. If they drift, the
 next reader inherits the partial enumeration this plan spent its analysis correcting.*
 
-- [ ] `coinbase ` `endpoint-inventory.md` — 0.2's endpoint counts replacing page counts
-- [ ] `gemini   ` `endpoint-inventory.md` — REST and the socket matrix kept together
-- [ ] `webull   ` `endpoint-inventory.md`
+- [x] `coinbase ` `endpoint-inventory.md` — counts refreshed; it read "everything authenticated is absent", stale since this package grew past it
+- [x] `gemini   ` `endpoint-inventory.md` — counts refreshed; it read "18%"
+- [x] `webull   ` `endpoint-inventory.md` — counts refreshed; it read "5 of 85" from the pre-Phase-8 capture
 - [x] `robinhood` `endpoint-inventory.md`
 - [ ] `schwab   ` `coverage-matrix.md`, `endpoint-inventory.md`, `spec-facts.md`,
       `portal-product-landscape.md` — the last records that 23 of 24 products are unreachable
