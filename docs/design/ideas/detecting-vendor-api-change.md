@@ -247,3 +247,34 @@ So for venues of this shape the hierarchy inverts: the committed documentation *
 source of truth, and the only detector available is a human re-capture. That deserves its
 own row in whatever this becomes — **venues where documentation is unverifiable are a
 distinct class**, not a degraded case of the public ones.
+
+## From Phase 14 (all five venues), 2026-09-01 to 2026-09-03
+
+A second sample, and a different failure class from the rest of this document: not the
+vendor changing or the documentation being wrong, but **this side asserting a negative it
+never checked.** Fed by the negative-claim audit each package now carries in
+`docs/reference/<venue>/negative-claims.md`.
+
+**Thirteen findings across five packages, split two ways.** Nine were false `:unsupported`
+declarations — a working endpoint refused because a claim about one endpoint ("the stock
+snapshot does not serve options") was restated as a claim about the whole venue. Four were
+the opposite: an endpoint filed under "not ported yet" — the label that means *the venue
+serves this and we have not built it* — when the venue serves no such thing at all.
+
+**No changelog, index or schema diff catches either one.** Both are errors made by this
+project against a vendor surface that never moved. The only detector that worked was
+reading every page of a package's own vendor corpus and checking every sentence this
+package's own code asserts against it — which is what an audit is, not what a monitor is.
+That is worth naming as a limit on this whole document's premise: some fraction of what
+looks like "vendor API change" to detect is actually **this project's own claim, never
+verified, sitting untested until someone reads it.**
+
+**A third, smaller finding from the same phase, closer to this document's actual subject:**
+Schwab's Streamer — socket, protocol, field tables, decoders — shipped a full release
+earlier and was never wired to `subscribe/2`. `capabilities/0` declared `streamable:
+[:order_book, :candles, :orders, :fills]` on a facade that delivered none of them by any
+route, and the conformance suite's own tests passed the whole time because they exercised
+the socket's callbacks directly and never asked what a consumer receives. Not a vendor
+change, and not a documentation error — a declared capability with no facade path to it,
+caught by asking a new question (Phase 14's O4 assertions) rather than by watching for
+change in anything external.

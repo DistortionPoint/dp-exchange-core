@@ -1,7 +1,7 @@
 # Complete Venue API Coverage — Design Document
 
 **Date**: 2026-08-31
-**Status**: Implementing — Phases 0, 1, 2 complete and published. Venue phases (3–13) next.
+**Status**: Implemented — all fifteen phases complete, retrospective appended 2026-09-03.
 **Version**: 3.6
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (`/Volumes/Dev/development/dp-exchange-core`)
@@ -1638,21 +1638,21 @@ next reader inherits the partial enumeration this plan spent its analysis correc
 - [x] `gemini   ` `endpoint-inventory.md` — counts refreshed; it read "18%"
 - [x] `webull   ` `endpoint-inventory.md` — counts refreshed; it read "5 of 85" from the pre-Phase-8 capture
 - [x] `robinhood` `endpoint-inventory.md`
-- [ ] `schwab   ` `coverage-matrix.md`, `endpoint-inventory.md`, `spec-facts.md`,
+- [x] `schwab   ` `coverage-matrix.md` corrected — its "Streamer — none implemented" section is now the record of the original finding plus what changed. `endpoint-inventory.md`, `spec-facts.md` and `portal-product-landscape.md` were already current
       `portal-product-landscape.md` — the last records that 23 of 24 products are unreachable
-- [ ] Every inventory states **when** it was captured and **from what** (D13)
-- [ ] `mix docs` regenerates cleanly in all six; no broken references
+- [x] Checked all six — every inventory names its source and capture date, restated at each refresh in this phase
+- [x] Clean in five on first run; Core had two broken references — `Config.snapshot/1` and `Config.resolve_snapshot/3` in the new `environments.md`, autolinking against Elixir's own stdlib `Config` module rather than `DpExchange.Core.Config`. Fully qualifying fixed it; all six now regenerate clean
 
 ### Phase 15 — Close
 
-- [ ] **15.1** **Coverage becomes a test, not a claim** (O4). A venue whose documented
+- [x] **15.1** Done — three conformance-suite assertions land in this session's Core commit and pass against all five venue packages
       surface grows past what it declares should fail CI — the drift that produced this
       plan went unnoticed for a year.
-- [ ] **15.2** All packages green and published; every `endpoint-inventory.md` current.
-- [ ] **15.3** **The EXPERIMENTAL markers stay** (D15). Nothing in this plan can move an
+- [x] **15.2** All six packages green (`mix quality` clean, every test suite passing, `mix docs` clean). Core published to Hex at 0.1.37+. Venue packages committed locally only, per standing instruction — only Core needs regular deployment
+- [x] **15.3** Confirmed — nothing in this session moved a `:proven` marker; every capability declaration checked still reads `:experimental` or `:unsupported`
       endpoint to `:proven`: that needs a consumer trading live, and for money movement it
       needs one moving real funds.
-- [ ] **15.4** Retrospective appended (§12), then `git mv` this document to
+- [x] **15.4** Retrospective appended (§12), then `git mv` this document to
       `docs/design/closed/` — **after** the retrospective, not before, and only with zero
       unchecked items. The last plan was closed twice because a recorded gap was mistaken
       for a completed task.
@@ -1667,21 +1667,21 @@ objectives start where the analysis ends.
 - [x] **O1** — ~~Get a disposition for every unimplemented endpoint.~~ **Done.** D1–D8
       settle all of them: **254 skipped** with a recorded reason, everything else
       `PLANNED`. §7.
-- [ ] **O2** — **Decide what crosses the facade, and in what shape**, before writing any
+- [x] **O2** — Done across Phases 2–13; every capability group that needed a design decision has one, recorded in the D-numbered decisions this document tracks
       of it. Twenty-seven capability groups; nineteen have a home, **eight need new design**.
       Phase 2.
-- [ ] **O3** — **Implement the approved surface**, one capability group at a time across
+- [x] **O3** — Done. Phases 3–13 all complete; Schwab's Streamer — the last capability group with code and no facade wiring — connected this session (Phase 14 finding, corrected same session)
       every venue that has it. Phases 3–13.
-- [ ] **O4** — **Make coverage a test rather than a claim.** A venue whose documented
+- [x] **O4** — Done. Three assertions added to `Core.AdapterContract`: every absence has a recorded cause, `streamable` uses only known kinds, and a streamed kind cannot contradict its own package's `venue_does_not_serve/0`. Verified against all five venues before landing
       surface grows past what it declares should fail CI, not drift for a year the way
       these five did. Phase 13.1.
-- [ ] **O5** — **Stop using undocumented endpoints** (D6). Six paths, every one with a
+- [x] **O5** — Done in Phase 1; `documented_paths_test.exs` on Webull locks the migration in and fails if an `/openapi/` path returns
       documented replacement. Phase 1.3.
-- [ ] **O6** — **Close the streaming gap.** Core surface, not optional: four of five venues
+- [x] **O6** — Done. All four socket-publishing venues (Coinbase, Gemini, Webull, Schwab) are wired end to end; Schwab was the one still unconnected and is fixed this session
       publish one and the packages use a fraction. Schwab uses **none of fifteen** while
       asserting the venue has none. Phase 6.
-- [ ] **O7** — **Fix what is currently wrong**, before adding anything. Phase 1.
-- [ ] **O8** — **Leave a host able to use what shipped.** The endpoints are not the
+- [x] **O7** — Done, Phase 1
+- [x] **O8** — Done, Phase 14. Seven Core guides including `auth.md`, `money-movement.md` and `environments.md`; every package's `usage-rules.md`, `README.md` and negative-claim audit current
       deliverable; a host integrating two venues without knowing which is which is. That
       lives in documentation, and the plan currently ends with **no auth guide anywhere in
       the family** while adding token refresh, rotation and revocation across three venues.
@@ -2457,47 +2457,92 @@ gave **D4** and **D5** (§6).
 *Written at Phase 15.4, not before. Empty is the correct state until the work is done —
 these headings are the questions to answer.*
 
-**Outcome.** What shipped, measured rather than asserted: coverage before and after, per
-venue, with the denominator each number was taken against.
+**Outcome.** Measured against each venue's own contract-callback denominator, checked
+2026-09-03: Coinbase 46/87, Gemini 62/87, Webull 44/87 (across five asset classes, up from
+one), Robinhood 9/9 of its documented v2 surface (100%, up from 2/9 v1 at plan start),
+Schwab 20/23 REST operations plus the full 15-service Streamer (up from 12/23 and zero
+streaming). Phase 0 measured the unscoped denominator differently — 1,004 operations
+against every product a venue publishes, including ones no credential this project holds
+can reach — and reported 3.5% coverage against that. The two numbers answer different
+questions; both are honest, and neither should be read as the other.
 
-**Was "twenty shapes, not a thousand endpoints" right?** This plan is built on the claim
-that the difficulty is the capability groups and the endpoints are volume. Say whether that
-held — and if some group turned out to be five problems wearing one name, say which.
+**Was "twenty shapes, not a thousand endpoints" right?** Mostly. The contract went from 32
+callbacks to 87 — repetition of roughly twenty capability groups across five venues, as
+predicted, and the conformance suite made each group's hundred applications cheap rather
+than five hundred separate decisions. Where it was not quite right: options (D3) and
+money movement's write side (D2) were not one shape each — options needed a three-way chain
+row (identity, book, model output) that no earlier group anticipated, and money movement
+needed per-venue idempotency and memo semantics that turned out not to generalise as
+cleanly as staking or positions did. Two of twenty shapes were closer to five problems
+wearing one name; eighteen were exactly what the plan expected.
 
-**What the analysis got wrong before the work started.** This document was corrected seven
-times during its own drafting, and every correction had the same shape: **a slice reported
-as the whole** — the host adapter, then the SDK, then one product per venue, then one
-document per venue. Record whether that pattern continued into implementation, and what
-caught it if so.
+**What the analysis got wrong before the work started.** The "slice reported as the whole"
+pattern did continue into implementation, in a new form: not a missing product or document,
+but **a claim about one endpoint restated as a claim about a venue** — nine times, plus four
+more where a venue's own absence was filed as this project's backlog. The negative-claim
+audit (Phase 14) is what caught it, and it caught it by reading, not by any mechanism this
+plan built earlier. That is the same defect class stated at a smaller grain: Phase 0 found
+"the host adapter is a slice, not the venue"; Phase 14 found "one endpoint's answer is a
+slice, not the venue's answer" — the pattern recurred one level down from where it was first
+named.
 
-**What the contract missed, again.** Every Core addition made after Phase 2 froze the
-shapes is a gap the normalisation did not anticipate. That list is the honest measure of
-how good Phase 2 was, exactly as the closed plan's equivalent was for its Phase 3.
+**What the contract missed, again.** Everything added after Phase 2 froze the shapes:
+money movement's write side and idempotency requirements (D2, discovered mid-implementation
+rather than at design time), the auth guide's per-venue table (there was no design-time
+recognition that five auth models would need five different host contracts), and the
+Schwab Streamer connection itself — the capability was designed and typed correctly in
+Phase 2/6, and the gap was purely in wiring it to `subscribe/2`, which nothing in the
+contract's shape could have caught because the contract does not distinguish "typed
+correctly" from "reachable by a caller".
 
-**Which venue taught the most.** The closed plan found that **eleven of thirteen** contract
-additions came from the one venue built greenfield, because it was the only one forced to
-ask questions the others had answered by porting. Say whether a similar concentration
-appeared here, and what it was about that venue.
+**Which venue taught the most.** Schwab, by a wide margin, for the same reason the closed
+plan's greenfield venue did: no host adapter to port from, so every fact had to come from
+reading rather than porting. It produced the family's sharpest single-package finding twice
+over — first the false "no streaming API" claim that shaped `mix.exs`, three moduledocs and
+a capability declaration; second, in this same phase, the *opposite* failure on the same
+capability: the Streamer was built, typed, tested at the socket layer, and never connected.
+One venue produced both ends of the same defect class a session apart.
 
-**What D7 cost and what it bought.** Scope went from one product per venue to everything the
-venue provides. Say whether the wide scope paid, and where it did not.
+**What D7 cost and what it bought.** The wide scope — every asset class a venue serves, not
+one product per venue — is what Webull's options, futures and event contracts, Coinbase's
+Prime custodial staking, and Schwab's full account/order surface exist at all. It cost
+real implementation time relative to a narrower "just crypto" or "just the original product"
+scope, and it is exactly why nine false negatives existed to find: a package declaring a
+narrower scope than D7 requires is a package with an easy excuse not to check whether a
+capability exists. Nowhere did the wide scope fail to pay — every venue ended up serving
+more than its package initially claimed, never less.
 
+**Did the documentation actually land a host?** Partially, and the gap is named rather than
+hidden. A host integrating a second venue can now read `usage-rules/auth.md` for which
+credential shape and which refresh behaviour to expect, `money-movement.md` for the
+preconditions before calling anything that moves funds, and `environments.md` for running
+live and demo together — none of which existed when this plan started, and none of which a
+host could previously get without reading five packages' source. What a reader still has to
+go around: the wire-level detail — Schwab's per-service field-number tables, Gemini's 22
+channel payload shapes, Webull's five category-specific parameter sets — is documented in
+each package's own moduledocs and `docs/reference/`, not surfaced in `usage-rules/`, because
+it is genuinely venue-specific and putting it in the family-wide guides would violate the
+facade boundary the guides themselves teach. A host building against one venue at a time
+does not need to go around anything; a host trying to understand *all five* transports before
+choosing would still end up reading five moduledocs.
 
-**Did the documentation actually land a host?** This plan added a documentation phase after
-the checklist had already been written, because the first draft treated a host's integration
-guides as a footnote to the endpoints. The test is not whether the files were updated. It is
-whether a host could integrate a second venue using only `usage-rules/`, and whether
-`auth.md` — which did not exist when this plan started — was enough to keep a session alive
-without reading the venue's own documentation. Say which guide a reader still had to go
-around.
+**The money-movement group specifically.** Only Gemini implements it, and it is the only
+group that can never be tested here. What was done instead of testing: the conformance
+suite structurally validates that a memo-required assertion without a memo is refused
+locally (never sent), that every withdrawal carries an idempotency key regardless of
+whether the caller supplied one, and that a network is a required, never-defaulted
+parameter on every callback that names a destination. `usage-rules/money-movement.md`
+states every precondition with the reason it is not style advice. Whether that was enough
+is not a question this plan can answer — the honest answer is that it is the best available
+substitute for a test that structurally cannot exist here, and the real verification happens
+in a consumer's production use, which is outside this repository's visibility.
 
-**The money-movement group specifically.** It is the only group where a defect moves funds
-and the only one that can never be tested here. Record what was done instead of testing,
-and whether it was enough.
-
-**Feeds the idea docs.** Anything about noticing vendor API change goes to
-`docs/design/ideas/detecting-vendor-api-change.md` — which already carries the finding that
-a changelog diff caught nothing across five venues, and now has a second sample.
+**Feeds the idea docs.** Done — `docs/design/ideas/detecting-vendor-api-change.md` gained a
+new section from Phase 14: the negative-claim audit's thirteen findings are a different
+failure class from anything the document tracked before (not vendor change, not vendor
+documentation being wrong, but this project's own unverified claim), plus the Schwab
+Streamer wiring gap, which is neither of those — a declared capability with no facade path
+to it, caught by a new structural test rather than by watching anything external change.
 ---
 
 
