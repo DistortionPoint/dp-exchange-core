@@ -1,8 +1,8 @@
 # Webull Connection Sharding and Fake Failure Injection — Design Document
 
 **Date**: 2026-09-04
-**Status**: Implementing
-**Version**: 1.1
+**Status**: Implemented — both parts complete, retrospective appended.
+**Version**: 1.2
 **Author(s)**: Billy / Claude collaboration
 **Repo**: `DistortionPoint/dp-exchange-core` (this doc); implementation lands in
 `dp-exchange-webull` (Part A) and `dp-exchange-core` + all four venue packages (Part B)
@@ -29,15 +29,14 @@ not a reason to plan them separately.
 - [x] One rate limiter governs every shard's HTTP subscribe/unsubscribe calls, not one
       per shard
 
-**Part B — Fake failure injection and anonymous mode — mechanism shipped
-(`dp-exchange-core@0b533d4`), Robinhood adopted (`dp-exchange-robinhood@a74b4e4`),
-Coinbase/Gemini/Webull adoption in progress:**
-- [ ] One shared mechanism, implemented once in `dp_exchange_core`, that all four venue
-      `Fake`s adopt consistently — **mechanism: done. Adoption: 1 of 4 venues
-      (Robinhood) shipped; Coinbase, Gemini, Webull in progress, not yet pushed.** This
-      line does not check off until all four are done and pushed together as one batch —
-      see §0's own "one set of work" framing, which applies to the push, not just the
-      planning.
+**Part B — DONE. Fake failure injection and anonymous mode, mechanism plus all four
+venues:**
+- [x] One shared mechanism, implemented once in `dp_exchange_core`, that all four venue
+      `Fake`s adopt consistently — `dp-exchange-core@0b533d4` (mechanism),
+      `dp-exchange-robinhood@a74b4e4`, `dp-exchange-coinbase@a62f072`,
+      `dp-exchange-gemini@6e88786`, `dp-exchange-webull@8940477` (adoption). See §2 for
+      what was found applying it, including a process note on how the last three venues'
+      pushes actually landed.
 - [x] Deterministic failure injection — an exact, pre-declared sequence of outcomes,
       never real randomness — proven in `Core.FakeInjection`'s own tests and exercised
       end-to-end in Robinhood's `Fake`
@@ -103,8 +102,8 @@ operation).
       rather than silently dropping or oversubscribing
 - [x] Moduledoc rewritten to record the incident this closes
 
-**Part B — `Core.FakeInjection` implemented and shipped in `dp-exchange-core`; per-venue
-adoption next:**
+**Part B — DONE. `Core.FakeInjection` shipped in `dp-exchange-core`; all four venues
+adopted:**
 - [x] `Core.Config`-based shared helper (§3.6) — `DpExchange.Core.FakeInjection`, new
       module in `dp_exchange_core`
 - [x] Deterministic failure queue semantics defined and tested, whole-call and per-symbol
@@ -125,11 +124,22 @@ adoption next:**
       creation anywhere.
 - [x] Applied to one `Fake` first (Robinhood — smallest surface) as the reference
       implementation, shipped `dp-exchange-robinhood@a74b4e4`
-- [ ] Applied to the remaining three (Coinbase, Gemini, Webull) — in progress, not yet
-      pushed; held until all three are done and reviewed together against Robinhood's
-      reference for consistency, then pushed as one batch, not one at a time
-- [ ] `usage-rules.md` documents the pattern for a consuming agent — drafted locally in
-      `dp-exchange-core`, not yet committed (held for the same reason)
+- [x] Applied to the remaining three: `dp-exchange-coinbase@a62f072`,
+      `dp-exchange-gemini@6e88786`, `dp-exchange-webull@8940477`. **What was found**:
+      Coinbase's `Fake` has no central credential check to bypass at all — most of its
+      functions never inspected `credentials` in the first place, so
+      `bypass_credentials/1` has nothing to do there. Documented as a real scope
+      difference rather than a check force-fitted where the fake never had one. Gemini
+      and Webull both had a central credential helper and adopted the bypass the same
+      way Robinhood did. **Process note, not a design finding**: three of the four
+      venues' work ran as parallel background agents whose original instructions
+      included pushing on completion — two (Gemini, Webull) finished and pushed before a
+      mid-flight correction reached them, landing ahead of the "review together, push as
+      one batch" plan this line itself states. Not reverted (would mean rewriting shared
+      history); each was independently re-verified against the same quality gates after
+      the fact and found correct, and the batch published as intended in the end.
+- [x] `usage-rules.md` documents the pattern for a consuming agent —
+      `dp-exchange-core@f43d9b4`
 
 ## 3. Design
 
@@ -366,3 +376,58 @@ per-symbol targeting).
   process-scoped override mechanism this design reuses rather than reinvents. Four
   venue packages' `Fake` modules, applied one at a time per the checklist, each a
   separate deploy per this family's normal cadence.
+
+## 6. Retrospective
+
+**Outcome.** Both parts shipped and independently verified against full quality gates
+(`mix test --cover`, `mix credo --strict`, `mix dialyzer`, `mix sobelow`) in every repo
+they touched: `dp-exchange-core` (the design doc itself, `Core.FakeInjection`,
+`usage-rules.md`), `dp-exchange-webull` (sharding), and all four venue packages
+(`Fake` wiring). Final commits recorded per line in §2.
+
+**The design held up against real implementation, with two real refinements.** §3.1's
+sort-then-chunk sketch needed to become capacity-aware chunking once rebalancing existed
+(a shard's effective capacity can shrink below the constant after a venue rejection) —
+recorded in place at the time, not discovered late. §3.6/§3.7's per-venue Config key
+(`:"fake_injection_#{venue}"`) tripped `mix sobelow`'s `DOS.BinToAtom` check on sight,
+even though `venue` is always a small, developer-supplied atom here — fixed by storing
+every venue's state under one static key instead. Both are the kind of finding this
+family's own convention asks for: recorded against the checklist line it changed, not
+smoothed over.
+
+**Where this plan's own process broke, twice, in the same way.** Both failures are the
+same mistake at different scales, and both are process, not code:
+
+1. Design-doc review found the user correcting course five times in a row over the same
+   document (§0 "one document not two," and four separate OQ resolutions) — each a real,
+   substantive correction, not noise, and each one landed because the corresponding
+   section had been drafted with a plausible-sounding but under-verified answer (a
+   guessed safety margin, an unresolved conflation of two different kinds of "global,"
+   an unstated assumption that batch injection could be deferred without saying so).
+   Every one of those was fixable by re-reading the family's own stated conventions
+   (D12, "declare what was measured," this repo's own testing rule) *before* writing the
+   first draft of that section, not after a correction arrived.
+2. Implementation of Part B's remaining three venues ran as three parallel background
+   agents. Their original instructions included pushing to each repo's remote on
+   completion — written before a **user correction landed mid-task**: hold every push in
+   a multi-repo unit of work until the whole thing is reviewed together, then push as one
+   batch, never per-repo as each piece finishes (this is the same rule §0 already stated
+   for the *plan*, generalized to the *push*, and it was not re-applied when execution
+   moved to parallel agents). Two of the three agents (Gemini, Webull) had already
+   finished and pushed before a "stop before pushing" message could reach them — an
+   agent that has already completed its run cannot be paused mid-flight, only sent a new
+   message once it responds. The third (Coinbase) caught the message in time and held.
+   Nothing was reverted (would mean rewriting shared history over work that was
+   independently correct); each was re-verified against full quality gates after the
+   fact and found correct, and the batch published as intended in the end — but two of
+   four venues' pushes happened out of order relative to the stated plan, not because
+   the plan was wrong, but because it was not re-stated to agents dispatched after the
+   correction that produced it.
+
+**What actually prevents this next time.** Not "be more careful" — the same instruction
+existed once already, from an earlier, unrelated batch of work in this same session, and
+was not carried forward into a new multi-repo task's own agent instructions. The concrete
+fix, recorded as its own standing rule now: before dispatching parallel agents for
+*any* multi-repo unit of work, state explicitly in every agent's own instructions that
+pushing is held until the coordinator says so — never assume a rule stated once in
+conversation carries forward into a freshly-written prompt for a different task.
