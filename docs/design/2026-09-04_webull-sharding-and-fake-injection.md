@@ -20,36 +20,46 @@ not a reason to plan them separately.
 
 ## 1. Objectives
 
-**Part A — Webull connection sharding:**
-- [ ] A `Feed` that accepts a symbol set larger than one session's subscription ceiling
+**Part A — Webull connection sharding — DONE, shipped `dp-exchange-webull@7c27169`:**
+- [x] A `Feed` that accepts a symbol set larger than one session's subscription ceiling
       and covers all of it, without the consumer hand-rolling multiple `Supervisor`
       instances
-- [ ] Stay inside the venue's hard **5 connections per App Key** ceiling — a consumer
+- [x] Stay inside the venue's hard **5 connections per App Key** ceiling — a consumer
       must never be able to cause a sixth socket
-- [ ] One rate limiter governs every shard's HTTP subscribe/unsubscribe calls, not one
+- [x] One rate limiter governs every shard's HTTP subscribe/unsubscribe calls, not one
       per shard
 
-**Part B — Fake failure injection and anonymous mode:**
+**Part B — Fake failure injection and anonymous mode — mechanism shipped
+(`dp-exchange-core@0b533d4`), Robinhood adopted (`dp-exchange-robinhood@a74b4e4`),
+Coinbase/Gemini/Webull adoption in progress:**
 - [ ] One shared mechanism, implemented once in `dp_exchange_core`, that all four venue
-      `Fake`s adopt consistently
-- [ ] Deterministic failure injection — an exact, pre-declared sequence of outcomes,
-      never real randomness
-- [ ] A credential-free mode that is opt-in per test, never a change to any `Fake`'s
-      default (venue-faithful) behaviour
-- [ ] **Test isolation is first-class and non-negotiable**: two `async: true` tests
+      `Fake`s adopt consistently — **mechanism: done. Adoption: 1 of 4 venues
+      (Robinhood) shipped; Coinbase, Gemini, Webull in progress, not yet pushed.** This
+      line does not check off until all four are done and pushed together as one batch —
+      see §0's own "one set of work" framing, which applies to the push, not just the
+      planning.
+- [x] Deterministic failure injection — an exact, pre-declared sequence of outcomes,
+      never real randomness — proven in `Core.FakeInjection`'s own tests and exercised
+      end-to-end in Robinhood's `Fake`
+- [x] A credential-free mode that is opt-in per test, never a change to any `Fake`'s
+      default (venue-faithful) behaviour — same evidence
+- [x] **Test isolation is first-class and non-negotiable**: two `async: true` tests
       configuring the same venue's `Fake` differently at the same time must never see
       each other's configuration. This is not an aspiration — it is this repo's own
       stated testing rule ("Tests must be `async: true`
       safe. Configuration seams resolve through a process-scoped lookup so two async
       tests can want the same fake to behave differently," `CLAUDE.md`), and `Core.Config`
       already exists specifically because a node-wide seam broke exactly this once
-      (§3.6/§3.7 build on it for this reason, not by default choice).
-- [ ] **One symbol failing cannot fail the whole set.** A consumer injecting a failure
+      (§3.6/§3.7 build on it for this reason, not by default choice). Verified directly:
+      two venues' overrides never see each other, an override is invisible to an
+      unrelated process and visible to a spawned `Task`.
+- [x] **One symbol failing cannot fail the whole set.** A consumer injecting a failure
       for one symbol must see every other symbol's call succeed normally in the same
       test — the same isolation principle as the row above, applied within one test's own
       configuration rather than between tests. Whole-call-only injection cannot express
       this at all: it can only fail everything or nothing, which is not what "test how my
-      code handles one bad symbol among many" needs.
+      code handles one bad symbol among many" needs. Verified directly in both
+      `Core.FakeInjection`'s own tests and Robinhood's `Fake` wiring.
 
 **Out of scope for both:** raising Webull's subscription ceiling itself; formalizing
 `configure/1` as a `@callback` on `Core.Venue` (a test affordance, not a venue-shaped
@@ -113,9 +123,13 @@ adoption next:**
       venue's state under one static override key (`:fake_injection`), keyed by `venue`
       *inside* the stored map rather than in the Config key itself — no dynamic atom
       creation anywhere.
-- [ ] Applied to one `Fake` first (Robinhood — smallest surface) as the reference
-      implementation, then the remaining three
-- [ ] `usage-rules.md` documents the pattern for a consuming agent
+- [x] Applied to one `Fake` first (Robinhood — smallest surface) as the reference
+      implementation, shipped `dp-exchange-robinhood@a74b4e4`
+- [ ] Applied to the remaining three (Coinbase, Gemini, Webull) — in progress, not yet
+      pushed; held until all three are done and reviewed together against Robinhood's
+      reference for consistency, then pushed as one batch, not one at a time
+- [ ] `usage-rules.md` documents the pattern for a consuming agent — drafted locally in
+      `dp-exchange-core`, not yet committed (held for the same reason)
 
 ## 3. Design
 
