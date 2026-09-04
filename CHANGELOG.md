@@ -23,6 +23,25 @@ an acceptable changelog line.
 
 ### Added
 
+- **`DpExchange.Core.FakeInjection` — deterministic failure injection and a
+  credential-free wiring mode for a venue's `Fake` — DpCryptoManagement's issue #14.**
+  None of the four venue `Fake`s exposed a `configure/1`-shaped seam for exercising a
+  consumer's own retry/circuit-breaker code, or a way to skip a `Fake`'s venue-faithful
+  credential check to test pure dispatch/decode logic. Built on `Core.Config`'s existing
+  process-scoped override machinery rather than a new mechanism — the exact `async: true`
+  isolation guarantee every other seam in this family already has.
+
+  Deterministic by design: outcomes are queued explicitly and popped in order, never a
+  probability. Per-symbol targeting composes with whole-call injection — a
+  symbol-specific queue is checked first, and a symbol-targeted failure can never affect
+  a different symbol's call, matching this family's established rule that one bad symbol
+  must not fail a whole batch. Function-level targeting was deliberately left out: the
+  feature this replaces asked for one global knob, and no filed need asked for more.
+
+  This ships the shared mechanism only; the four `Fake`s adopt it one at a time in their
+  own packages, starting with Robinhood. See
+  `docs/design/2026-09-04_webull-sharding-and-fake-injection.md` §3.6/§3.7.
+
 - **The conformance suite now asserts coverage rather than accepting it as a claim** (O4).
   Three new assertions, and the one worth naming exists because the drift it hunts had just
   happened: a venue package declared six streamable kinds while its socket was written,

@@ -93,12 +93,26 @@ operation).
       rather than silently dropping or oversubscribing
 - [x] Moduledoc rewritten to record the incident this closes
 
-**Part B:**
-- [ ] `Core.Config`-based shared helper (§3.6) — new module in `dp_exchange_core`
-- [ ] Deterministic failure queue semantics defined and tested, whole-call and per-symbol
-- [ ] Per-symbol targeting: a symbol-specific failure never affects any other symbol's
-      call in the same test (§3.6)
-- [ ] Anonymous/credential-bypass semantics defined and tested
+**Part B — `Core.FakeInjection` implemented and shipped in `dp-exchange-core`; per-venue
+adoption next:**
+- [x] `Core.Config`-based shared helper (§3.6) — `DpExchange.Core.FakeInjection`, new
+      module in `dp_exchange_core`
+- [x] Deterministic failure queue semantics defined and tested, whole-call and per-symbol
+- [x] Per-symbol targeting: a symbol-specific failure never affects any other symbol's
+      call in the same test (§3.6.2) — verified directly, including that a
+      symbol-specific queue is checked before the whole-call one
+- [x] Anonymous/credential-bypass semantics defined and tested (§3.7)
+- [x] Isolation verified directly: two venues' overrides never see each other, an
+      override is invisible to an unrelated process and visible to a spawned `Task`
+      (matching `Core.Config`'s own documented `$callers` behaviour). **What was found**:
+      the original sketch (§3.6, §3.7) used `:"fake_injection_#{venue}"` — a per-venue
+      Config key built by interpolating `venue` into a new atom at runtime. Flagged by
+      `mix sobelow` (`DOS.BinToAtom`) even though `venue` is always a small,
+      developer-supplied atom here, never user input — the pattern is unsafe on sight
+      regardless of how bounded the actual input is in practice. Fixed by storing every
+      venue's state under one static override key (`:fake_injection`), keyed by `venue`
+      *inside* the stored map rather than in the Config key itself — no dynamic atom
+      creation anywhere.
 - [ ] Applied to one `Fake` first (Robinhood — smallest surface) as the reference
       implementation, then the remaining three
 - [ ] `usage-rules.md` documents the pattern for a consuming agent
