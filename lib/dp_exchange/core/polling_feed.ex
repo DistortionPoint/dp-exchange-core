@@ -148,7 +148,13 @@ defmodule DpExchange.Core.PollingFeed do
       # working feed, not a crash.
       on_refusal: Keyword.get(opts, :on_refusal, fn _symbol, _reason -> :ok end),
       symbols: MapSet.new(Keyword.get(opts, :symbols, [])),
-      start_delay_ms: Keyword.get(opts, :start_delay_ms, @default_start_delay_ms),
+      # `|| @default_start_delay_ms`, not just a `Keyword.get/3` default: a caller that
+      # forwards its own `opts` unchanged (as every venue's `Feed` does) hands this key
+      # through with an explicit `nil` when its own caller never set it, and `Keyword.get/3`
+      # only substitutes a default for an ABSENT key, not a present-and-nil one. Without the
+      # `||`, that `nil` reaches `Process.send_after/3` downstream and crashes the feed.
+      start_delay_ms:
+        Keyword.get(opts, :start_delay_ms, @default_start_delay_ms) || @default_start_delay_ms,
       last_ok: %{},
       failures_since_ok: 0,
       last_error: nil

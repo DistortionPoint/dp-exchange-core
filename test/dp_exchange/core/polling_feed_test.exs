@@ -216,6 +216,26 @@ defmodule DpExchange.Core.PollingFeedTest do
       refute_receive {:published, _event}, 150
       assert_receive {:published, _event}, 500
     end
+
+    test "an explicit nil falls back to the default instead of crashing the feed" do
+      # A venue's own Feed wrapper builds this list from `Keyword.get(opts, :start_delay_ms)`
+      # with no default of its own, forwarding a PRESENT key with a nil value whenever its
+      # caller never set one. `Keyword.get/3` only substitutes a default for an ABSENT key,
+      # so this is not the same case as simply omitting the option — it is the case that
+      # crashed in production.
+      pid =
+        start_supervised!(
+          {PollingFeed,
+           sink: sink_to_self(),
+           interval_ms: 50,
+           start_delay_ms: nil,
+           fetch: fn symbol -> {:ok, event(symbol)} end,
+           symbols: ~w(BTC-USD)}
+        )
+
+      assert Process.alive?(pid)
+      assert_receive {:published, _event}, 9_000
+    end
   end
 
   describe "unknown messages" do

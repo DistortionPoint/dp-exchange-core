@@ -48,6 +48,14 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **`PollingFeed` crashed when a caller forwarded `start_delay_ms: nil`.** Robinhood's and
+  Schwab's own `Feed` wrappers both build this option with
+  `Keyword.get(opts, :start_delay_ms)` and no default of their own — a present key with a
+  `nil` value whenever their caller never set one. `Keyword.get/3`'s own default only
+  substitutes for an ABSENT key, not a present-and-nil one, so `state.start_delay_ms` ended
+  up `nil` and crashed in `Process.send_after/3`. Fixed at this layer with `|| @default`,
+  so every venue's `Feed` is covered rather than each patching its own pass-through.
+
 - **A stray zero-byte `lib/dp_exchange/x.new` was shipping in the tarball.** It arrived as a
   redirect artefact in `cf03c21` and had been published in every release since. Found by
   doing what `mix.exs`'s own comment block says to do — inspecting `mix hex.build` output
