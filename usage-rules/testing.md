@@ -100,6 +100,58 @@ errors. The failure was silent, intermittent and seed-dependent.
 same fake to behave differently — one returning `429`, one succeeding.** Global config
 cannot express that at all.
 
+## Making a fake fail on demand, and skipping its credential check
+
+Every venue's `Fake` is wired to `DpExchange.Core.FakeInjection` — a deterministic seam
+for exercising your own retry/circuit-breaker/alerting code against a `Venue`
+implementation, and for testing pure dispatch/decode logic without constructing
+valid-looking credentials for every call.
+
+```elixir
+# Make the next call fail once, then resume normal fake behaviour:
+DpExchange.Core.FakeInjection.queue_failures(:coinbase, [{:error, :timeout}])
+DpExchange.Coinbase.Fake.get_price("BTC-USD", credentials: creds)  #=> {:error, :timeout}
+DpExchange.Coinbase.Fake.get_price("BTC-USD", credentials: creds)  #=> {:ok, %Quote{}}
+
+# Make every call for one symbol fail, indefinitely — every other symbol is untouched:
+DpExchange.Core.FakeInjection.fail_always(:coinbase, "ETH-USD", {:refused, :not_listed})
+
+# Skip a venue-faithful credential refusal, for a wiring-only test. Robinhood's `Fake`
+# gates every call on `credentials:` (the real venue signs everything); this bypasses
+# that refusal without changing it for anyone who doesn't opt in:
+DpExchange.Core.FakeInjection.bypass_credentials(:robinhood)
+DpExchange.Robinhood.Fake.get_price("BTC-USD", [])  #=> {:ok, %Quote{}}, no credentials needed
+```
+
+**Not every venue's `Fake` gates credentials centrally, and this does not add a check
+that was never there.** Coinbase's `Fake`, for instance, has no single credential
+refusal to bypass — most of its functions never inspected `credentials` in the first
+place, and `bypass_credentials/1` has nothing to do there. Check the venue package's own
+`Fake` moduledoc for whether it applies.
+
+**There is no `error_rate`-shaped knob and there will not be one.** Every outcome is
+queued explicitly and consumed in order — a test that fails 30% of the time on its own
+schedule is not more useful than one that never fails. `queue_failures/2,3` pops one
+entry per matching call; `fail_always/2,3` never pops, for "every call fails" until you
+call `FakeInjection.reset/1`.
+
+**Per-symbol targeting is real isolation, not a convention to remember.** A
+symbol-specific override can never be satisfied by, or interfere with, a call for a
+different symbol — the same rule this family applies everywhere a batch could otherwise
+let one bad member take down the rest.
+
+Built on the same `Config` process-scoped override machinery as everything else on this
+page, so it inherits the identical `async: true` / `$callers` isolation guarantee — and
+the identical limitation: injection configured in your test only reaches a `Fake`
+function called from your test's own process or a `Task` it spawns, not from inside a
+separately-supervised `GenServer`.
+
+**Not every function is wired.** A `Fake` function that takes a *list* of symbols in one
+call — a venue's own bulk subscribe, say — is deliberately left out: whole-call injection
+can pick the outcome one call returns, but it cannot express "this one symbol in the
+batch fails, the rest succeed." Check the venue package's own `Fake` moduledoc for which
+functions are wired.
+
 ## Tests must be deterministic
 
 Three things worth stating because they have each cost a debugging session here:
