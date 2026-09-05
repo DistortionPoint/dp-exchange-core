@@ -880,6 +880,49 @@ defmodule DpExchange.Core.Venue do
   @callback coverage(keyword()) :: %{symbol() => route()}
 
   @doc """
+  What is arriving, per symbol, split by **which kind** of data it is.
+
+  Optional — see `@optional_callbacks` below for why this is not required. It exists
+  because `coverage/1` is truthful and was not enough.
+
+  ## The incident this closes
+
+  DpCryptoManagement's issue #22: Coinbase's `level2` channel delivered over 11,000
+  frames for 406 symbols while `ticker` was dark for all but 5, and `coverage/1`
+  answered `:stream` for all 406 — correctly, because it counts any payload for a
+  symbol, a `Types.OrderBook` exactly as much as a `Types.Quote`. Verified by running it:
+  `coverage after ONLY an OrderBook (no ticker quote): %{"XLM-USD" => :stream}`. The
+  defect had stayed invisible across two issues because `coverage/1` collapses every
+  data kind into one boolean, so "ticker dark, book healthy" is indistinguishable from
+  "everything healthy". This callback exists to make that distinguishable.
+
+  `Capabilities.data_kind()` is the existing vocabulary — the same one `streamable`
+  already declares in. This does not invent a parallel one.
+
+  ## What this is NOT
+
+    * **Not a replacement for `coverage/1`.** A caller asking "is anything arriving for
+      this symbol" still gets a straight answer without knowing a venue's channel
+      vocabulary.
+    * **Not a per-channel report.** A venue's own channel names — Coinbase's `level2`,
+      `ticker` — must never cross this facade; the contract speaks `data_kind()`, never
+      a venue's word for one.
+    * **Not a freshness or latency API.** It reports the same observed-arrival fact
+      `coverage/1` reports, split by kind — never when, never how stale.
+
+  ## The invariant, if a venue implements this at all
+
+      Map.keys(coverage(opts)) ==
+        coverage_by_kind(opts) |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq()
+
+  The conformance suite asserts this, and that every key here is a kind the same
+  venue's own `capabilities().streamable` declares, **only when this callback is
+  exported** — an absent implementation is a venue that has not adopted this yet, not a
+  failure, and asserting nothing in that case is deliberate.
+  """
+  @callback coverage_by_kind(keyword()) :: %{Capabilities.data_kind() => %{symbol() => route()}}
+
+  @doc """
   Subscribes the caller to the package's notices — what it is doing and what is going
   wrong with it.
 
@@ -923,7 +966,8 @@ defmodule DpExchange.Core.Venue do
 
   @optional_callbacks [
     list_instruments: 1,
-    quantization: 1
+    quantization: 1,
+    coverage_by_kind: 1
   ]
 
   @doc """
@@ -1206,7 +1250,12 @@ defmodule DpExchange.Core.Venue do
           "residue when the position moves between the read and the order, and only the " <>
           "venue flattens to exactly zero; a venue carrying no positions has nothing to close",
       {:subscribe_notices, 1} =>
-        "not load-bearing — losing notices costs visibility into the stream, not the stream"
+        "not load-bearing — losing notices costs visibility into the stream, not the stream",
+      {:coverage_by_kind, 1} =>
+        "irreplaceable and not load-bearing — only the venue can say which kind of data is " <>
+          "arriving per symbol, and a caller asking only 'is anything arriving' is complete " <>
+          "with coverage/1 alone; where a venue does implement it, coverage/1's own symbol " <>
+          "set must be exactly the union across every kind (DpCryptoManagement issue #22)"
     }
   end
 

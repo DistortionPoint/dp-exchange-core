@@ -58,6 +58,34 @@ into one number throws it away.
 Note that `:stream` does not say *socket*. Whether a pushed route is a WebSocket, an MQTT
 session or long-polling is package-internal.
 
+## `coverage/1` collapses every kind into one boolean — `coverage_by_kind/1` does not
+
+`coverage/1` counts any payload for a symbol as delivering, whichever `data_kind()` it
+carries. That is the exact mechanism behind an incident that took two issues to pin down: on
+Coinbase, the order-book channel delivered over 11,000 frames for 406 symbols while the
+quotes channel was dark for all but 5, and `coverage/1` truthfully reported `:stream` for all
+406. **"One kind dark, another healthy" and "everything healthy" are indistinguishable
+through `coverage/1` alone.**
+
+```elixir
+%{
+  quotes:     %{"BTC-USDC" => :stream},                        # 5 symbols
+  order_book: %{"BTC-USDC" => :stream, "XLM-USDC" => :stream}  # 406 symbols
+}
+```
+
+`coverage_by_kind/1` is **optional** — check `function_exported?/3` before calling it, since
+Core ships it ahead of any venue adopting it by design (`Venue.@optional_callbacks`, so
+publishing it never breaks a venue package mid-release). Where a venue implements it, the
+conformance suite guarantees two things hold: its symbols are exactly the union `coverage/1`
+reports, and every kind it names is one the venue's own `capabilities().streamable` declares.
+
+It is **not** a replacement for `coverage/1` — a caller asking only "is anything arriving"
+still gets a plain answer. It is **not** a per-channel report — Coinbase's `level2` and
+`ticker` never cross the facade; the kind is always `data_kind()`. And it is **not** a
+freshness or latency API — same observed-arrival fact as `coverage/1`, split by kind, nothing
+about *when*.
+
 ## Notices are a separate channel
 
 ```elixir

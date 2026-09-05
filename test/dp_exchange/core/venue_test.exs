@@ -39,11 +39,13 @@ defmodule DpExchange.Core.VenueTest do
       end
     end
 
-    test "only the two genuinely optional endpoints are optional" do
-      # Optional means "requiring it is ceremony", not "hard to implement". Anything
-      # else optional is a venue silently shipping without a capability.
+    test "only the genuinely optional endpoints are optional" do
+      # Optional means "requiring it is ceremony" (list_instruments, quantization) or
+      # "requiring it would fail every venue depending on Core from Hex the instant Core
+      # publishes it" (coverage_by_kind — see its own moduledoc for the #22 incident).
+      # Anything else optional is a venue silently shipping without a capability.
       assert Enum.sort(Venue.behaviour_info(:optional_callbacks)) ==
-               Enum.sort([{:list_instruments, 1}, {:quantization, 1}])
+               Enum.sort([{:list_instruments, 1}, {:quantization, 1}, {:coverage_by_kind, 1}])
     end
 
     test "required_callbacks/0 is derived, not hand-maintained" do

@@ -72,6 +72,76 @@ defmodule Broken.SymbolFormat do
     do: DpExchange.Core.CanonicalPair.to_exchange(@mapping, canonical)
 end
 
+defmodule Broken.CoverageByKind.Conforming do
+  @moduledoc false
+  # Both invariants hold: the union of symbols across kinds matches coverage/1 exactly,
+  # and every kind reported is one `streamable` actually declares. If a future edit to
+  # the assertion starts failing this fixture, the assertion got stricter than the
+  # design allows.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:coverage, 1} => :proven},
+      supported_quotes: ~w(USD),
+      streamable: [:quotes, :order_book]
+    )
+  end
+
+  @spec coverage(keyword()) :: %{String.t() => atom()}
+  def coverage(_opts), do: %{"BTC-USD" => :stream, "ETH-USD" => :internal_poll}
+
+  @spec coverage_by_kind(keyword()) :: %{atom() => %{String.t() => atom()}}
+  def coverage_by_kind(_opts) do
+    %{
+      quotes: %{"BTC-USD" => :stream},
+      order_book: %{"BTC-USD" => :stream, "ETH-USD" => :internal_poll}
+    }
+  end
+end
+
+defmodule Broken.CoverageByKind.UnionViolation do
+  @moduledoc false
+  # Drops ETH-USD from the union on purpose — coverage/1 reports it, coverage_by_kind/1
+  # does not. This is the exact shape #22 would have been caught by: two sources of
+  # truth that are allowed to disagree are not really two sources of truth.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:coverage, 1} => :proven},
+      supported_quotes: ~w(USD),
+      streamable: [:quotes, :order_book]
+    )
+  end
+
+  @spec coverage(keyword()) :: %{String.t() => atom()}
+  def coverage(_opts), do: %{"BTC-USD" => :stream, "ETH-USD" => :stream}
+
+  @spec coverage_by_kind(keyword()) :: %{atom() => %{String.t() => atom()}}
+  def coverage_by_kind(_opts), do: %{quotes: %{"BTC-USD" => :stream}}
+end
+
+defmodule Broken.CoverageByKind.UndeclaredKind do
+  @moduledoc false
+  # Reports :order_book while `streamable` declares only :quotes — a contradiction
+  # between two of the venue's own declarations.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:coverage, 1} => :proven},
+      supported_quotes: ~w(USD),
+      streamable: [:quotes]
+    )
+  end
+
+  @spec coverage(keyword()) :: %{String.t() => atom()}
+  def coverage(_opts), do: %{"BTC-USD" => :stream}
+
+  @spec coverage_by_kind(keyword()) :: %{atom() => %{String.t() => atom()}}
+  def coverage_by_kind(_opts) do
+    %{quotes: %{"BTC-USD" => :stream}, order_book: %{"BTC-USD" => :stream}}
+  end
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -197,6 +267,59 @@ defmodule DpExchange.Core.ContractTeethTest do
     test "it emits notices on its own channel" do
       assert :ok = ReferenceVenue.subscribe_notices(to: self())
       assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{kind: :link_up}}
+    end
+  end
+
+  describe "assertion 15 catches coverage_by_kind drifting from coverage/1" do
+    # Each test below replicates the exact computation `AdapterContract`'s "15. coverage
+    # by kind" group runs, against the same fixtures — proving the computation itself is
+    # right, the same pattern assertions 1, 4 and 12 above use in this file.
+
+    test "a conforming fake satisfies both checks" do
+      fixture = Broken.CoverageByKind.Conforming
+      by_kind = fixture.coverage_by_kind([])
+      coverage_symbols = fixture.coverage([]) |> Map.keys() |> MapSet.new()
+      union = by_kind |> Map.values() |> Enum.flat_map(&Map.keys/1) |> MapSet.new()
+
+      assert union == coverage_symbols
+
+      declared = MapSet.new(fixture.capabilities().streamable)
+      reported = by_kind |> Map.keys() |> MapSet.new()
+      assert MapSet.subset?(reported, declared)
+    end
+
+    test "a fake whose union drops a symbol coverage/1 reports is caught" do
+      fixture = Broken.CoverageByKind.UnionViolation
+      by_kind = fixture.coverage_by_kind([])
+      coverage_symbols = fixture.coverage([]) |> Map.keys() |> MapSet.new()
+      union = by_kind |> Map.values() |> Enum.flat_map(&Map.keys/1) |> MapSet.new()
+
+      refute union == coverage_symbols,
+             "this fixture drops ETH-USD from coverage_by_kind/1 on purpose — the suite " <>
+               "must reject the drift"
+    end
+
+    test "a fake reporting a kind it does not declare streamable is caught" do
+      fixture = Broken.CoverageByKind.UndeclaredKind
+      declared = MapSet.new(fixture.capabilities().streamable)
+      reported = fixture.coverage_by_kind([]) |> Map.keys() |> MapSet.new()
+
+      refute MapSet.subset?(reported, declared),
+             "this fixture reports :order_book while streamable declares only :quotes — " <>
+               "the suite must reject a venue contradicting its own declaration"
+    end
+
+    test "the reference venue does not export coverage_by_kind/1, and the suite around " <>
+           "it stays green anyway" do
+      # AdapterContractTest runs the full suite, including the new group, against
+      # ReferenceVenue today — this is what proves an absent optional callback does not
+      # fail conformance. If this assertion ever starts failing, ReferenceVenue adopted
+      # the callback and a different fixture is needed for the not-adopted-yet branch.
+      Code.ensure_loaded?(ReferenceVenue)
+
+      refute function_exported?(ReferenceVenue, :coverage_by_kind, 1),
+             "ReferenceVenue now exports coverage_by_kind/1 — this test no longer proves " <>
+               "the suite tolerates an ABSENT callback and needs a fixture that lacks it"
     end
   end
 end

@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Thirteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -75,7 +75,10 @@ defmodule DpExchange.Core.AdapterContract do
       {11, "self-sufficiency — nothing injected but credentials and options"},
       {12, "capabilities and behaviour agree, in both directions"},
       {13, "process-scoped isolation — usable in a consumer's async suite"},
-      {14, "top of book is not a price — a BBO carries resting orders, never a traded price"}
+      {14, "top of book is not a price — a BBO carries resting orders, never a traded price"},
+      {15,
+       "coverage by kind — optional; when a venue exports it, the union invariant against " <>
+         "coverage/1 holds and every key is a kind the venue's own capabilities declare"}
     ]
   end
 
@@ -89,6 +92,7 @@ defmodule DpExchange.Core.AdapterContract do
       symbol_round_trip(opts),
       agreement(),
       both_endpoints(),
+      coverage_by_kind(),
       purity(),
       isolation(),
       helpers(),
@@ -518,6 +522,54 @@ defmodule DpExchange.Core.AdapterContract do
           for {_symbol, route} <- @venue.coverage([]) do
             assert route in [:stream, :internal_poll, :not_covered],
                    "coverage must report an observed route, never a claim"
+          end
+        end
+      end
+    end
+  end
+
+  defp coverage_by_kind do
+    quote location: :keep do
+      # --- 15. coverage by kind (optional) ---------------------------------
+      #
+      # `coverage_by_kind/1` is in `Venue.@optional_callbacks`, deliberately: Core
+      # publishes it before any venue adopts it, and a required callback here would mean
+      # every venue depending on Core from Hex instantly fails completeness — the exact
+      # cross-repo coupling that caused a premature-deploy incident once already. So an
+      # ABSENT callback is a venue that has not adopted yet, NOT a failure, and this
+      # group asserts nothing at all in that case. Do not "fix" the `if` below into an
+      # unconditional assertion — that turns an optional callback back into a required
+      # one from the suite's side, which is the coupling this design refused.
+
+      describe "15. coverage by kind" do
+        test "when exported, its union of symbols matches coverage/1 exactly, and it " <>
+               "names no kind the venue does not declare streamable" do
+          Code.ensure_loaded?(@venue)
+
+          if function_exported?(@venue, :coverage_by_kind, 1) do
+            by_kind = @venue.coverage_by_kind([])
+            coverage_symbols = @venue.coverage([]) |> Map.keys() |> MapSet.new()
+
+            union =
+              by_kind
+              |> Map.values()
+              |> Enum.flat_map(&Map.keys/1)
+              |> MapSet.new()
+
+            assert union == coverage_symbols,
+                   "coverage_by_kind/1's symbols #{inspect(MapSet.to_list(union))} are not " <>
+                     "the union coverage/1 reports (#{inspect(MapSet.to_list(coverage_symbols))}) " <>
+                     "— the two are meant to be definitionally the same fact, and letting them " <>
+                     "drift is what this assertion exists to stop"
+
+            declared = MapSet.new(@venue.capabilities().streamable)
+            reported = by_kind |> Map.keys() |> MapSet.new()
+            undeclared = MapSet.difference(reported, declared)
+
+            assert MapSet.size(undeclared) == 0,
+                   "coverage_by_kind/1 reports #{inspect(MapSet.to_list(undeclared))}, which " <>
+                     "capabilities().streamable does not declare — a venue reporting coverage " <>
+                     "for a kind it does not claim to stream contradicts its own declaration"
           end
         end
       end

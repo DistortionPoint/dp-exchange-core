@@ -12,7 +12,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Fourteen assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifteen assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
@@ -166,7 +166,7 @@ Three things worth stating because they have each cost a debugging session here:
 
 ## Which tier each capability group can actually be verified at
 
-The surface grew to 87 callbacks. **Most of the new ones cannot be verified above tier 1
+The surface grew to 88 callbacks. **Most of the new ones cannot be verified above tier 1
 here, and saying which is which is the point of this table** — a group that CI cannot reach
 is a group whose correctness rests on the reference documentation and a consumer's
 production use, and a package author should know that before shipping it.

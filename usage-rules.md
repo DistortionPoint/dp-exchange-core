@@ -143,6 +143,37 @@ reporting a success it cannot see.
 This is the strongest guarantee in the contract, and it exists because a venue once
 reported 325 symbols subscribed and confirmed while 174 were delivering.
 
+### `coverage/1` alone cannot tell a half-dead feed from a healthy one
+
+`coverage/1` collapses every kind of data a symbol receives into one route. That is exactly
+right for "is anything arriving" and exactly wrong for "is everything arriving that should
+be": on Coinbase, the `level2` (order book) channel delivered over 11,000 frames for 406
+symbols while `ticker` (quotes) was dark for all but 5, and `coverage/1` truthfully answered
+`:stream` for all 406 — it counts any payload, an order book update exactly as much as a
+quote. "Ticker dark, book healthy" and "everything healthy" produced the identical
+`coverage/1` map, and the defect stayed invisible across two issues before it was found.
+
+**`coverage_by_kind/1`, where a venue implements it, answers the question `coverage/1`
+cannot**:
+
+```elixir
+%{
+  quotes:     %{"BTC-USDC" => :stream},                        # 5 symbols
+  order_book: %{"BTC-USDC" => :stream, "XLM-USDC" => :stream}  # 406 symbols
+}
+```
+
+The gap between the two map sizes *is* the signal a single boolean-per-symbol threw away.
+
+**Optional, and check for it before relying on it.** It is in `Venue.@optional_callbacks`
+precisely so Core could ship it without every venue package instantly failing conformance;
+call `function_exported?(YourVenue, :coverage_by_kind, 1)` before calling it. Where it is
+implemented, its own symbols are guaranteed to be exactly the union `coverage/1` reports, and
+every kind key is one the venue's own `capabilities().streamable` declares — the conformance
+suite asserts both. **It is not a replacement for `coverage/1`, not a per-channel report** (a
+venue's own channel names never cross the facade), and **not a freshness or latency API** —
+it is the same observed-arrival fact, split by `data_kind()`.
+
 ## Notices: a prompt to re-read, never the record
 
 `subscribe_notices/1` carries what the *package* says about *itself* — link state,
@@ -170,7 +201,7 @@ two different things. **Read [Authentication](usage-rules/auth.md) before writin
 in particular the Schwab section, because its refresh token is one-time use and losing the
 rotated value is unrecoverable without a person.
 
-## The contract is 87 callbacks, and a package implements what its venue serves
+## The contract is 88 callbacks, and a package implements what its venue serves
 
 `Venue.required_callbacks/0` is what the compiler enforces. Everything else is optional, and
 an unimplemented callback **exists and returns `{:error, :not_supported}`** — never a raise,

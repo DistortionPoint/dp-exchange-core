@@ -144,12 +144,18 @@ Where a moduledoc explains *why* a guard exists, that explanation is the most va
 thing in the file. Carry it when the code moves or is copied. A guard without its reason
 reads as defensive padding, and the next person tidying up deletes it.
 
-## The surface is 87 callbacks, and almost all of them are optional
+## The surface is 88 callbacks, and almost all of them are optional
 
 `Venue.required_callbacks/0` is the list the compiler enforces; everything else is declared
-`:unsupported` and answers `{:error, :not_supported}`. **A new package does not implement 87
+`:unsupported` and answers `{:error, :not_supported}`. **A new package does not implement 88
 functions.** It implements what its venue serves and declares the rest — which is exactly the
 work, because the declaring is where the thinking is.
+
+One of the optional ones is optional for a different reason than the rest: `coverage_by_kind/1`
+is not ceremony to skip, it is a callback Core ships **ahead of any venue adopting it**, so
+that publishing it never breaks a venue package mid-release. Adopt it when you can — see
+`usage-rules/feeds.md` for the incident it exists to make visible — but a package that has not
+yet is not a package doing anything wrong.
 
 `Venue.peripheral_endpoints/0` names the ones a consumer can live without, with the reason
 for each. It is what tells a package author which absences are survivable and which will

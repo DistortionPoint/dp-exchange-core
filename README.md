@@ -52,7 +52,7 @@ for why, and for what picking either up would take.
 
 ## What the contract covers
 
-**87 callbacks**, of which a handful are required and the rest are declared. A venue package
+**88 callbacks**, of which a handful are required and the rest are declared. A venue package
 implements what its venue serves and declares the rest `:unsupported` — which answers
 `{:error, :not_supported}`, never a raise and never a missing function.
 
@@ -66,7 +66,7 @@ implements what its venue serves and declares the rest `:unsupported` — which 
 | staking | rates, balances, rewards, history, stake, unstake |
 | conversion | one-step, and the quote/commit pair |
 | **money movement** | deposit addresses, networks, allowlist, withdrawal estimate, **withdraw**, payment methods, internal transfer |
-| lifecycle | `child_spec/1`, `subscribe/2`, `subscribe_notices/1`, `coverage/1`, `capabilities/0` |
+| lifecycle | `child_spec/1`, `subscribe/2`, `subscribe_notices/1`, `coverage/1`, `coverage_by_kind/1`, `capabilities/0` |
 
 Two lists tell a consumer *why* something is absent: `venue_does_not_serve/0` separates the
 venue's own gaps from what a package has not ported, and `Venue.peripheral_endpoints/0` names

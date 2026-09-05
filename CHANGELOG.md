@@ -21,6 +21,59 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`coverage_by_kind/1` — the Core half of splitting `coverage/1` by data kind, per
+  DpCryptoManagement's issue #22.** `coverage/1` is correct and unchanged: it counts any
+  payload for a symbol as delivering, a `Types.OrderBook` exactly as much as a
+  `Types.Quote`. That is why Coinbase's `level2` channel delivering over 11,000 frames for
+  406 symbols while `ticker` was dark for all but 5 still reported `coverage/1` as `:stream`
+  for all 406 — truthfully, and uselessly, because "one kind dark, another healthy" and
+  "everything healthy" produce the identical map. Verified by running it: `coverage after
+  ONLY an OrderBook (no ticker quote): %{"XLM-USD" => :stream}`. See
+  `docs/design/2026-09-05_coverage-by-data-kind.md` for the fuller account, including why
+  the consumer's own two proposed fixes (`:subscribed_pending`, a `delivering/1`
+  companion) would not have caught this: both split subscribed from delivering, and this
+  defect was never about that axis.
+
+  `@callback coverage_by_kind(keyword()) :: %{Capabilities.data_kind() => %{symbol() =>
+  route()}}` reuses the existing `data_kind()` vocabulary rather than inventing a parallel
+  one, and is added to `Venue.@optional_callbacks` **required to be optional**: a venue
+  package depends on Core from Hex, so a required callback here would mean every venue
+  instantly failing completeness the moment this version publishes — the exact cross-repo
+  coupling that caused a premature-deploy incident once already and delayed the
+  `:gfw`/`:gfm` wiring behind a Core release before that. `required_callbacks/0` is
+  unchanged; `peripheral_endpoints/0` classifies it irreplaceable and not load-bearing.
+
+  `AdapterContract` gains assertion group 15, asserted **only** when a venue exports the
+  callback (`Code.ensure_loaded?/1` then `function_exported?/3` — the former is what stops
+  the latter spuriously reporting `false` for a merely-unloaded module): the union of
+  symbols across every kind must equal `coverage/1`'s own key set exactly, and every kind
+  key must be one the same venue's own `capabilities().streamable` declares. An absent
+  callback asserts nothing — a venue that has not adopted yet is not a failure, and the
+  moduledoc says so in the `if` guard's own comment so nobody "fixes" it into a hard
+  requirement later. `ReferenceVenue` deliberately does not implement it, so Core's own
+  conformance run (`AdapterContractTest`) is the regression proof that the suite stays
+  green against a non-adopting venue; three fixtures in `contract_teeth_test.exs` replicate
+  the assertion's exact computation against a conforming fake and two deliberately broken
+  ones (a union that drops a symbol, a kind not declared in `streamable`), the same pattern
+  assertions 1, 4 and 12 already use in that file.
+
+  The moduledoc's own group count was wrong before this landed — it said "Thirteen groups"
+  while `assertions/0` already listed fourteen, a drift caught while adding the fifteenth.
+  Corrected alongside every other place in this repo that names a callback or assertion
+  count (`README.md`, `usage-rules.md`, `usage-rules/adapter.md`, `usage-rules/testing.md`,
+  `usage-rules/feeds.md`, `docs/guides/building-an-exchange-package.md`) — 87 callbacks
+  became 88, fourteen assertion groups became fifteen.
+
+  `usage-rules/feeds.md` and `usage-rules.md` both document the failure this callback
+  exists to make visible, not only the callback's shape — a consuming agent reading either
+  now learns that `coverage/1` alone cannot distinguish a half-dead feed from a healthy
+  one, which is the whole reason this shipped.
+
+  Venue adoption (Coinbase, Gemini, Webull, Schwab, Robinhood) is tracked separately in
+  the design doc's checklist and is not part of this change — Core ships first, by design.
+
 ### Fixed
 
 - **The `nil`-vs-absent `Keyword.get` trap, closed as a class rather than one incident at a
