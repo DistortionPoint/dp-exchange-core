@@ -117,7 +117,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   `30_000`, and the `wait_ms > timeout` check below is `wait_ms > nil` — which Erlang term
   ordering makes **always false**, because `nil` sorts above every integer. "Fail closed
   after N ms" would silently become "wait however long it takes", verified live against an
-  exhausted bucket. `Config.opt/3` is used here for exactly that reason.
+  exhausted bucket. `DpExchange.Core.Config.opt/3` is used here for exactly that reason.
   """
   @impl DpExchange.Core.RateLimitBehaviour
   @spec acquire(atom() | String.t(), pos_integer(), keyword()) ::

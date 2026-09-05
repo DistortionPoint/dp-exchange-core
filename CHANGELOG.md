@@ -59,7 +59,7 @@ an acceptable changelog line.
   `timeout: nil` — reachable from `HttpClient`, whose `limiter_opts/1` forwards `:timeout`
   verbatim — produced `wait_ms > nil`, which Erlang term ordering makes **always false**.
   "Fail closed after N ms" silently became "wait however long it takes". Verified live
-  against an exhausted bucket. Covered by the same `Config.opt/3` fix as C1, and asserted
+  against an exhausted bucket. Covered by the same `DpExchange.Core.Config.opt/3` fix as C1, and asserted
   with its own regression test: an exhausted bucket with `timeout: nil` now refuses
   near-instantly (the refusal is decided on the server, before any sleep) rather than
   sleeping out a near-minute wait in the caller.
