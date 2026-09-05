@@ -105,7 +105,8 @@ The per-repo checklist. Every step exists because skipping it has cost something
 
 ## 5. Test
 
-- [ ] `use DpExchange.Core.AdapterContract` — 28 assertions, green.
+- [ ] `use DpExchange.Core.AdapterContract` — 14 assertion groups (see
+      `DpExchange.Core.AdapterContract.assertions/0`), green.
 
 - [ ] Your fake satisfies the same suite as the real adapter. Less capable is allowed;
       differently capable is not.

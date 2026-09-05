@@ -34,12 +34,16 @@ without editing anything outside its own repo.
 
 | Package | Venue | Status |
 |---|---|---|
-| `dp_exchange_core` | — the contract | experimental |
-| `dp_exchange_coinbase` | Coinbase | not yet published |
-| `dp_exchange_gemini` | Gemini | not yet published |
-| `dp_exchange_webull` | Webull | not yet published |
-| `dp_exchange_robinhood` | Robinhood | not yet published |
-| `dp_exchange_schwab` | Charles Schwab | not yet published |
+| `dp_exchange_core` | — the contract | published, experimental |
+| `dp_exchange_coinbase` | Coinbase | published, experimental |
+| `dp_exchange_gemini` | Gemini | published, experimental |
+| `dp_exchange_webull` | Webull | published, experimental |
+| `dp_exchange_robinhood` | Robinhood | published, experimental |
+| `dp_exchange_schwab` | Charles Schwab | published, experimental |
+
+All six are on Hex — checked against Hex's package API 2026-09-05, all six return `200`.
+"Published" is not "proven": read `capabilities/0` for what is actually known about a given
+endpoint, not this table.
 
 Every package shares the `DpExchange.*` module namespace, which `dp_exchange_core` owns.
 `dp_exchange_binance` and `dp_exchange_kraken` are reserved names with no

@@ -75,6 +75,51 @@ venue. What a caller legitimately needs is *which kinds of data* stream — `str
 [:quotes, :order_book]` — not which channels carry them. `"level2"` is your venue's word;
 `:order_book` is everyone's.
 
+### The domain vocabularies are closed lists, and `new/1` checks them
+
+`supported_order_types` and `supported_time_in_force` are validated against a fixed list
+at `new/1` time — a value outside it raises rather than being carried through silently.
+Read the current lists from `DpExchange.Core.Capabilities`'s source when in doubt; they
+grow only when a venue proves it needs a word this contract does not yet have.
+
+Current `supported_time_in_force`: `:gtc`, `:ioc`, `:fok`, `:gtd`, `:day`, `:gfw`, `:gfm`.
+The last two — "good for week" and "good for month" — are real Robinhood values, added
+because the vendor's own OpenAPI schema names them in both the order request and response
+schemas and this contract had no slot for them before. Purely additive: a venue declaring
+a subset of this list is unaffected by the addition.
+
+Current `supported_order_types`: `:market`, `:limit`, `:stop`, `:stop_limit`,
+`:post_only`, `:ioc`, `:fok`, `:trailing_stop`, `:trailing_stop_limit`,
+`:market_on_close`, `:limit_on_close`. The last four exist because Schwab accepts them and
+Core had no word for them; declaring one says the venue accepts the type, not that Core
+can express every parameter it takes — `place_order/3`'s request map is for that.
+
+## Prefer `Types.*.new/1` over a struct literal in your decoder
+
+Every `Core.Types.*` module exposes a validating `new/1`, built on
+`DpExchange.Core.Types.Validate`: `struct!/2`, plus a check that every field the type's own
+`@enforce_keys` names is present **and non-`nil`**, raising `ArgumentError` naming the
+offending field when it is not.
+
+`@enforce_keys` alone guards presence, not `nil` — `%Candle{open: nil, high: ..., low: ...,
+close: ..., ...}` builds without complaint even though `Candle`'s typespec calls `open` a
+`Decimal.t()`, never a `Decimal.t() | nil`. That gap is not academic: a `nil` in a field the
+typespec forbids is exactly what a decode bug on a venue key that got renamed produces, and
+without `new/1` the failure surfaces several calls downstream — inside `Decimal` or
+similar — with nothing pointing at which field was actually the problem.
+
+`%Candle{...}` and every other struct literal still work; nothing here removes `defstruct`
+or `@enforce_keys`, and internal code or a test building a known-good value by hand is
+unaffected. `new/1` is the path your own decoder should prefer, because it turns a decode
+bug into an `ArgumentError` at the boundary instead of a crash three calls downstream with
+no indication which venue field caused it.
+
+`Types.Order` is the one type where this needs a caveat: it enforces the presence of seven
+keys, but its own moduledoc documents that all but `:provider` legitimately admit `nil` —
+"the venue's word, or nothing," since a venue can acknowledge a cancel with an id and
+nothing else. So `Order.new/1` narrows its check to `:provider` alone. Check a type's own
+moduledoc rather than assuming every enforced key must come out non-nil.
+
 ## Fail closed; never substitute
 
 The recurring failure in this family is **a nearby substitute where there should be an
@@ -131,6 +176,24 @@ Two things follow that are worth stating because they are easy to get backwards:
 - **An option this package does not recognise is ignored, not an error.** A consumer moving
   between venues carries options that only one of them reads, and refusing them would make
   the uniform facade unusable for the thing it is for.
+
+### A forwarded `opts` turns "never configured" into `key: nil`, not into absence
+
+Every venue package in this family forwards its own `opts` **unchanged**, by convention,
+through several layers — a `Feed` passes its `opts` straight to `PollingFeed.start_link/1`,
+which never itself set `interval_ms`. When nothing upstream ever configured a key, it does
+not vanish from the list; it arrives as `key: nil`, explicit and present, because something
+upstream read it with a bare `Keyword.get/2` and passed the `nil` straight through.
+
+**`Keyword.get(opts, key, default)` only substitutes `default` for an ABSENT key, never for
+one that is present and `nil`.** Against `interval_ms: nil` it returns `nil`, not a sane
+default — and a `nil` reaching `Process.send_after/3`, or arithmetic further downstream,
+crashes the *calling* process, which this library does not supervise.
+`DpExchange.Core.Config.opt/3` is `Keyword.get/3` with exactly that one difference: a
+present-and-`nil` value is treated the same as an absent one. Reach for it, not
+`Keyword.get/3` or `||`, at every default-bearing option your decoder or `Feed` reads out of
+forwarded `opts` — deliberately not `||`, because `||` is falsy on `false` too and would
+silently turn an explicit `log_requests: false` back into its default.
 
 ## Asset classes are a statement about today
 

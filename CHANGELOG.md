@@ -647,7 +647,34 @@ an acceptable changelog line.
 - Two conformance assertions: the order-shape claims must match what the facade answers,
   and `catalog_access` must match how `get_symbols/1` behaves without a query.
 
+### Documentation
 
+- **`usage-rules/adapter.md` never mentioned `Config.opt/3`, `Types.*.new/1` or the
+  `:gfw`/`:gfm` addition to `supported_time_in_force` — all three shipped in this same
+  `[Unreleased]` section (C1, C5, C7 above), and a package author reading only the guide
+  that ships in the Hex tarball would never learn any of them exist.** Fixed by adding: a
+  "domain vocabularies are closed lists" section naming the full current
+  `supported_order_types` and `supported_time_in_force` vocabularies, including `:gfw`/
+  `:gfm` and why they were added; a "prefer `Types.*.new/1`" section carrying the same
+  `@enforce_keys`-guards-presence-not-`nil` explanation the code's own moduledoc gives,
+  plus the `Types.Order` exception; and a section on the forwarded-`opts`
+  `nil`-vs-absent trap naming `Config.opt/3` as the fix, next to the existing "opts is the
+  venue's own vocabulary" discussion it extends. Found by auditing this package's own
+  consumer docs the same way the family-wide sweep audited the other five packages'.
+
+- **`README.md`'s family table said five of six packages were "not yet published."** All
+  six are live on Hex — checked against Hex's package API 2026-09-05, every one of
+  `dp_exchange_core`, `dp_exchange_coinbase`, `dp_exchange_gemini`, `dp_exchange_webull`,
+  `dp_exchange_robinhood` and `dp_exchange_schwab` returns `200`. Corrected to "published,
+  experimental," with a line stating that publication is not proof of maturity — read
+  `capabilities/0` for that, not this table.
+
+- **Two stale assertion-count claims.** `usage-rules/testing.md` said "Thirteen assertion
+  groups"; `docs/guides/building-an-exchange-package.md` said "28 assertions." Neither
+  matches `DpExchange.Core.AdapterContract.assertions/0`, the canonical list the suite's own
+  moduledoc points readers to, which currently names 14 groups. Both corrected to cite that
+  count and the function that defines it, rather than a number that drifts every time a
+  group grows.
 
 ## [0.1.11] - 2026-08-31
 
