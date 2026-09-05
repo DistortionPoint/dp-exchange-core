@@ -59,10 +59,10 @@ an acceptable changelog line.
   `timeout: nil` — reachable from `HttpClient`, whose `limiter_opts/1` forwards `:timeout`
   verbatim — produced `wait_ms > nil`, which Erlang term ordering makes **always false**.
   "Fail closed after N ms" silently became "wait however long it takes". Verified live
-  against an exhausted bucket. Covered by the same `DpExchange.Core.Config.opt/3` fix as C1, and asserted
-  with its own regression test: an exhausted bucket with `timeout: nil` now refuses
-  near-instantly (the refusal is decided on the server, before any sleep) rather than
-  sleeping out a near-minute wait in the caller.
+  against an exhausted bucket. Covered by the same `DpExchange.Core.Config.opt/3` fix as
+  C1, and asserted with its own regression test: an exhausted bucket with `timeout: nil`
+  now refuses near-instantly (the refusal is decided on the server, before any sleep)
+  rather than sleeping out a near-minute wait in the caller.
 
 - **`HttpClient` under-recorded real venue usage (C4).** `record/3` — the call that fills
   the bucket `acquire/3` and `check/3` measure against — was only reached from the
@@ -104,10 +104,13 @@ an acceptable changelog line.
   for month" (C7).** Real Robinhood values, confirmed in the vendor's own OpenAPI schema
   (both the order request and response schemas, enum `["gtc","gfd","gfw","gfm"]`), with no
   slot in this contract's vocabulary before now. Purely additive: existing venues declaring
-  a subset of `supported_time_in_force` are unaffected. Robinhood itself cannot use the new
-  values until this ships to Hex — wiring `Robinhood.to_order/1` and `order_config/2` is a
-  follow-up in that package once this version is out, to avoid the cross-repo atom coupling
-  that caused a prior premature-deploy incident.
+  a subset of `supported_time_in_force` are unaffected. Robinhood could not use the new
+  values until this shipped to Hex, so wiring `Robinhood.to_order/1` and `order_config/2`
+  was sequenced as a follow-up rather than done in the same batch — the cross-repo atom
+  coupling is what caused a prior premature-deploy incident. That follow-up has since
+  landed: `dp_exchange_core` 0.1.45 published these atoms, and `dp_exchange_robinhood`
+  now decodes all four vendor values and raised its dependency floor to `~> 0.1.45` so it
+  cannot compile against a Core lacking them.
 
 - **`DpExchange.Core.FakeInjection` — deterministic failure injection and a
   credential-free wiring mode for a venue's `Fake` — DpCryptoManagement's issue #14.**
@@ -649,16 +652,18 @@ an acceptable changelog line.
 
 ### Documentation
 
-- **`usage-rules/adapter.md` never mentioned `Config.opt/3`, `Types.*.new/1` or the
-  `:gfw`/`:gfm` addition to `supported_time_in_force` — all three shipped in this same
+- **`usage-rules/adapter.md` never mentioned `DpExchange.Core.Config.opt/3`,
+  `Types.<T>.new/1` or the `:gfw`/`:gfm` addition to `supported_time_in_force` — all
+  three shipped in this same
   `[Unreleased]` section (C1, C5, C7 above), and a package author reading only the guide
   that ships in the Hex tarball would never learn any of them exist.** Fixed by adding: a
   "domain vocabularies are closed lists" section naming the full current
   `supported_order_types` and `supported_time_in_force` vocabularies, including `:gfw`/
-  `:gfm` and why they were added; a "prefer `Types.*.new/1`" section carrying the same
+  `:gfm` and why they were added; a "prefer `Types.<T>.new/1`" section carrying the same
   `@enforce_keys`-guards-presence-not-`nil` explanation the code's own moduledoc gives,
   plus the `Types.Order` exception; and a section on the forwarded-`opts`
-  `nil`-vs-absent trap naming `Config.opt/3` as the fix, next to the existing "opts is the
+  `nil`-vs-absent trap naming `DpExchange.Core.Config.opt/3` as the fix, next to the
+  existing "opts is the
   venue's own vocabulary" discussion it extends. Found by auditing this package's own
   consumer docs the same way the family-wide sweep audited the other five packages'.
 
