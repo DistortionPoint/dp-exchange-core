@@ -573,9 +573,24 @@ in one session:
 
 ## 3. Deliberately deferred
 
-- **Robinhood `gfw`/`gfm`** — needs C7 published to Hex first. Cross-repo atom coupling
-  mid-batch is what caused the premature-deploy incident; do it as a follow-up once Core's
-  new version is out.
+- **~~Robinhood `gfw`/`gfm`~~ — DONE.** Needed C7 on Hex first; cross-repo atom coupling
+  mid-batch is what caused the earlier premature-deploy incident, so it was sequenced
+  rather than skipped. Core `0.1.45` published, Robinhood wired both values, bumped its
+  dependency floor to `~> 0.1.45` so it cannot compile against a Core lacking them, and
+  added a test that walks the vendor's whole enum asserting each value decodes to a real
+  atom *and* is declared — so a future vendor addition fails a test instead of quietly
+  becoming `nil` on a live order.
+
+  **Getting there exposed a bigger problem than the item itself.** Core `0.1.45` could not
+  publish at all: the release workflow increments from `mix.exs` but publishes to Hex
+  *before* committing the bump, so an earlier run that published `0.1.44` and then failed
+  left Hex permanently ahead of git. Every run since recomputed `0.1.44`, Hex refused it,
+  and the whole defect sweep sat in git unpublished with nothing saying so — the sweep's
+  own CI failure was the only signal. Fixed by matching `mix.exs` to reality and making the
+  step increment from whichever is higher, `mix.exs` or Hex's actual latest. **All five
+  venue repos carried the identical step** and were one failed run from the same state;
+  fixed there too. A release pipeline that wedges permanently on a partial failure is the
+  same silent-failure shape this whole document is about, one layer up.
 - **~~Schwab non-equity support~~ — NO LONGER DEFERRED, and the original reasoning was
   wrong.** This was filed as "a feature, not a defect fix". Checking it rather than
   accepting it found a real defect underneath: `SymbolFormat.validate/1` *accepts* mutual
