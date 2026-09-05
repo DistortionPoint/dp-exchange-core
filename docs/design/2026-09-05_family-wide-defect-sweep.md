@@ -1,6 +1,6 @@
 # Family-wide defect sweep
 
-**Status:** Implementing
+**Status:** Implemented
 **Date:** 2026-09-05
 
 ## Context
@@ -21,12 +21,17 @@ in one session:
 
 ## 1. Objectives
 
-- [ ] Close every confirmed defect found by the sweep, across all six repos
-- [ ] Add a regression test for each, written against the **vendor's documented shape**,
+- [x] Close every confirmed defect found by the sweep, across all six repos — **26 landed**
+      (C1-C8, G1-G7, S1-S3, W1-W6, B1-B4, R1-R4), plus four found *during* the work that
+      were not in the original sweep at all: the Gemini and Core atom-table exhaustion, the
+      Schwab mutual-fund decode, and the family-wide inherited connect budget.
+- [x] Add a regression test for each, written against the **vendor's documented shape**,
       never against the code's existing assumption
-- [ ] Leave each repo's quality gates green: `mix test` 0 failures, `mix quality` clean,
-      coverage ≥ 90
-- [ ] Push as ONE batch, only after every repo is complete and verified
+- [x] Leave each repo's quality gates green: `mix test` 0 failures, `mix quality` clean,
+      coverage ≥ 90 — final sweep: 3,042 tests, 0 failures across the family; coverage
+      93.75 / 91.04 / 90.31 / 90.90 / 90.94 / 94.69 (core / coinbase / gemini / webull /
+      schwab / robinhood)
+- [x] Push as ONE batch, only after every repo is complete and verified
 
 ## 2. Checklist
 
@@ -335,7 +340,10 @@ in one session:
       `capabilities.ex`/`capabilities_test.exs` while a background test loop shared the
       same `_build` directory, not a genuine timing bug, and is not evidence for or
       against this fix. A second clean 100-run batch (seeds 1000-1099) with no concurrent
-      edits ran after the fix landed. See the retrospective for the final count.
+      edits ran after the fix landed: 100/100 green (`391 tests, 0 failures` each run).
+      `dp_exchange_schwab` final gates: `mix test` 391/0 failures, `mix quality` clean,
+      `mix test --cover` 91.01%. Commit amended (`92afbdf`, not pushed) to fold S1/S2/
+      S2a/S2b into one.
 
 ### Webull
 
@@ -568,8 +576,17 @@ in one session:
 - **Robinhood `gfw`/`gfm`** — needs C7 published to Hex first. Cross-repo atom coupling
   mid-batch is what caused the premature-deploy incident; do it as a follow-up once Core's
   new version is out.
-- **Schwab non-equity support** (making `/ESZ25` etc. actually work) is a feature, not a
-  defect fix. S2 corrects the false *claim*; building the capability is separate work.
+- **~~Schwab non-equity support~~ — NO LONGER DEFERRED, and the original reasoning was
+  wrong.** This was filed as "a feature, not a defect fix". Checking it rather than
+  accepting it found a real defect underneath: `SymbolFormat.validate/1` *accepts* mutual
+  fund tickers (`SWPPX`, `SNSXX` — they are spelled like equities), so such a symbol reached
+  the venue, got a perfectly valid `QuoteMutualFund` back, and was reported as
+  `{:error, :unexpected_response_shape}` — blaming the venue for a response that was fine.
+  `QuoteMutualFund` carries `nAV` and no `lastPrice`/`mark`, which `quoted_price/1` never
+  read. Fixed (S2a/S2b), and `:mutual_fund`/`:cash_equivalent` are declared again now that
+  they genuinely route end to end. `:bond` stays out as a *measured* refusal (a Treasury
+  CUSIP is rejected by the grammar). Genuine futures/forex/index support remains real
+  separate work — but that is now the only part of this that was ever a feature.
 - **Coinbase `FrameSender`'s 5-second `send_frame` timeout, possibly raised.** Minor,
   adjacent finding during B1-B3: `frame_sender.ex`'s moduledoc claimed
   `WebSockex.send_frame/2` has "no way to override" its timeout, which was wrong — the
@@ -596,4 +613,66 @@ in one session:
 
 ## 5. Retrospective
 
-_To be appended on completion._
+**26 planned defects closed, and four more found only by doing the work.** The four that
+were not in the sweep are the interesting ones, because each was found by refusing to
+accept a report at face value — including reports this document itself had written down.
+
+### What the sweep was aimed at, and whether the aim was right
+
+The sweep targeted one class: **a field name or enum value that does not match the vendor's
+real schema, invisible because the fixtures encode the same wrong assumption as the code.**
+That aim paid: S1 (`CHART_FUTURES` decoded under `CHART_EQUITY`'s numbering — every futures
+candle dead, forever, with a green suite), G1/G2 (staking rates keyed provider-first, not
+asset-first), R3 (`time_in_force` declared absent while the vendor's own request *and*
+response schemas carry it), S2a (mutual fund quotes reported as venue errors). Four more
+instances of a class that had already bitten twice. It is now the first thing to look for in
+this family, not the last.
+
+### The three findings that came from checking a finding
+
+- **A "pre-existing, unrelated, low-confidence" sobelow warning was a way to kill the
+  consumer's entire node.** `String.to_atom/1` on a venue's own error text, in two Gemini
+  call sites and once more in Core's `Notice` — the guard whose entire purpose is to make
+  notices safe. Waved through twice in one day under that framing before being checked.
+  Atoms are never collected; the table is finite; these packages run inside someone else's
+  application. **There is no "pre-existing" in a repo you are touching.**
+- **A "transient flake that did not reproduce" was a real, deterministic bug** — six
+  `assert_receive` calls using ExUnit's default 100ms for a genuine two-hop cross-process
+  wait, which `--cover` instrumentation plus async concurrency occasionally exceeded.
+  Root-caused and fixed only because it was refused as an explanation.
+- **A "feature, not a defect" was a defect** — see §3's struck-through Schwab entry.
+
+### Where this document was itself wrong
+
+Worth recording, because a design doc that only lists other people's errors is not honest.
+
+- The Gemini `@refusal_reasons` table, written by hand while fixing the atom bug, picked up
+  three entries (`RateLimit`, `EndpointNotFound`, `InsufficientFunds`) chosen because they
+  *sounded* like Gemini error codes, with no document and no measurement behind any of them
+  — the exact unverified-plausible move this sweep exists to delete. Caught on review, and
+  replaced with the four codes the vendor actually documents.
+- The first regression test for that fix asserted on `:erlang.system_info(:atom_count)`,
+  which is process-global in an `async: true` suite. It passed alone and failed in a full
+  run: a flaky test written *while fixing a bug about not accepting flaky tests*.
+- "The Gemini connect is unbounded" was wrong — it was bounded at ~11s by a dependency
+  default nobody had chosen. The real finding was better than the reported one, and only
+  visible by reading `deps/websockex/lib/websockex/conn.ex` instead of reasoning about it.
+  That correction then generalised: **all four WebSocket venues** were inheriting the same
+  accidental budget against their own 15s `@call_timeout`.
+
+### The rejected finding matters as much as the accepted ones
+
+§4 records a high-severity, confidently-argued claim — backed by current vendor
+documentation *and* the official SDK — that Coinbase's JWT claims were wrong. It was
+refuted by a live measurement from the consuming application hours earlier. **Two
+authoritative documentation sources lost to one observation of the running system.** Had it
+been "fixed", a working authenticated path would have been broken on paper evidence.
+
+### For next time
+
+- Ask what the *vendor's schema* says before asking what the code says. Fixtures are not
+  evidence; they are the code's assumption wearing a costume.
+- A dependency's default is a decision nobody made. Read it, then choose it.
+- Every dismissal — "pre-existing", "unrelated", "flaky", "not a bug, a feature" — is a
+  finding that has not been investigated yet. All four appeared in this batch. All four
+  were wrong.
