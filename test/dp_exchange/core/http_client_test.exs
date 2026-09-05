@@ -494,6 +494,99 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe "C1 — retry_attempts: nil no longer crashes the calling process" do
+    test "an explicit nil retry_attempts falls back to the default instead of nil > 1" do
+      # Erlang term ordering puts `nil` ABOVE every integer, so `nil > 1` is `true` — a
+      # forwarded `retry_attempts: nil` silently entered the retry branch and then died
+      # computing `4 - nil`, an `ArithmeticError` raised directly in the CALLING process
+      # (this function is a plain call, not a supervised worker), which this library does
+      # not supervise. Verified: before this fix, this test raised instead of asserting.
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+
+        case :counters.get(counter, 1) do
+          3 -> Req.Test.json(conn, %{ok: true})
+          _still_failing -> Req.Test.json(%{conn | status: 500}, %{})
+        end
+      end
+
+      assert {:ok, %{status: 200}} =
+               get(plug: plug, retry_attempts: nil, retry_delay: 1)
+
+      # The default (3) applied, not a crash and not "no retries".
+      assert :counters.get(counter, 1) == 3
+    end
+
+    test "a persistent failure with retry_attempts: nil still terminates, using the default" do
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Req.Test.json(%{conn | status: 500}, %{})
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: nil, retry_delay: 1)
+      assert message =~ "Server error (500)"
+      # Exactly the default retry_attempts (3) worth of attempts, then it gives up.
+      assert :counters.get(counter, 1) == 3
+    end
+  end
+
+  describe "C4 — every request actually put on the wire is recorded, not only 2xx" do
+    test "a retried 5xx is recorded once per attempt, not only on the eventual success" do
+      # The same mechanism as this module's own moduledoc incident: a bucket that only
+      # counts successes under-counts real usage. A 5xx that gets retried genuinely
+      # reached the wire and genuinely consumed the venue's quota twice here, not once.
+      use_stub()
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+
+        case :counters.get(counter, 1) do
+          1 -> Req.Test.json(%{conn | status: 500}, %{})
+          _later -> Req.Test.json(conn, %{ok: true})
+        end
+      end
+
+      assert {:ok, %{status: 200}} =
+               get(plug: plug, provider: "v", retry_attempts: 3, retry_delay: 1)
+
+      assert_received {:recorded, "v", 1}
+      assert_received {:recorded, "v", 1}
+      refute_received {:recorded, "v", 1}
+    end
+
+    test "a permanent 4xx that is never retried is still recorded — it reached the wire once" do
+      use_stub()
+
+      assert {:error, _message} = get(plug: responding(404, %{}), provider: "v")
+
+      assert_received {:recorded, "v", 1}
+    end
+
+    test "a venue 429 is recorded — the request was sent and the quota was spent either way" do
+      use_stub()
+
+      assert {:error, {:exchange_error, "v", _message}} =
+               get(plug: responding(429, %{}), provider: "v")
+
+      assert_received {:recorded, "v", 1}
+    end
+
+    test "a request refused by OUR OWN limiter before it left the process is not recorded" do
+      # Nothing was put on the wire here, so nothing should be metered as if it had been.
+      use_stub({:rate_limited, 1_000})
+
+      assert {:error, {:exchange_error, "v", _message}} =
+               get(plug: responding(200, %{}), provider: "v")
+
+      refute_received {:recorded, "v", _weight}
+    end
+  end
+
   describe "transport failure" do
     test "a raising transport is contained rather than escaping to the caller" do
       plug = fn _conn -> raise "transport exploded" end

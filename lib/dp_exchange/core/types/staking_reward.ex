@@ -19,6 +19,8 @@ defmodule DpExchange.Core.Types.StakingReward do
   reconcile a reward against the rate that produced it rather than against the current one.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:asset, :amount, :provider]
   defstruct [
     :asset,
@@ -41,4 +43,12 @@ defmodule DpExchange.Core.Types.StakingReward do
           period_end: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

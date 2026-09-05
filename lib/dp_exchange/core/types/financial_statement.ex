@@ -27,6 +27,8 @@ defmodule DpExchange.Core.Types.FinancialStatement do
   and not the caller's. `nil` means the venue did not say — it does not mean USD.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :kind, :line_items, :provider]
   defstruct [
     :symbol,
@@ -51,4 +53,12 @@ defmodule DpExchange.Core.Types.FinancialStatement do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

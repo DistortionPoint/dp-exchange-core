@@ -17,6 +17,38 @@ defmodule DpExchange.Core.ConfigTest do
     end
   end
 
+  describe "opt/3 — Keyword.get/3 that treats a present nil as absent (C1)" do
+    test "an absent key returns the default, same as Keyword.get/3" do
+      assert Config.opt([], :interval_ms, 30_000) == 30_000
+    end
+
+    test "a present value overrides the default, same as Keyword.get/3" do
+      assert Config.opt([interval_ms: 5_000], :interval_ms, 30_000) == 5_000
+    end
+
+    test "a present-and-nil key returns the default — the case Keyword.get/3 gets wrong" do
+      # This is the whole reason `opt/3` exists. Every venue package forwards its own
+      # `opts` unchanged by family convention, so `interval_ms: nil` is what arrives
+      # whenever nothing upstream ever set it — not an absent key, a present one.
+      # `Keyword.get(opts, :interval_ms, 30_000)` against `interval_ms: nil` returns `nil`,
+      # not `30_000`.
+      assert Config.opt([interval_ms: nil], :interval_ms, 30_000) == 30_000
+    end
+
+    test "an explicit false is preserved, not treated as absent" do
+      # `opt/3` deliberately does not use `||` for this reason: `||` is falsy on `false`
+      # too, and a helper that silently overrode a real `false` back to its default would
+      # be the same bug in the other direction — a caller that explicitly set
+      # `log_requests: false` or `raw_status: false` must have that honoured.
+      assert Config.opt([log_requests: false], :log_requests, true) == false
+    end
+
+    test "the FIRST value for a duplicated key wins, same as Keyword.fetch/2" do
+      assert Config.opt([weight: 1, weight: 2], :weight, 5) == 1
+      assert Config.opt([weight: nil, weight: 2], :weight, 5) == 5
+    end
+  end
+
   describe "a process-scoped override beats application env" do
     test "the calling process sees its own override" do
       Config.put_override(:seam, :overridden)

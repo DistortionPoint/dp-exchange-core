@@ -33,6 +33,8 @@ defmodule DpExchange.Core.Types.Quote do
   are different facts, and `0` claims the second.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :price, :timestamp, :provider]
   defstruct [:symbol, :price, :volume, :timestamp, :provider]
 
@@ -43,4 +45,12 @@ defmodule DpExchange.Core.Types.Quote do
           timestamp: DateTime.t(),
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

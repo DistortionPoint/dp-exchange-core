@@ -21,6 +21,8 @@ defmodule DpExchange.Core.Types.CorporateEvent do
   late by days.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :kind, :provider]
   defstruct [
     :symbol,
@@ -53,4 +55,12 @@ defmodule DpExchange.Core.Types.CorporateEvent do
           details: %{optional(String.t()) => term()} | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

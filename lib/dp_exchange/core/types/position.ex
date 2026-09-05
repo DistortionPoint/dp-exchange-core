@@ -35,6 +35,8 @@ defmodule DpExchange.Core.Types.Position do
   `nil` must treat the position as un-assessed, not as safe.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :side, :quantity, :provider]
   defstruct [
     :symbol,
@@ -69,6 +71,14 @@ defmodule DpExchange.Core.Types.Position do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Normalises a venue's signed quantity into `{side, positive_quantity}`.

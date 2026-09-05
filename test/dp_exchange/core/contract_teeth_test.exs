@@ -49,13 +49,18 @@ end
 
 defmodule Broken.SymbolFormat do
   @moduledoc false
-  # Quote assets in the wrong order, which is the entire USD/USDT/USDC bug: `BTCUSDC`
-  # parses as `BTC-USD` with a stray character and every value downstream stays plausible.
+  # Quote assets handed to `CanonicalPair` in the WRONG order — shortest-first, with `USD`
+  # a suffix of `BUSD`. This used to be the entire USD/USDT/USDC bug: `BTCBUSD` parsed as
+  # `BTC-USD` with a stray character and every value downstream stayed plausible while
+  # naming a pair that does not exist. `CanonicalPair` now sorts `quotes` longest-first
+  # internally (C6), so this mapping — deliberately still given in the wrong order — is
+  # the regression test proving a caller cannot get this wrong any more.
+  #
+  # That containment is the actual collision: `USDT` and `USDC` do NOT end with `USD`, so
+  # those three round-trip in either order, and a test built on them would have proved
+  # nothing either way.
   @behaviour DpExchange.Core.SymbolNormalizer
 
-  # Shortest-first, with `USD` a suffix of `BUSD`. That containment is the actual
-  # collision: `USDT` and `USDC` do NOT end with `USD`, so those three round-trip in
-  # either order, and a test built on them would have proved nothing.
   @mapping %{sep: "", quotes: ~w(USD BUSD)}
 
   @impl true
@@ -99,17 +104,19 @@ defmodule DpExchange.Core.ContractTeethTest do
   end
 
   describe "assertion 4 catches the round-trip bug it was written for" do
-    test "a quote that contains a shorter quote breaks the round trip when misordered" do
+    test "a mapping with quotes given shortest-first no longer breaks the round trip (C6)" do
       round_tripped =
         "BTC-BUSD"
         |> Broken.SymbolFormat.to_exchange_symbol()
         |> Broken.SymbolFormat.to_canonical_symbol()
 
-      # `BTCBUSD` ends with `USD` before it ends with `BUSD`, so shortest-first splits
-      # the base as `BTCB`. Every value downstream stays plausible while naming a pair
-      # that does not exist.
-      refute round_tripped == "BTC-BUSD"
-      assert round_tripped == "BTCB-USD"
+      # Before C6: `BTCBUSD` ends with `USD` before it ends with `BUSD`, so a shortest-first
+      # `quotes` list split the base as `BTCB` and this assertion was `"BTCB-USD"` — every
+      # value downstream stayed plausible while naming a pair that does not exist, and
+      # nothing caught it, because concatenation round-trips byte-for-byte regardless of
+      # where the cut landed. `CanonicalPair` now sorts `quotes` longest-first internally
+      # before matching, so the caller's (wrong) ordering here no longer matters.
+      assert round_tripped == "BTC-BUSD"
     end
 
     test "the same mapping ordered longest-first round-trips correctly" do

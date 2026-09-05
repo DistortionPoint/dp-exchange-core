@@ -51,6 +51,8 @@ defmodule DpExchange.Core.Types.TopOfBook do
   package either to invent a level or to fail on a book that is merely thin.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :observed_at, :provider]
   defstruct [
     :symbol,
@@ -73,6 +75,14 @@ defmodule DpExchange.Core.Types.TopOfBook do
           observed_at: DateTime.t(),
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   The mid price, or `nil` when either side is missing.

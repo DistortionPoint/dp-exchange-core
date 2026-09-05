@@ -21,6 +21,8 @@ defmodule DpExchange.Core.Types.Watchlist do
   symbol in the list.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :provider]
   defstruct [:id, :name, :symbols, :venue_time, :provider]
 
@@ -31,4 +33,12 @@ defmodule DpExchange.Core.Types.Watchlist do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

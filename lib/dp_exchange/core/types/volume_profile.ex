@@ -31,6 +31,8 @@ defmodule DpExchange.Core.Types.VolumeProfile do
   Empty maps mean the venue reported no split, **not** that nothing traded at any price.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :timeframe, :opened_at, :provider]
   defstruct [
     :symbol,
@@ -59,6 +61,14 @@ defmodule DpExchange.Core.Types.VolumeProfile do
           session: atom() | nil,
           provider: atom() | String.t()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   The price with the most volume across both sides — the point of control.

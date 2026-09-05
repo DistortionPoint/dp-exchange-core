@@ -35,6 +35,8 @@ defmodule DpExchange.Core.Types.Withdrawal do
   `:completed` is the venue's opinion, and it is the strongest claim available here.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :status, :asset, :amount, :provider]
   defstruct [
     :id,
@@ -65,4 +67,12 @@ defmodule DpExchange.Core.Types.Withdrawal do
           requested_at: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

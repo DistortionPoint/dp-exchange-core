@@ -15,6 +15,8 @@ defmodule DpExchange.Core.Types.Balance do
   refuse.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:currency, :balance, :timestamp, :provider]
   defstruct [:currency, :balance, :available_balance, :hold, :timestamp, :provider]
 
@@ -26,4 +28,12 @@ defmodule DpExchange.Core.Types.Balance do
           timestamp: DateTime.t(),
           provider: atom() | String.t()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

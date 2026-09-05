@@ -328,7 +328,13 @@ defmodule DpExchange.Core.Capabilities do
     :limit_on_close
   ]
 
-  @time_in_force [:gtc, :ioc, :fok, :gtd, :day]
+  # `:gfw` and `:gfm` — "good for week" and "good for month" — are real Robinhood values
+  # with no slot in this vocabulary until 2026-09-05. The vendor's own OpenAPI schema
+  # names them in both the order request AND response, enum `["gtc","gfd","gfw","gfm"]`, so
+  # a venue with no word for them had to either under-declare (a lie about what the venue
+  # accepts) or make one up. Purely additive: existing venues declaring a subset of this
+  # list are unaffected.
+  @time_in_force [:gtc, :ioc, :fok, :gtd, :day, :gfw, :gfm]
 
   # `:spot` and `:perp` were the whole vocabulary while every venue was crypto. An
   # equities broker trades none of the rest of this list as "spot" in any meaningful

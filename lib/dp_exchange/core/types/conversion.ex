@@ -31,6 +31,8 @@ defmodule DpExchange.Core.Types.Conversion do
   complete would be reporting an intention as a fact.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :status, :from_asset, :to_asset, :provider]
   defstruct [
     :id,
@@ -61,6 +63,14 @@ defmodule DpExchange.Core.Types.Conversion do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Whether a quote has passed its stated expiry, as at `now`.

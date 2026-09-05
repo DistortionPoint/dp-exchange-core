@@ -29,6 +29,8 @@ defmodule DpExchange.Core.Types.OptionGreeks do
   venue states it. Volume, by contrast, is live — and lives on `Types.Quote`.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:provider]
   defstruct [
     :delta,
@@ -57,4 +59,12 @@ defmodule DpExchange.Core.Types.OptionGreeks do
           as_of: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

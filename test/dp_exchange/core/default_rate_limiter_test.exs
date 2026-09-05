@@ -235,6 +235,33 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     end
   end
 
+  describe "C3 — :timeout must survive an explicit nil" do
+    test "an exhausted bucket with timeout: nil still fails closed, not waits forever" do
+      # `wait_ms > timeout` becomes `wait_ms > nil` whenever `:timeout` is forwarded as an
+      # explicit `nil` — the shape `HttpClient.limiter_opts/1` produces when nothing
+      # upstream ever set it. Erlang term ordering makes that comparison ALWAYS false,
+      # because `nil` sorts above every integer, so "fail closed after N ms" silently
+      # became "wait however long it takes". Verified live against an exhausted bucket.
+      opts = start_limiter(%{default: %{limit: 1, per_ms: 60_000, burst: 1}})
+
+      # Spend the one-token burst, so the next acquire needs a real wait — close to a
+      # full minute at this rate, comfortably past any sane default ceiling.
+      assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0])
+
+      {elapsed_us, result} =
+        :timer.tc(fn -> Limiter.acquire(:venue, 1, opts ++ [timeout: nil]) end)
+
+      assert {:error, :rate_limit_timeout} = result
+
+      # The refusal is decided on the SERVER, before any sleep — `acquire/3` only sleeps
+      # in the caller once the server has already said the wait fits the timeout. So a
+      # correct refusal here is near-instant. Before this fix, `nil` took the `{:ok,
+      # wait_ms}` branch instead, and the caller would have gone on to `Process.sleep/1`
+      # the full ~60s wait — this bound is what would have caught that.
+      assert elapsed_us < 1_000_000
+    end
+  end
+
   describe "unknown messages" do
     test "an unknown call is answered rather than crashing the caller" do
       opts = start_limiter(fast())

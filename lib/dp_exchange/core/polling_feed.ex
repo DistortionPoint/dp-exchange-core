@@ -54,11 +54,32 @@ defmodule DpExchange.Core.PollingFeed do
   So a feed that has delivered nothing since it started escalates: it warns once
   it has failed a full cycle with zero successes, and keeps warning while that
   holds. Never a silent retry loop.
+
+  ## A fetch that never returns fails just as loudly
+
+  `fetch` and `fetch_all` run synchronously inside `handle_info`, and nothing in this
+  module's own code can time one out — that has to be a boundary this module imposes.
+  Without one, a single hung fetch (a socket that never closes, an HTTP client with no
+  timeout of its own) blocks this GenServer's mailbox indefinitely: every other symbol
+  stops ticking, and `status/1` and `coverage/1` — the calls a health check makes to find
+  out whether this feed is the one delivering nothing — never answer either. That is a
+  worse failure than the one the escalating warning above exists to catch, because it
+  disables the very mechanism meant to report it.
+
+  So every fetch runs inside a bounded, disposable task (see `bounded_fetch/2`) and a hang
+  past `:fetch_timeout_ms` becomes an ordinary fetch failure — retried next tick, counted
+  toward `failures_since_ok`, escalated the same way a real error would be. The default
+  timeout is derived from the poll interval and clamped between `@min_fetch_timeout_ms` and
+  `@max_fetch_timeout_ms`, so this module never trades an unbounded hang for a merely very
+  long one, and never turns a fast interval into an accidental timeout on an ordinary,
+  slower-than-a-tick HTTP round trip.
   """
 
   use GenServer
 
   require Logger
+
+  alias DpExchange.Core.Config
 
   @typedoc """
   Fetches one symbol's current price.
@@ -92,6 +113,39 @@ defmodule DpExchange.Core.PollingFeed do
   # its own interval. Two intervals rather than one, so a single slow or failed
   # fetch reads as jitter instead of an outage.
   @coverage_grace 2
+
+  # A fetch that never returns is not covered by `safely/1` — that catches a raise or an
+  # `exit`, not a call that simply hangs. Verified: a fetcher doing `Process.sleep(:infinity)`
+  # left `status/1` and `coverage/1` unanswerable, every symbol dark, with nothing logged —
+  # the exact silent failure this module's moduledoc says it exists to make loud. `handle_info`
+  # ran the fetch inline with no boundary, so one hung HTTP call wedged the whole feed's
+  # mailbox, not just the symbol that hung.
+  #
+  # `:fetch_timeout_ms` bounds it. The default is DERIVED from the poll interval, but
+  # clamped rather than used outright — `interval_ms` alone is the wrong number at both
+  # ends:
+  #
+  #   * Too tight, and it kills fetches that were never hanging. A `fetch` is typically
+  #     built on `HttpClient`, whose own per-request timeout defaults to 30s, and a single
+  #     ordinary call can carry up to `retry_attempts` of those plus backoff. A feed polling
+  #     every second — an entirely reasonable interval — would otherwise get a
+  #     `:fetch_timeout_ms` of 1_000 and kill a normal retry sequence before `HttpClient`'s
+  #     own timeout ever had a chance to fire. `@min_fetch_timeout_ms` floors it above that.
+  #   * Too loose, and a venue polled once an hour could wedge this feed for an hour: no
+  #     single hang should outlast the time it takes to notice one. `@max_fetch_timeout_ms`
+  #     caps it.
+  #
+  # A hang past the boundary is reported through the same failure path as any other fetch
+  # error — retried next tick, counted toward `failures_since_ok`, and escalated by the
+  # existing "delivered NOTHING" warning — rather than a special case.
+  @min_fetch_timeout_ms 30_000
+  @max_fetch_timeout_ms 60_000
+
+  defp default_fetch_timeout_ms(interval_ms) do
+    interval_ms
+    |> max(@min_fetch_timeout_ms)
+    |> min(@max_fetch_timeout_ms)
+  end
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -137,24 +191,35 @@ defmodule DpExchange.Core.PollingFeed do
 
   @impl true
   def init(opts) do
+    # Bound first: the fetch timeout's own default is derived from the interval.
+    interval_ms = Config.opt(opts, :interval_ms, @default_interval_ms)
+
     state = %{
       fetch: Keyword.get(opts, :fetch),
       fetch_all: Keyword.get(opts, :fetch_all),
       sink: Keyword.fetch!(opts, :sink),
-      interval_ms: Keyword.get(opts, :interval_ms, @default_interval_ms),
-      label: Keyword.get(opts, :label, "polling-feed"),
+      # Every default below goes through `Config.opt/3`, not `Keyword.get/3`, and that is
+      # not interchangeable. A caller that forwards its own `opts` unchanged (as every
+      # venue's `Feed` does, by family convention) hands each of these keys through with an
+      # explicit `nil` when ITS OWN caller never set them — `Keyword.get/3` only substitutes
+      # a default for an ABSENT key, not a present-and-nil one. This was originally fixed by
+      # hand at exactly one call site here (`:start_delay_ms`, `|| @default_start_delay_ms`)
+      # after that `nil` reached `Process.send_after/3` and crashed the feed into a restart
+      # loop straight back into the same crash. It was open at every other site in this
+      # `init/1` — `:interval_ms` crashed the same way, `:on_refusal` raised
+      # `BadFunctionError`, `:symbols` raised inside `MapSet.new/1` — until `Config.opt/3`
+      # closed the trap as a class rather than one incident at a time. See its moduledoc.
+      interval_ms: interval_ms,
+      label: Config.opt(opts, :label, "polling-feed"),
       # Injected like the sink, so the feed never reaches outside its own inputs.
       # Defaults to a no-op: a caller that does not care about refusals gets a
       # working feed, not a crash.
-      on_refusal: Keyword.get(opts, :on_refusal, fn _symbol, _reason -> :ok end),
-      symbols: MapSet.new(Keyword.get(opts, :symbols, [])),
-      # `|| @default_start_delay_ms`, not just a `Keyword.get/3` default: a caller that
-      # forwards its own `opts` unchanged (as every venue's `Feed` does) hands this key
-      # through with an explicit `nil` when its own caller never set it, and `Keyword.get/3`
-      # only substitutes a default for an ABSENT key, not a present-and-nil one. Without the
-      # `||`, that `nil` reaches `Process.send_after/3` downstream and crashes the feed.
-      start_delay_ms:
-        Keyword.get(opts, :start_delay_ms, @default_start_delay_ms) || @default_start_delay_ms,
+      on_refusal: Config.opt(opts, :on_refusal, fn _symbol, _reason -> :ok end),
+      symbols: MapSet.new(Config.opt(opts, :symbols, [])),
+      start_delay_ms: Config.opt(opts, :start_delay_ms, @default_start_delay_ms),
+      # See `@max_fetch_timeout_ms` above for why this exists and how the default is chosen.
+      fetch_timeout_ms:
+        Config.opt(opts, :fetch_timeout_ms, default_fetch_timeout_ms(interval_ms)),
       last_ok: %{},
       failures_since_ok: 0,
       last_error: nil
@@ -235,7 +300,10 @@ defmodule DpExchange.Core.PollingFeed do
   def handle_info(_other, state), do: {:noreply, state}
 
   defp fetch_all_and_publish(%{symbols: symbols} = state) do
-    case safely(fn -> state.fetch_all.(MapSet.to_list(symbols)) end) do
+    case bounded_fetch(
+           fn -> state.fetch_all.(MapSet.to_list(symbols)) end,
+           state.fetch_timeout_ms
+         ) do
       {:ok, events} ->
         now = System.monotonic_time(:millisecond)
 
@@ -254,7 +322,7 @@ defmodule DpExchange.Core.PollingFeed do
   end
 
   defp fetch_one_and_publish(symbol, state) do
-    case safely(fn -> state.fetch.(symbol) end) do
+    case bounded_fetch(fn -> state.fetch.(symbol) end, state.fetch_timeout_ms) do
       {:ok, event} ->
         %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
         |> tap(fn _state -> state.sink.(event) end)
@@ -290,6 +358,33 @@ defmodule DpExchange.Core.PollingFeed do
     exception -> {:error, Exception.message(exception)}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  # `safely/1` is a boundary for a raise or an `exit`, and only that — it still calls
+  # `fetch.()` inline, so a fetch that never returns (a blocked socket, an HTTP client with
+  # no timeout of its own) still blocks `handle_info` and, with it, every other symbol's
+  # tick and every `status/1` or `coverage/1` call waiting on this GenServer's mailbox.
+  # Verified: a fetcher doing `Process.sleep(:infinity)` left the whole feed unanswerable.
+  #
+  # `bounded_fetch/2` closes that gap by running the (already exception-safe) fetch inside
+  # its own process and waiting only up to `timeout_ms` for it. `Task.async/1` links the
+  # task to this process, but nothing here can turn that link into a crash: `fetch` is
+  # wrapped in `safely/1` before it ever reaches the task, so an ordinary raise or exit is
+  # already converted to `{:error, reason}` inside the task and never becomes an abnormal
+  # exit; the one abnormal exit this function itself can cause — killing the task after a
+  # timeout — is handled by `Task.shutdown/2`, which unlinks before it kills. A hang past
+  # `timeout_ms` becomes `{:error, :fetch_timeout}`, which the two callers already treat as
+  # an ordinary fetch failure: retried next tick, counted toward `failures_since_ok`, and
+  # escalated by the existing "delivered NOTHING" warning if it keeps happening — no new
+  # failure path, because a hang is not a new kind of failure to a caller of this module.
+  defp bounded_fetch(fetch, timeout_ms) do
+    task = Task.async(fn -> safely(fetch) end)
+
+    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
+      {:ok, result} -> result
+      {:exit, reason} -> {:error, {:fetch_crashed, reason}}
+      nil -> {:error, :fetch_timeout}
+    end
   end
 
   defp record_success(state, false), do: state

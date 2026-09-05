@@ -26,6 +26,8 @@ defmodule DpExchange.Core.Types.Trade do
   reports `false` because nothing was busted, which is the same answer.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :symbol, :side, :price, :quantity, :timestamp, :provider]
   defstruct [:id, :symbol, :side, :price, :quantity, :timestamp, :provider, broken: false]
 
@@ -39,6 +41,14 @@ defmodule DpExchange.Core.Types.Trade do
           broken: boolean(),
           provider: atom() | String.t()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   The trade's notional value — price times quantity.

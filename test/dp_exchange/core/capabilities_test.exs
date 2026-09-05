@@ -235,6 +235,17 @@ defmodule DpExchange.Core.CapabilitiesTest do
       assert caps(supported_instrument_types: [:spot, :perp]).supported_instrument_types ==
                [:spot, :perp]
     end
+
+    test "gfw and gfm — 'good for week' and 'good for month' — are declarable (C7)" do
+      # Real Robinhood values, confirmed in the vendor's own OpenAPI schema (order request
+      # AND response, enum ["gtc","gfd","gfw","gfm"]), with no slot in this vocabulary
+      # before now. Before this fix, declaring either raised — a venue with no word for
+      # them had to either under-declare (a lie about what the venue accepts) or invent one.
+      declaration = caps(supported_time_in_force: [:gtc, :gfw, :gfm])
+
+      assert :gfw in declaration.supported_time_in_force
+      assert :gfm in declaration.supported_time_in_force
+    end
   end
 
   describe "ceilings: zero is a value, and scope changes what a caller must do" do

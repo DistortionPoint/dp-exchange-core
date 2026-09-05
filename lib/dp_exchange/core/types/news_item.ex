@@ -18,6 +18,8 @@ defmodule DpExchange.Core.Types.NewsItem do
   worth knowing before building an alert on it.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :provider]
   defstruct [:id, :headline, :summary, :url, :source, :symbols, :published_at, :provider]
 
@@ -31,4 +33,12 @@ defmodule DpExchange.Core.Types.NewsItem do
           published_at: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

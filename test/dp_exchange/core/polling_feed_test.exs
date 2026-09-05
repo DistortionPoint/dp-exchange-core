@@ -238,6 +238,131 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
   end
 
+  describe "the nil-vs-absent Keyword.get trap, fixed as a class (C1)" do
+    test "an explicit nil interval_ms falls back to the default instead of crashing the feed" do
+      # Before this fix: `Keyword.get(opts, :interval_ms, @default_interval_ms)` returns
+      # `nil` (not the default) when `interval_ms` is PRESENT and `nil` — the shape a
+      # venue's forwarded `opts` produce when nothing upstream ever set it. That `nil`
+      # reached `Process.send_after(self(), _, state.interval_ms)` on the very first
+      # reschedule and crashed the feed into a restart loop straight back into the same
+      # crash.
+      pid =
+        start_supervised!(
+          {PollingFeed,
+           sink: sink_to_self(),
+           start_delay_ms: 0,
+           interval_ms: nil,
+           fetch: fn symbol -> {:ok, event(symbol)} end,
+           symbols: ~w(BTC-USD)}
+        )
+
+      assert_receive {:published, _event}, 500
+      # The reschedule inside handle_info is where the crash happened — give it a beat
+      # past the first publish and confirm the feed is still standing.
+      Process.sleep(100)
+      assert Process.alive?(pid)
+    end
+
+    test "an explicit nil on_refusal falls back to a no-op instead of crashing the feed" do
+      # Before this fix: `state.on_refusal.(symbol, reason)` with `on_refusal: nil` raises
+      # `BadFunctionError`, because `Keyword.get/3`'s default never applied to a
+      # present-and-nil key.
+      pid =
+        start_feed(
+          fetch: fn _symbol -> {:refused, :nope} end,
+          symbols: ~w(DOGE-USD),
+          on_refusal: nil
+        )
+
+      Process.sleep(120)
+      assert Process.alive?(pid)
+    end
+
+    test "an explicit nil symbols falls back to an empty set instead of crashing init" do
+      # Before this fix: `MapSet.new(Keyword.get(opts, :symbols, []))` with `symbols: nil`
+      # raises `Protocol.UndefinedError` inside `MapSet.new/1`, failing `init/1` outright.
+      pid =
+        start_supervised!(
+          {PollingFeed,
+           sink: sink_to_self(),
+           start_delay_ms: 0,
+           fetch: fn symbol -> {:ok, event(symbol)} end,
+           symbols: nil}
+        )
+
+      assert Process.alive?(pid)
+      assert PollingFeed.status(pid).symbols == 0
+    end
+  end
+
+  describe "a hung fetch does not wedge the whole feed, silently (C2)" do
+    test "status/1 stays answerable while a fetch hangs, bounded by :fetch_timeout_ms" do
+      # Verified against the unfixed code: a fetcher doing `Process.sleep(:infinity)` left
+      # `PollingFeed.status/1` unanswerable — `handle_info` ran the fetch inline with no
+      # timeout boundary, wedging this GenServer's mailbox, every other symbol's tick, and
+      # the exact health-check calls this module's own moduledoc says exist to catch a
+      # silently-broken feed.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn _symbol ->
+            send(test, :fetch_started)
+            Process.sleep(:infinity)
+          end,
+          symbols: ~w(BTC-USD),
+          fetch_timeout_ms: 100,
+          interval_ms: 500
+        )
+
+      # Deterministic ordering: wait for the hang to actually be in flight inside
+      # `handle_info` before calling `status/1`, so this test cannot race the timer that
+      # schedules the first `:poll` message.
+      assert_receive :fetch_started, 500
+
+      # GenServer.call's default 5s timeout is the proof: before this fix this call did
+      # not return at all, because the hang was unbounded, not merely slow.
+      status = PollingFeed.status(pid)
+
+      refute status.delivering
+      assert status.failures_since_ok >= 1
+      assert status.last_error == :fetch_timeout
+    end
+
+    test "the hung symbol is retried like any other failure, not dropped" do
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn symbol ->
+            send(test, {:attempt, symbol})
+            Process.sleep(:infinity)
+          end,
+          symbols: ~w(BTC-USD),
+          fetch_timeout_ms: 50,
+          interval_ms: 50
+        )
+
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert Process.alive?(pid)
+    end
+
+    test "a fetch that returns just under the timeout still publishes normally" do
+      # The boundary must not punish an ordinary slow-but-completing fetch.
+      start_feed(
+        fetch: fn symbol ->
+          Process.sleep(20)
+          {:ok, event(symbol)}
+        end,
+        symbols: ~w(BTC-USD),
+        fetch_timeout_ms: 500
+      )
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+    end
+  end
+
   describe "unknown messages" do
     test "an unknown call is answered rather than crashing the caller" do
       pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))

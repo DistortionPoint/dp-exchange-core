@@ -43,6 +43,8 @@ defmodule DpExchange.Core.Types.OptionContract do
   option will be wrong about what it holds, not merely about its price.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:underlying, :expiry, :strike, :right, :provider]
   defstruct [
     :underlying,
@@ -77,6 +79,14 @@ defmodule DpExchange.Core.Types.OptionContract do
           non_standard: boolean() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Whether the contract is in the money at `underlying_price`.

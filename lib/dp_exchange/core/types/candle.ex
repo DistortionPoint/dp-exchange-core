@@ -33,6 +33,8 @@ defmodule DpExchange.Core.Types.Candle do
   one a consumer might act on.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :timeframe, :opened_at, :open, :high, :low, :close, :provider]
   defstruct [
     :symbol,
@@ -57,6 +59,17 @@ defmodule DpExchange.Core.Types.Candle do
           volume: Decimal.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — a `%__MODULE__{open: nil, ...}` literal
+  builds fine despite `open`'s typespec forbidding it, and blows up later inside `Decimal`
+  instead of at the boundary. This is the exact defect that motivated
+  `DpExchange.Core.Types.Validate`, written up there in full.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Whether the bar's own values are internally consistent — high is the highest, low the

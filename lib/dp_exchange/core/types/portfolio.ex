@@ -31,6 +31,8 @@ defmodule DpExchange.Core.Types.Portfolio do
   into one atom would erase the reason a caller was choosing between them.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :provider]
   defstruct [:id, :name, :type, :deleted, :provider]
 
@@ -41,4 +43,12 @@ defmodule DpExchange.Core.Types.Portfolio do
           deleted: boolean() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

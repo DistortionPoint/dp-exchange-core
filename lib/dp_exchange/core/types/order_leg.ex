@@ -29,6 +29,8 @@ defmodule DpExchange.Core.Types.OrderLeg do
   the venue will apply its own default, **not** that the effect is "open".
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :side, :ratio]
   defstruct [:symbol, :side, :ratio, :position_effect, :instrument_type]
 
@@ -42,4 +44,12 @@ defmodule DpExchange.Core.Types.OrderLeg do
           position_effect: position_effect() | nil,
           instrument_type: atom() | nil
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

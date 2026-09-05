@@ -36,6 +36,8 @@ defmodule DpExchange.Core.Types.AuctionImbalance do
   some of them leaves the rest `nil`.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :auction, :observed_at, :provider]
   defstruct [
     :symbol,
@@ -67,6 +69,14 @@ defmodule DpExchange.Core.Types.AuctionImbalance do
           observed_at: DateTime.t(),
           provider: atom() | String.t()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Whether the imbalance is large relative to what can be paired, as a ratio.

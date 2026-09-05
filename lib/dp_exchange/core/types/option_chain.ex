@@ -27,6 +27,8 @@ defmodule DpExchange.Core.Types.OptionChain do
   underlying that is how a caller ends up with a "delta-neutral" position that is not.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:underlying, :expiries, :provider]
   defstruct [:underlying, :expiries, :underlying_price, :venue_time, :provider]
 
@@ -39,6 +41,14 @@ defmodule DpExchange.Core.Types.OptionChain do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc "The expiries in the chain, earliest first."
   @spec expiry_dates(t()) :: [Date.t()]

@@ -15,6 +15,8 @@ defmodule DpExchange.Core.Types.Filing do
   of atoms without losing which one it was. The string is carried as the venue sent it.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :provider]
   defstruct [:symbol, :id, :form_type, :title, :url, :filed_at, :period_end, :provider]
 
@@ -28,4 +30,12 @@ defmodule DpExchange.Core.Types.Filing do
           period_end: Date.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

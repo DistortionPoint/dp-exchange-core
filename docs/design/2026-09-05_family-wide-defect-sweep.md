@@ -32,7 +32,7 @@ in one session:
 
 ### Core — one defect here reaches all five venues
 
-- [ ] **C1. The `nil`-vs-absent `Keyword.get` trap, fixed comprehensively.** Fixed in
+- [x] **C1. The `nil`-vs-absent `Keyword.get` trap, fixed comprehensively.** Fixed in
       exactly one place (`start_delay_ms`) and open in four more. Venues forward `opts`
       unchanged by convention, so `key: nil` is reachable for all of them.
       `interval_ms: nil` and `on_refusal: nil` crash the feed into a restart loop;
@@ -40,27 +40,69 @@ in one session:
       `nil > 1` is `true` in Erlang term ordering (verified), so it enters the retry
       branch and dies on `4 - nil`, killing the *calling* venue process. Fix with a single
       shared helper so this stops being fixed one incident at a time.
-- [ ] **C2. `PollingFeed` — a hung fetch wedges the entire feed, silently.** `fetch` runs
+      **Found:** confirmed as described, plus further sites the original four did not
+      name — `HttpClient`'s `timeout`, `log_requests`, `headers`, `retry_delay`,
+      `raw_status`, `rate_limit_blocking` and `weight`, and `DefaultRateLimiter`'s `limits`
+      and `limiter`. Fixed with one shared helper, `DpExchange.Core.Config.opt/3`
+      (`Keyword.get/3` that treats a present `nil` the same as an absent key), applied at
+      every reachable site across all three modules. Deliberately not `Keyword.get(opts,
+      key) || default` — `||` is falsy on `false` too, and would have silently turned an
+      explicit `log_requests: false` or `raw_status: false` back into its default, the same
+      bug in the other direction.
+- [x] **C2. `PollingFeed` — a hung fetch wedges the entire feed, silently.** `fetch` runs
       synchronously inside the GenServer callback with no timeout boundary. One hung HTTP
       call takes every symbol dark AND makes `status/1`/`coverage/1` unanswerable — which
       defeats the module's whole stated purpose (make a silently-broken feed loud).
       `safely/1` guards raises and exits, not a call that never returns.
-- [ ] **C3. `DefaultRateLimiter` `timeout: nil` silently disables the wait ceiling.**
+      **Found:** confirmed exactly as described — a fetcher doing `Process.sleep(:infinity)`
+      left `status/1` unanswerable. Fixed with `bounded_fetch/2`: every fetch now runs
+      inside a `Task.async`, bounded by `Task.yield`/`Task.shutdown(task, :brutal_kill)`. The
+      first default chosen (`:fetch_timeout_ms` tracking `interval_ms` outright, capped at
+      60s) made the existing test suite flaky — a 50ms test interval gave a 50ms fetch
+      timeout, tight enough that ordinary Task-spawn scheduling overhead under load
+      occasionally tripped it on a fetch that was never hanging. Floored at 30s (matching
+      `HttpClient`'s own default per-request timeout) so a fast interval cannot
+      self-sabotage a legitimate, slower-than-a-tick HTTP round trip.
+- [x] **C3. `DefaultRateLimiter` `timeout: nil` silently disables the wait ceiling.**
       `wait_ms > nil` is always `false`, so fail-closed-after-N-ms quietly becomes
       wait-forever. Reachable from `HttpClient`, which forwards `:timeout` verbatim.
-- [ ] **C4. `HttpClient` under-records real venue usage.** Only 2xx responses reach
+      **Found:** confirmed live as described; covered by C1's `Config.opt/3` fix, with its
+      own regression test asserting an exhausted bucket refuses near-instantly under
+      `timeout: nil` rather than sleeping out the real wait in the caller.
+- [x] **C4. `HttpClient` under-records real venue usage.** Only 2xx responses reach
       `record/3`. A retried 5xx and a 429 were both really sent and really consumed quota.
       Same mechanism as the documented "395 calls against a documented 300 while the panel
       read 83/240" incident.
-- [ ] **C5. `Types.*` — `@enforce_keys` guards presence, not `nil`.** A `nil` in a
+      **Found:** confirmed as described. Fixed by moving `record/3` to run once per actual
+      call to `make_http_request/5` — success, retry, 429, or a permanent 4xx — rather than
+      only from the `{:ok, response}` branch; a request refused by our own limiter before it
+      left the process is still not recorded, since nothing was put on the wire.
+- [x] **C5. `Types.*` — `@enforce_keys` guards presence, not `nil`.** A `nil` in a
       required field is exactly what a decode bug produces, and the typespec says the field
       is non-nilable. Failure surfaces later, deep inside `Decimal`.
-- [ ] **C6. `CanonicalPair` trusts caller-supplied quote ordering.** The moduledoc requires
+      **Found:** confirmed exactly as described (`%Candle{open: nil, ...}` builds). Fixed
+      with a shared validating constructor, `DpExchange.Core.Types.Validate.new!/3`, and a
+      `new/1` on every one of the 33 `Types.*` modules, checking each module's own
+      `@enforce_keys` for `nil` as well as presence. `Types.Order` is the one deliberate
+      exception — its moduledoc documents that six of its seven enforced keys legitimately
+      admit `nil`, so its `new/1` narrows the check to `:provider` alone. Struct literals
+      are untouched; `new/1` is the path a decoder should prefer.
+- [x] **C6. `CanonicalPair` trusts caller-supplied quote ordering.** The moduledoc requires
       longest-first; nothing enforces it. A misordered list silently mis-splits and the
       simple round-trip invariant does NOT catch it. Sort internally.
-- [ ] **C7. Extend `time_in_force` vocabulary with `:gfw`/`:gfm`** — real Robinhood values
+      **Found:** confirmed live — `quotes: ["USD", "BUSD"]` mis-split `"ETHBUSD"` into
+      `"ETHB-USD"`, exactly as described. Fixed by sorting `quotes` by length, descending,
+      inside `CanonicalPair.to_canonical/2` before any suffix match, so caller ordering can
+      no longer matter. The existing `Broken.SymbolFormat` contract-teeth fixture (built to
+      demonstrate this exact bug) is now the regression test proving the fix: the same
+      shortest-first mapping round-trips correctly.
+- [x] **C7. Extend `time_in_force` vocabulary with `:gfw`/`:gfm`** — real Robinhood values
       with no slot today. Additive and backward compatible. Robinhood cannot use them until
       this ships, so that half is a follow-up (§3).
+      **Found:** confirmed against the vendor's OpenAPI (`["gtc","gfd","gfw","gfm"]`).
+      Added to `Capabilities`'s `@time_in_force` list; purely additive, no existing
+      declaration is affected. Wiring `Robinhood.to_order/1` and `order_config/2` stays
+      deferred per §3 until this ships to Hex.
 - [x] **C8. `Notice.reject_credentials!/1` can exhaust the atom table — from venue-derived
       input, in the shared contract.** `key |> to_string() |> String.downcase() |>
       String.to_atom()` atomised every key of every notice's `details` map. Atoms are never

@@ -47,6 +47,36 @@ defmodule DpExchange.Core.Config do
 
       # A test, for its own process tree only:
       Config.put_override(:rate_limit_module, AlwaysRateLimited)
+
+  ## `opt/3` — the same problem, one layer down
+
+  This module resolves *seams* — where consumer configuration meets Core. `opt/3` fixes a
+  related but distinct trap that lives in `keyword()` options passed on individual calls,
+  not in application config: **`Keyword.get/3` only substitutes its default for an ABSENT
+  key, never for a key that is present and `nil`.**
+
+  That distinction is invisible reading the code and is reachable on every call, because
+  every venue package in this family forwards its own `opts` **unchanged**, by convention,
+  through several layers — a `Feed` passes its `opts` to `PollingFeed.start_link/1`, which
+  never itself set `interval_ms`. When the venue's own caller never configured a key
+  either, it does not vanish; it arrives as `key: nil`, explicit and present, because
+  something upstream did `Keyword.get(callers_opts, :interval_ms)` with no default and
+  handed the `nil` straight through.
+
+  `Keyword.get(opts, :interval_ms, 30_000)` against `interval_ms: nil` returns `nil`, not
+  `30_000` — the default silently does not apply. This was fixed once, by hand, at exactly
+  one call site (`PollingFeed`'s `:start_delay_ms`, with an incident recorded in its own
+  comment) and left open everywhere else that mattered: `PollingFeed`'s `:interval_ms`
+  crashed `Process.send_after/3` outright; `HttpClient`'s `:retry_attempts` was worse — a
+  `nil` compares as **greater** than any integer in Erlang term ordering, so it silently
+  entered the retry branch and then died computing `4 - nil`, killing the *calling* venue
+  process, which this library does not supervise.
+
+  `opt/3` is `Keyword.get/3` with that one difference: a present-and-`nil` value is treated
+  the same as an absent one. It does **not** use `||`, because `||` is falsy on `false` too
+  — an explicit `log_requests: false` or `raw_status: false` must survive, and a helper that
+  silently overrode a real `false` back to its default would be the same bug in the other
+  direction.
   """
 
   @typedoc "The application key a seam's global default lives under."
@@ -73,6 +103,38 @@ defmodule DpExchange.Core.Config do
     case find_override(key) do
       :none -> Application.get_env(app, key, default)
       {:ok, value} -> value
+    end
+  end
+
+  @doc """
+  Reads `key` from a `keyword()` options list, treating an explicit `nil` value the same
+  as an absent key.
+
+  Unlike `Keyword.get/3`, `opt(opts, :interval_ms, 30_000)` returns `30_000` whether
+  `:interval_ms` is missing from `opts` OR present as `interval_ms: nil` — the shape a
+  venue's forwarded `opts` produces when nothing upstream ever set it. See this module's
+  `opt/3` section for why that distinction matters and why this does not use `||`.
+
+  ## Examples
+
+      iex> DpExchange.Core.Config.opt([], :interval_ms, 30_000)
+      30_000
+
+      iex> DpExchange.Core.Config.opt([interval_ms: nil], :interval_ms, 30_000)
+      30_000
+
+      iex> DpExchange.Core.Config.opt([interval_ms: 5_000], :interval_ms, 30_000)
+      5_000
+
+      iex> DpExchange.Core.Config.opt([log_requests: false], :log_requests, true)
+      false
+  """
+  @spec opt(keyword(), atom(), term()) :: term()
+  def opt(opts, key, default) when is_list(opts) and is_atom(key) do
+    case Keyword.fetch(opts, key) do
+      {:ok, nil} -> default
+      {:ok, value} -> value
+      :error -> default
     end
   end
 

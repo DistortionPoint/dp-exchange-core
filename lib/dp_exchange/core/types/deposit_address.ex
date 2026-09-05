@@ -25,6 +25,8 @@ defmodule DpExchange.Core.Types.DepositAddress do
   address a caller can safely use, which is why `:network` is enforced rather than optional.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:asset, :network, :address, :provider]
   defstruct [
     :asset,
@@ -47,4 +49,12 @@ defmodule DpExchange.Core.Types.DepositAddress do
           created_at: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

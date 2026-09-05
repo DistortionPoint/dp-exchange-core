@@ -61,6 +61,8 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   use GenServer
 
+  alias DpExchange.Core.Config
+
   @behaviour DpExchange.Core.RateLimitBehaviour
 
   @typedoc "Per-provider limits, or the `:default` used for any provider not listed."
@@ -105,13 +107,24 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   so a caller waiting does not stall the limiter for anyone else. A reservation that
   cannot be honoured within the timeout is **not** committed — the tokens are not
   consumed for a request that will never be made.
+
+  ## `:timeout` must survive an explicit `nil`
+
+  `HttpClient.limiter_opts/1` forwards `:timeout` verbatim from whatever `opts` its own
+  caller passed, so `timeout: nil` reaches here whenever nothing upstream ever set it —
+  the same forwarding pattern documented on `DpExchange.Core.Config.opt/3`. Reading it with
+  a plain `Keyword.get(opts, :timeout, 30_000)` would return `nil` in that case, not
+  `30_000`, and the `wait_ms > timeout` check below is `wait_ms > nil` — which Erlang term
+  ordering makes **always false**, because `nil` sorts above every integer. "Fail closed
+  after N ms" would silently become "wait however long it takes", verified live against an
+  exhausted bucket. `Config.opt/3` is used here for exactly that reason.
   """
   @impl DpExchange.Core.RateLimitBehaviour
   @spec acquire(atom() | String.t(), pos_integer(), keyword()) ::
           :ok | {:error, :rate_limit_timeout} | {:error, term()}
   def acquire(provider, weight, opts \\ []) do
     with {:ok, weight} <- validate_weight(weight),
-         timeout = Keyword.get(opts, :timeout, 30_000),
+         timeout = Config.opt(opts, :timeout, 30_000),
          {:ok, wait_ms} <- call(opts, {:acquire, provider, weight, timeout}) do
       if wait_ms > 0, do: Process.sleep(wait_ms)
       :ok
@@ -179,7 +192,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def init(opts) do
     {:ok,
      %{
-       limits: Keyword.get(opts, :limits, %{}),
+       limits: Config.opt(opts, :limits, %{}),
        # provider => theoretical arrival time, in native monotonic milliseconds
        tat: %{}
      }}
@@ -264,7 +277,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   defp validate_weight(weight), do: {:error, {:invalid_weight, weight}}
 
   defp call(opts, message) do
-    server = Keyword.get(opts, :limiter, __MODULE__)
+    server = Config.opt(opts, :limiter, __MODULE__)
 
     case GenServer.whereis(server) do
       nil -> {:error, :not_started}

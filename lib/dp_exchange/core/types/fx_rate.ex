@@ -28,6 +28,8 @@ defmodule DpExchange.Core.Types.FxRate do
   second would be the venue's own claim.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:pair, :rate, :as_of, :provider]
   defstruct [:pair, :rate, :as_of, :source, :benchmark, :provider]
 
@@ -39,6 +41,14 @@ defmodule DpExchange.Core.Types.FxRate do
           benchmark: String.t() | nil,
           provider: atom() | String.t()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
   Converts `amount` at this rate.

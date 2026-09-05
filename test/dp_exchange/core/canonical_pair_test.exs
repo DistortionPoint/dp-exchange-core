@@ -57,6 +57,32 @@ defmodule DpExchange.Core.CanonicalPairTest do
     end
   end
 
+  describe "quotes is sorted longest-first internally, regardless of caller order (C6)" do
+    # The moduledoc requires `quotes` to be given longest-first and nothing enforced it.
+    # Verified live: a mapping listing `["USD", "BUSD"]` (shortest-first) mis-split
+    # "ETHBUSD" into "ETHB-USD" — "USD" matched before "BUSD" got a chance to — and the
+    # round-trip invariant elsewhere in this file does NOT catch that, because
+    # concatenation round-trips byte-for-byte regardless of where the cut landed.
+    @shortest_first %{sep: "", quotes: ~w(USD BUSD)}
+    @longest_first %{sep: "", quotes: ~w(BUSD USD)}
+
+    test "a caller-given shortest-first quote list still splits on the real quote" do
+      assert "ETH-BUSD" = CanonicalPair.to_canonical(@shortest_first, "ETHBUSD")
+    end
+
+    test "shortest-first and longest-first orderings of the same quotes agree" do
+      assert CanonicalPair.to_canonical(@shortest_first, "ETHBUSD") ==
+               CanonicalPair.to_canonical(@longest_first, "ETHBUSD")
+    end
+
+    test "the round trip survives a shortest-first mapping" do
+      assert "ETH-BUSD" ==
+               @shortest_first
+               |> CanonicalPair.to_exchange("ETH-BUSD")
+               |> then(&CanonicalPair.to_canonical(@shortest_first, &1))
+    end
+  end
+
   describe "the round-trip invariant the conformance suite asserts" do
     @pairs ~w(BTC-USD ETH-USD BTC-USDC ETH-EUR BTC-USDT ETH-GBP)
 

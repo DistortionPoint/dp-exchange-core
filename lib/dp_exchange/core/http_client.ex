@@ -35,6 +35,16 @@ defmodule DpExchange.Core.HttpClient do
   HTTP calls must record for itself. One that did not acquired before every request and
   recorded none, so its ceiling bound nothing: 395 calls per 60s against a documented
   300, while the budget panel read 83/240.
+
+  **This module itself repeated the same mechanism in a smaller way, found 2026-09-05.**
+  `record/3` was called only from the `{:ok, response}` branch of the request pipeline — a
+  retried 5xx and a venue 429 both genuinely reached the wire and genuinely consumed the
+  venue's quota, and neither was recorded. The 312 calls missing from the 83/240 incident
+  above were not a mystery once this was found: they were exactly the retried and
+  rate-limited requests, the very shapes this branch skipped. Every outcome of
+  `make_http_request/5` — success, retry, 429, or a permanent 4xx — is now recorded once,
+  right after the request is actually made, before the result is inspected. See
+  `record_request_sent/1`.
   """
 
   require Logger
@@ -149,9 +159,15 @@ defmodule DpExchange.Core.HttpClient do
           {:ok, http_response()}
           | {:error, request_error()}
   def request(method, url, headers \\ [], body \\ nil, opts \\ []) do
-    _timeout = Keyword.get(opts, :timeout, 30_000)
-    retry_attempts = Keyword.get(opts, :retry_attempts, 3)
-    log_requests = Keyword.get(opts, :log_requests, true)
+    # `Config.opt/3`, not `Keyword.get/3`. Every venue package forwards its own `opts`
+    # unchanged by family convention, so `retry_attempts: nil` is reachable whenever a
+    # venue's own caller never set it — and it was the worst instance of this trap in the
+    # family: Erlang term ordering puts `nil` ABOVE every integer, so `nil > 1` is `true`.
+    # A forwarded `nil` silently entered the retry branch at `do_request_with_rate_limiting/6`
+    # and then died computing `4 - nil`, an `ArithmeticError` that killed the CALLING venue
+    # process — one this library does not supervise. See `Config.opt/3`'s moduledoc.
+    retry_attempts = Config.opt(opts, :retry_attempts, 3)
+    log_requests = Config.opt(opts, :log_requests, true)
 
     if log_requests do
       Logger.debug("HTTP Request: #{method |> to_string() |> String.upcase()} #{url}")
@@ -182,7 +198,7 @@ defmodule DpExchange.Core.HttpClient do
     # caller that passed authentication headers had them silently dropped and got a 401
     # with nothing to explain it — the request looked correct at the call site and was
     # not correct on the wire. Found by a venue package's tier-2 tests.
-    case request(:get, full_url, Keyword.get(opts, :headers, []), nil, opts) do
+    case request(:get, full_url, Config.opt(opts, :headers, []), nil, opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
         parse_response_body(body)
 
@@ -325,10 +341,20 @@ defmodule DpExchange.Core.HttpClient do
     # Check rate limits before making the request
     case check_rate_limits(opts) do
       :ok ->
-        case make_http_request(method, url, headers, body, opts) do
+        response = make_http_request(method, url, headers, body, opts)
+
+        # Recorded for every outcome, not only `{:ok, _}` — a 5xx that gets retried below
+        # and a 429 (`handle_rate_limit/3`) both actually left this process and actually
+        # consumed the venue's quota, exactly as a 2xx did. Recording only success is the
+        # same mechanism as the incident this module's moduledoc already records: a venue
+        # package that acquired before every request and recorded only its successes had a
+        # bucket that under-counted real usage — "395 calls per 60s against a documented
+        # 300, while the budget panel read 83/240." The 312 unrecorded calls there were
+        # exactly the retried and rate-limited ones this now covers.
+        record_request_sent(opts)
+
+        case response do
           {:ok, response} ->
-            # Record successful request for rate limiting
-            record_successful_request(opts)
             {:ok, response}
 
           # Server returned HTTP 429 — `make_http_request/5` calls
@@ -350,9 +376,9 @@ defmodule DpExchange.Core.HttpClient do
               # 4xx errors are permanent — don't retry
               wrap_exchange_error(opts, reason)
             else
-              retry_delay = Keyword.get(opts, :retry_delay, 1000)
+              retry_delay = Config.opt(opts, :retry_delay, 1000)
               backoff_delay = retry_delay * (4 - attempts_left)
-              provider = Keyword.get(opts, :provider, "unknown")
+              provider = Config.opt(opts, :provider, "unknown")
               short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
 
               Logger.warning(
@@ -412,7 +438,7 @@ defmodule DpExchange.Core.HttpClient do
   defp transport_opts(opts), do: Keyword.take(opts, [:plug, :adapter, :req_adapter])
 
   defp make_http_request(method, url, headers, body, opts) do
-    timeout = Keyword.get(opts, :timeout, 30_000)
+    timeout = Config.opt(opts, :timeout, 30_000)
 
     request_opts =
       [
@@ -460,7 +486,7 @@ defmodule DpExchange.Core.HttpClient do
             # existing caller matches on and changing it silently would turn working
             # refusal detection into a permanent error.
             status when status in 400..499 ->
-              if Keyword.get(opts, :raw_status, false) do
+              if Config.opt(opts, :raw_status, false) do
                 {:ok, response}
               else
                 {:error, "Client error (#{status}): #{format_body(resp_body)}"}
@@ -487,7 +513,7 @@ defmodule DpExchange.Core.HttpClient do
   defp handle_rate_limit(response, method, url, opts) do
     # Parse rate limit headers to get more accurate retry timing
     retry_after = parse_retry_after_header(response.headers)
-    provider = Keyword.get(opts, :provider, "unknown")
+    provider = Config.opt(opts, :provider, "unknown")
     short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
 
     Logger.warning(
@@ -535,7 +561,7 @@ defmodule DpExchange.Core.HttpClient do
         :ok
 
       provider ->
-        if Keyword.get(opts, :rate_limit_blocking, false) do
+        if Config.opt(opts, :rate_limit_blocking, false) do
           provider |> limiter().acquire(weight(opts), limiter_opts(opts)) |> normalise_acquire()
         else
           provider |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check()
@@ -560,7 +586,11 @@ defmodule DpExchange.Core.HttpClient do
     {:error, :rate_limited, retry_after: ceil(retry_after_ms / 1000)}
   end
 
-  defp record_successful_request(opts) do
+  # Named for what actually happened, not for the outcome. Called once per attempt that
+  # reached `make_http_request/5` — success, retried 5xx, 429, or a permanent 4xx all put a
+  # request on the wire and all consumed the venue's real quota. See the call site in
+  # `do_request_with_rate_limiting/6`.
+  defp record_request_sent(opts) do
     case Keyword.get(opts, :provider) do
       nil -> :ok
       provider -> limiter().record(provider, weight(opts), limiter_opts(opts))
@@ -574,7 +604,7 @@ defmodule DpExchange.Core.HttpClient do
     Config.get(:dp_exchange_core, :rate_limit_module, DefaultRateLimiter)
   end
 
-  defp weight(opts), do: Keyword.get(opts, :weight, 1)
+  defp weight(opts), do: Config.opt(opts, :weight, 1)
 
   # `account_id`, `user_id` and `operation` are carried through for an implementation
   # that wants them, but the ceiling itself is **per venue** (D5). A venue's published

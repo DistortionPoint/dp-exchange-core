@@ -21,7 +21,93 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `nil`-vs-absent `Keyword.get` trap, closed as a class rather than one incident at a
+  time (C1).** `polling_feed.ex`'s `:start_delay_ms` already carried a fix and an incident
+  comment; the same trap was open at every other default-bearing option in `PollingFeed`,
+  `HttpClient` and `DefaultRateLimiter` — reachable because every venue forwards its own
+  `opts` unchanged by family convention, so a key the caller never set arrives as `key: nil`
+  rather than absent, and `Keyword.get(opts, key, default)` only substitutes `default` for
+  an ABSENT key. `interval_ms: nil` crashed `Process.send_after/3` and restarted the feed
+  straight into the same crash; `on_refusal: nil` raised `BadFunctionError`; `symbols: nil`
+  raised inside `MapSet.new/1`. **`HttpClient`'s `retry_attempts: nil` was worst**: Erlang
+  term ordering sorts `nil` above every integer, so `nil > 1` is `true`, and a forwarded
+  `nil` silently entered the retry branch and died computing `4 - nil` — an `ArithmeticError`
+  raised directly in the *calling* venue process, which this library does not supervise.
+  Fixed with one shared helper, `DpExchange.Core.Config.opt/3`, applied at every reachable
+  site across the three modules (not only the four originally named) — a present-and-`nil`
+  value is now treated the same as an absent one everywhere a default applies, and an
+  explicit `false` is still honoured, because `opt/3` deliberately does not use `||`.
+
+- **`PollingFeed` — a hung fetch wedged the entire feed, silently (C2).** `fetch`/`fetch_all`
+  ran synchronously inside `handle_info` with no timeout boundary; `safely/1` caught a raise
+  or an `exit`, not a call that simply never returns. Verified with a fetcher doing
+  `Process.sleep(:infinity)`: `status/1` and `coverage/1` never answered, every symbol went
+  dark, and nothing was logged — which defeats this module's own headline design, since its
+  moduledoc exists specifically to make a silently-broken feed loud. Every fetch now runs
+  inside a bounded, disposable `Task` (`bounded_fetch/2`, `Task.async` + `Task.yield` +
+  `Task.shutdown`), and a hang past `:fetch_timeout_ms` becomes an ordinary fetch failure —
+  retried next tick, counted toward `failures_since_ok`, escalated by the existing "delivered
+  NOTHING" warning. The default timeout is derived from the poll interval and clamped
+  between 30s and 60s: a floor above `HttpClient`'s own 30s per-request default, so a short
+  interval cannot self-sabotage an entirely ordinary retrying HTTP call, and a ceiling so a
+  venue polled once an hour cannot wedge this feed for an hour.
+
+- **`DefaultRateLimiter` — `timeout: nil` silently disabled the wait ceiling (C3).**
+  `acquire/3` read `:timeout` with a plain `Keyword.get/3`, so a forwarded
+  `timeout: nil` — reachable from `HttpClient`, whose `limiter_opts/1` forwards `:timeout`
+  verbatim — produced `wait_ms > nil`, which Erlang term ordering makes **always false**.
+  "Fail closed after N ms" silently became "wait however long it takes". Verified live
+  against an exhausted bucket. Covered by the same `Config.opt/3` fix as C1, and asserted
+  with its own regression test: an exhausted bucket with `timeout: nil` now refuses
+  near-instantly (the refusal is decided on the server, before any sleep) rather than
+  sleeping out a near-minute wait in the caller.
+
+- **`HttpClient` under-recorded real venue usage (C4).** `record/3` — the call that fills
+  the bucket `acquire/3` and `check/3` measure against — was only reached from the
+  `{:ok, response}` branch of the request pipeline. A retried 5xx and a venue 429 both
+  genuinely reached the wire and genuinely consumed the venue's quota, and neither was
+  recorded — the same mechanism as the incident already recorded in this module's own
+  moduledoc ("395 calls per 60s against a documented 300, while the budget panel read
+  83/240"): the missing calls there were exactly the retried and rate-limited ones this
+  closes. Every outcome of a request that actually reaches `make_http_request/5` — success,
+  retry, 429, or a permanent 4xx — is now recorded exactly once, right after the request is
+  made and before the result is inspected; a request refused by the limiter itself, before
+  anything left the process, is still not recorded.
+
+- **`Types.*` — `@enforce_keys` guarded presence, not `nil` (C5).** `%Candle{open: nil, high:
+  ..., low: ..., close: ..., ...}` built without complaint despite `open`'s typespec
+  declaring `Decimal.t()`, never `Decimal.t() | nil` — exactly what a JSON decode bug on a
+  renamed venue key produces, and the failure only surfaced later, deep inside `Decimal`,
+  far from where the bad data entered. Every `Types.*` module now exposes a validating
+  `new/1`, built on a new shared helper, `DpExchange.Core.Types.Validate`, that checks every
+  field named in the module's own `@enforce_keys` for `nil` as well as presence and raises
+  `ArgumentError` naming the offending field. `Types.Order` is the one deliberate exception:
+  its own moduledoc documents that six of its seven enforced keys legitimately admit `nil`
+  ("the venue's word, or nothing"), so its `new/1` narrows the check to `:provider` alone,
+  the one field that was never meant to be `nil`. Struct literals (`%Candle{...}`) are
+  unchanged and remain valid for internal and test use; `new/1` is the path a venue's own
+  decoder should prefer.
+
+- **`CanonicalPair` trusted caller-supplied quote ordering (C6).** The moduledoc requires a
+  venue's `quotes` list to be given longest-first; nothing enforced it, and the module's own
+  round-trip invariant does not catch a misordering — concatenation round-trips
+  byte-for-byte regardless of where the cut landed. Verified: `quotes: ["USD", "BUSD"]`
+  mis-split `"ETHBUSD"` into `"ETHB-USD"`. `quotes` is now sorted by length, descending,
+  inside `CanonicalPair` itself before any suffix match is attempted, so a caller cannot get
+  the ordering wrong any more, whatever order it hands in.
+
 ### Added
+
+- **`time_in_force` vocabulary extended with `:gfw` and `:gfm` — "good for week" and "good
+  for month" (C7).** Real Robinhood values, confirmed in the vendor's own OpenAPI schema
+  (both the order request and response schemas, enum `["gtc","gfd","gfw","gfm"]`), with no
+  slot in this contract's vocabulary before now. Purely additive: existing venues declaring
+  a subset of `supported_time_in_force` are unaffected. Robinhood itself cannot use the new
+  values until this ships to Hex — wiring `Robinhood.to_order/1` and `order_config/2` is a
+  follow-up in that package once this version is out, to avoid the cross-repo atom coupling
+  that caused a prior premature-deploy incident.
 
 - **`DpExchange.Core.FakeInjection` — deterministic failure injection and a
   credential-free wiring mode for a venue's `Fake` — DpCryptoManagement's issue #14.**

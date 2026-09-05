@@ -17,6 +17,8 @@ defmodule DpExchange.Core.Types.ScreenerResult do
   ten wants to know which was first, and lost the moment rows from two venues are mixed.
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:symbol, :screener, :provider]
   defstruct [:symbol, :screener, :rank, :metrics, :venue_time, :provider]
 
@@ -28,4 +30,12 @@ defmodule DpExchange.Core.Types.ScreenerResult do
           venue_time: DateTime.t() | nil,
           provider: atom()
         }
+
+  @doc """
+  Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
+
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 end

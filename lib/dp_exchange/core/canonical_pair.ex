@@ -12,9 +12,21 @@ defmodule DpExchange.Core.CanonicalPair do
 
       %{
         sep: "-" | "",                 # native separator
-        quotes: ["USDC", "USD", ...],  # known quote assets, LONGEST-FIRST
+        quotes: ["USDC", "USD", ...],  # known quote assets
         asset_aliases: %{"XBT" => "BTC"} # exchange base code → canonical (optional)
       }
+
+  ## `quotes` is sorted longest-first internally, whatever order the caller gives it
+
+  A concat-style mapping (`sep: ""`) has to find the SUFFIX among `quotes` that ends the
+  native symbol, and the wrong quote can end it too: `quotes: ["USD", "BUSD"]` against
+  `"ETHBUSD"` matches `"USD"` first and cuts `"ETHB-USD"` — wrong, because `"BUSD"` was the
+  actual quote. This module used to trust the caller to list `quotes` longest-first, and a
+  venue mapping that got the order wrong mis-split silently: the base/quote invariant below
+  does **not** catch it, because `to_exchange(m, to_canonical(m, p))` concatenates
+  `base <> quote` either way and round-trips byte-for-byte regardless of where the cut
+  landed. So `quotes` is sorted by length, descending, before any match is attempted — a
+  caller cannot get the ordering wrong any more, whatever it hands in.
 
   ## Invariant
 
@@ -80,7 +92,17 @@ defmodule DpExchange.Core.CanonicalPair do
     if String.contains?(upper, "-") do
       :nomatch
     else
-      Enum.find_value(mapping.quotes, :nomatch, fn q ->
+      # Sorted longest-first HERE, rather than trusted from `mapping.quotes` as given. The
+      # moduledoc requires longest-first — a suffix match against `["USD", "BUSD"]` cuts
+      # "ETHBUSD" into "ETHB-USD" because "USD" matches first — and nothing enforced it: a
+      # caller supplying quotes in the wrong order got a silent mis-split. Worse, the
+      # module's own round-trip invariant does NOT catch it, because concatenation
+      # round-trips byte-for-byte regardless of where the cut was made — "ETHB" + "USD" is
+      # still "ETHBUSD". Sorting internally means a caller cannot get this wrong, whatever
+      # order it hands in.
+      quotes = Enum.sort_by(mapping.quotes, &byte_size/1, :desc)
+
+      Enum.find_value(quotes, :nomatch, fn q ->
         if String.ends_with?(upper, q) and byte_size(upper) > byte_size(q) do
           {binary_part(upper, 0, byte_size(upper) - byte_size(q)), q}
         end

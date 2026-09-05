@@ -30,6 +30,8 @@ defmodule DpExchange.Core.Types.Order do
   decision can be "the venue did not say".
   """
 
+  alias DpExchange.Core.Types.Validate
+
   @enforce_keys [:id, :symbol, :side, :order_type, :quantity, :status, :provider]
   defstruct [
     :id,
@@ -91,4 +93,23 @@ defmodule DpExchange.Core.Types.Order do
           updated_at: DateTime.t() | nil,
           provider: atom() | String.t()
         }
+
+  # Only `:provider` is required non-nil. `@enforce_keys` names six other fields, and this
+  # module's own moduledoc says why they all still admit `nil`: "the venue's word, or
+  # nothing." A validating constructor that rejected `id: nil` would break the exact case
+  # `Order` was widened for — Robinhood's cancel acknowledgement, which has an id and
+  # nothing else — so `new/1` narrows `DpExchange.Core.Types.Validate`'s check to the one
+  # field this type does NOT allow to be absent-in-spirit-but-present-as-nil.
+  @required_non_nil [:provider]
+
+  @doc """
+  Builds a `t:t/0`, failing closed only if `:provider` is absent or `nil`.
+
+  Every other enforced key may legitimately be `nil` here — see the moduledoc's "Why the
+  enforced keys still admit `nil`". `@enforce_keys` still guards their *presence*; this adds
+  the one field where `nil` was never intended, using
+  `DpExchange.Core.Types.Validate`.
+  """
+  @spec new(keyword() | map()) :: t()
+  def new(attrs), do: Validate.new!(__MODULE__, @required_non_nil, attrs)
 end
