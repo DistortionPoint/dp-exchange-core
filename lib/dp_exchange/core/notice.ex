@@ -148,6 +148,18 @@ defmodule DpExchange.Core.Notice do
   @credential_keys ~w(api_key api_secret secret password passphrase token access_token
                       refresh_token private_key signature authorization bearer)a
 
+  # Derived once, at compile time, so the runtime check below never has to turn an
+  # incoming key into an atom to compare it. `@credential_keys` stays the single
+  # source of truth; this is only its string projection.
+  #
+  # A plain list, not a `MapSet`: a `MapSet` built from a module attribute is embedded
+  # in the BEAM as a literal whose internal representation Dialyzer can see directly,
+  # and `MapSet.member?/2` then fails PLT analysis with a
+  # `call_without_opaque`/opaqueness-type mismatch against that literal — the function's
+  # own spec expects an opaque `t:MapSet.t/0`, not one it can see through. Twelve
+  # entries make a linear scan irrelevant next to that.
+  @credential_key_strings Enum.map(@credential_keys, &Atom.to_string/1)
+
   @doc """
   Builds a notice.
 
@@ -204,13 +216,24 @@ defmodule DpExchange.Core.Notice do
 
   # Refused rather than redacted. Redaction implies someone chose what to hide and got it
   # right; refusing means the value never reached a struct that a consumer might log.
+  #
+  # Membership is tested against STRINGS, never atoms. `details` is built by venue
+  # packages from venue-supplied content — a channel name, a raw payload key, an error
+  # code — and this contract does not control its shape or its cardinality. Atomising an
+  # unbounded, externally-influenced string is the same `DOS.BinToAtom` class
+  # `Core.FakeInjection` already designed around (it keys its own state by a static atom
+  # and puts the venue INSIDE the map, specifically to avoid a dynamic atom per venue).
+  # Atoms are never garbage collected and the VM's atom table is finite: a venue whose
+  # notices carry varied `details` keys over the process's lifetime must never be able to
+  # walk that table to exhaustion and take the whole node down — which a guard whose
+  # entire purpose is to make notices SAFE must not itself become a way to do.
   defp reject_credentials!(details) when is_map(details) do
     offending =
       details
       |> Map.keys()
       |> Enum.filter(fn key ->
-        normalised = key |> to_string() |> String.downcase() |> String.to_atom()
-        normalised in @credential_keys
+        normalised = key |> to_string() |> String.downcase()
+        normalised in @credential_key_strings
       end)
 
     if offending != [] do

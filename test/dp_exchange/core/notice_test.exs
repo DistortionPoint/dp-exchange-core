@@ -82,20 +82,44 @@ defmodule DpExchange.Core.NoticeTest do
     end
   end
 
+  # The canonical credential vocabulary, hardcoded here rather than read off the
+  # module: `@credential_keys` is a private attribute, not a public surface to reach
+  # into, the same reasoning the kind vocabulary above is exercised under.
+  @credential_words ~w(api_key api_secret secret password passphrase token access_token
+                       refresh_token private_key signature authorization bearer)
+
+  defp mixed_case(word) do
+    word
+    |> String.graphemes()
+    |> Enum.with_index()
+    |> Enum.map_join(fn {char, i} -> if rem(i, 2) == 0, do: String.upcase(char), else: char end)
+  end
+
   describe "a notice never carries credentials" do
     test "a credential-shaped key in details is refused, not redacted" do
       # Refused rather than redacted: redaction implies someone chose what to hide and
       # got it right. Refusing means the value never reaches a struct a consumer logs.
-      for key <- [:api_key, :api_secret, :secret, :passphrase, :token, :private_key] do
+      for key <- @credential_words do
         assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
-          Notice.new(:credentials_rejected, :v, details: %{key => "sk-live-abc123"})
+          Notice.new(:credentials_rejected, :v, details: %{String.to_atom(key) => "sk-live-x"})
         end
       end
     end
 
-    test "the check is case-insensitive and covers string keys" do
-      assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
-        Notice.new(:credentials_rejected, :v, details: %{"API_KEY" => "x"})
+    test "the check is case-insensitive and covers string keys, for every credential key" do
+      # C8 follow-up: the guard moved from comparing atoms to comparing strings
+      # (`reject_credentials!/1` no longer calls `String.to_atom/1` on caller input at
+      # all). This proves the behaviour did not weaken in the process — every key in
+      # the vocabulary is still caught, atom or string, in every case.
+      for key <- @credential_words,
+          variant <- [key, String.upcase(key), mixed_case(key)] do
+        assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+          Notice.new(:credentials_rejected, :v, details: %{variant => "x"})
+        end
+
+        assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+          Notice.new(:credentials_rejected, :v, details: %{String.to_atom(key) => "x"})
+        end
       end
     end
 
@@ -113,6 +137,29 @@ defmodule DpExchange.Core.NoticeTest do
       assert_raise ArgumentError, ~r/must be a map/, fn ->
         Notice.new(:link_up, :v, details: [api_key: "x"])
       end
+    end
+
+    test "C8: many distinct, novel details keys never grow the atom table" do
+      # `reject_credentials!/1` used to normalise every `details` key with
+      # `String.to_atom/1` before comparing it. Atoms are never garbage collected and
+      # the VM's atom table is finite (~1,048,576 by default) — `details` maps are
+      # built by venue packages from venue-supplied content (a channel name, a raw
+      # payload key, a symbol), so a venue varying that content over the process's
+      # lifetime could walk the atom table to exhaustion through a guard whose entire
+      # purpose is to make notices SAFE, killing the whole BEAM node, not just its own
+      # package. Every key below is unique and unseen before this test runs, so the
+      # old implementation would mint one fresh, permanent atom per iteration.
+      before_count = :erlang.system_info(:atom_count)
+
+      for i <- 1..5_000 do
+        Notice.new(:data_quality, :v, details: %{"c8_regression_novel_key_#{i}" => i})
+      end
+
+      grown = :erlang.system_info(:atom_count) - before_count
+
+      assert grown < 100,
+             "atom table grew by #{grown} building 5,000 notices with novel string " <>
+               "details keys — reject_credentials!/1 is atomising caller input again"
     end
   end
 

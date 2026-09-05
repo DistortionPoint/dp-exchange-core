@@ -67,6 +67,18 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **`Notice.reject_credentials!/1` could exhaust the VM's atom table from venue-derived
+  input (C8).** It normalised every `details` key with `String.to_atom/1` before comparing
+  it against the credential vocabulary. Atoms are never garbage collected and the atom
+  table is finite; `details` maps are built by venue packages from venue-supplied content
+  (a channel name, a raw payload key, a symbol) with nothing in the contract bounding their
+  keys, so a venue varying that content could walk the table to exhaustion and kill the
+  whole node — through a guard whose entire purpose is to make notices safe. Fixed by
+  deriving a string set from `@credential_keys` once, at compile time, and comparing every
+  incoming key as a downcased string; no atom is ever created from caller input. Same
+  `DOS.BinToAtom` class `Core.FakeInjection` was already built to avoid. The raised error
+  still names the offending keys exactly as before.
+
 - **`PollingFeed` crashed when a caller forwarded `start_delay_ms: nil`.** Robinhood's and
   Schwab's own `Feed` wrappers both build this option with
   `Keyword.get(opts, :start_delay_ms)` and no default of their own — a present key with a

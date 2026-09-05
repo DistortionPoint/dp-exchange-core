@@ -587,7 +587,9 @@ defmodule DpExchange.Core.AdapterContract do
           # noticed shows up here and in no grep.
           config = Mix.Project.config()
           app = config[:app]
-          declared = for {dep, _rest} <- config[:deps], do: dep
+          # Strings, not atoms: `from_declared_dep?/2` below compares against this without
+          # ever calling `String.to_atom/1` on the directory name it pulls off a beam path.
+          declared = for {dep, _rest} <- config[:deps], do: Atom.to_string(dep)
 
           linked =
             Mix.Project.build_path()
@@ -772,9 +774,25 @@ defmodule DpExchange.Core.AdapterContract do
         end
       end
 
+      # This is NOT the `Notice.reject_credentials!/1` class of bug (C8): `dep` is not
+      # venue- or attacker-influenced. It is a directory name lifted from `:code.which/1`
+      # on a module drawn from THIS PACKAGE'S OWN COMPILED `.beam` imports chunk
+      # (`adapter_contract.ex` — "7. purity" test, reading `_build/.../ebin/*.beam`),
+      # which in turn comes only from source this package's own developer wrote and `mix
+      # deps.get` already fetched under `deps/`. The set of distinct values `dep` can ever
+      # take is exactly the package's own dependency tree — fixed at build time by
+      # `mix.lock`, never by a venue's runtime payload — so this was never an unbounded,
+      # attacker-driven atom mint the way C8 was.
+      #
+      # Compared as a string regardless, not `String.to_atom(dep) in declared`: `declared`
+      # is built as strings by the caller (`Atom.to_string/1` on each `mix.exs` dep, once,
+      # at test time) specifically so this never calls `String.to_atom/1` on anything at
+      # all — sobelow's `DOS.StringToAtom` flags the call shape itself, confidence aside,
+      # and the fix costs nothing here since both sides were only ever going to be
+      # compile-time-fixed dependency names.
       defp from_declared_dep?(path, declared) do
         case Regex.run(~r{/deps/([^/]+)/}, path) do
-          [_match, dep] -> String.to_atom(dep) in declared
+          [_match, dep] -> dep in declared
           nil -> true
         end
       end
