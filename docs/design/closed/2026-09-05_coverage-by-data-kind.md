@@ -1,7 +1,6 @@
 # Coverage by data kind
 
-**Status:** Implementing — Core's checklist (§3) is complete; venue adoption is tracked
-there and not yet started
+**Status:** Implemented
 **Date:** 2026-09-05
 
 ## Context
@@ -53,11 +52,11 @@ aimed at the wrong axis would have closed the issue while leaving the blindness 
 
 ## 1. Objectives
 
-- [ ] Make "which data kind is arriving, per symbol" answerable through the facade
-- [ ] Break no existing consumer of `coverage/1`
-- [ ] Require no venue to ship simultaneously with Core — the cross-repo coupling that
+- [x] Make "which data kind is arriving, per symbol" answerable through the facade
+- [x] Break no existing consumer of `coverage/1`
+- [x] Require no venue to ship simultaneously with Core — the cross-repo coupling that
       caused a premature-deploy incident once and delayed the `:gfw`/`:gfm` wiring again
-- [ ] Prove the new answer against real delivery, never against subscription state
+- [x] Prove the new answer against real delivery, never against subscription state
 
 ## 2. Design
 
@@ -182,15 +181,44 @@ does not attribute the same way; verified by diffing coverage output before and 
 
 ### Venues (after Core publishes)
 
-- [ ] **Coinbase** — `:quotes` from `Types.Quote`, `:order_book` from `Types.OrderBook`. The
+- [x] **Coinbase** — `:quotes` from `Types.Quote`, `:order_book` from `Types.OrderBook`. The
       motivating case; its `Feed` already routes both through one `handle_info`, so the kind
       is available exactly where `delivering` is written.
-- [ ] **Gemini** — `:quotes` and `:top_of_book`, per its `streamable`
-- [ ] **Webull** — `:quotes`
-- [ ] **Schwab** — `:quotes` and `:order_book`; note its `PollingFeed` fallback route reports
-      `:internal_poll`, so both a kind *and* a route can differ per symbol here
-- [ ] **Robinhood** — `:top_of_book` only, by poll. A single-key map is still the right shape;
+      **Found:** as designed, no surprises. 597 tests, 91.45% coverage.
+- [x] **Gemini** — `:quotes` and `:top_of_book`, per its `streamable`.
+      **Found:** an asymmetry worth recording. `:top_of_book`-only is real and common (a
+      quiet book with no recent trade) and is what the isolation test exercises. A
+      `:quotes`-only state is **unreachable** on the real socket: a `Quote` is only ever
+      emitted from a frame that has already produced a `TopOfBook`. Reported rather than
+      papered over with a manufactured test for a direction the venue cannot produce.
+      725 tests, 90.29% coverage.
+- [x] **Webull** — `:quotes` **and `:top_of_book`**. The plan above said `:quotes` only, and
+      the plan was wrong.
+      **Found:** implementing this surfaced a separate, consumer-visible defect. The venue
+      genuinely streams both — `socket.ex`'s `snapshot` topic builds `%Types.Quote{}` with a
+      real price, its `quote` topic builds `%Types.TopOfBook{}`, and `Subscription` subscribes
+      both unconditionally (`sub_types` defaults to `["SNAPSHOT", "QUOTE"]`) — while
+      `capabilities().streamable` declared `[:quotes]` alone. So a consumer was never told to
+      expect `%TopOfBook{}` structs on its subscriber.
+
+      The `TopOfBook` emission is **not** the bug and must not be "fixed": `socket.ex`'s own
+      comment records that this code previously built a `Quote` with `price: bid || ask`,
+      "defended in a comment as 'a real quoted number, labelled as the bid too'. It is real,
+      and it is not a price." Reverting to `Quote`-only delivery would reinstate exactly the
+      substitution this family exists to refuse, and that same bug was found on two other
+      venues here, one of which shipped it. The stale **declaration** was the defect.
+
+      Fixed to `[:quotes, :top_of_book]`, justified in the declaration as a delivery-path
+      fact read from source rather than dressed up as a fresh venue probe, and given its own
+      `### Fixed` CHANGELOG entry separate from the `coverage_by_kind/1` addition — burying a
+      consumer-visible correction inside a diagnostics change would hide it from anyone
+      scanning for behaviour changes. 686 tests, 91.23% coverage.
+- [x] **Schwab** — `:quotes` and `:order_book`; note its `PollingFeed` fallback route reports
+      `:internal_poll`, so both a kind *and* a route can differ per symbol here.
+      **Found:** the mixed kind-and-route case is real and is handled. 411 tests, 90.74%.
+- [x] **Robinhood** — `:top_of_book` only, by poll. A single-key map is still the right shape;
       uniformity is the point.
+      **Found:** as designed. 183 tests, 94.75% coverage.
 
 ## 4. Rejected alternatives
 
@@ -205,4 +233,46 @@ does not attribute the same way; verified by diffing coverage output before and 
 
 ## 5. Retrospective
 
-_To be appended on completion._
+Shipped: Core `0.1.48` first, then all five venues in one batch. 2,602 tests across the six
+repos, every gate clean, coverage 90.29–94.75%.
+
+### The plan was wrong about one venue, and finding out was the point
+
+§3 listed Webull as `:quotes` only. That was taken from its own `capabilities().streamable`,
+and `streamable` was stale — the venue has always also delivered `%Types.TopOfBook{}`. The
+instruction that caught it was "STOP and report rather than bending the data to fit"; without
+it the honest options were to declare a kind the venue does not stream, or to quietly drop
+`TopOfBook` from the derivation and hide a real capability. Either would have produced a
+green suite and a wrong answer.
+
+**The near-miss worth recording:** the obvious "fix" for a package emitting an undeclared kind
+is to stop emitting it. Here that would have reinstated a defect the code had already been
+fixed for — `socket.ex` used to build a `Quote` with `price: bid || ask`, and its comment says
+why that is wrong ("a bid is a resting order; a price is an execution"). The same substitution
+was found on two other venues in this family, one of which shipped it. The declaration was the
+defect; the delivery was the earlier fix working. Only reading the incident comment made that
+obvious, which is the strongest argument yet for this codebase's convention that a moduledoc
+recording *why* is the most valuable thing in the file.
+
+### What the design got right, and what that cost
+
+Making the callback optional was correct and cheap. Core published alone, nothing broke, and
+each venue adopted without a synchronised release — the coupling that caused a premature-deploy
+incident and delayed the `:gfw`/`:gfm` wiring did not recur.
+
+The union invariant earned its place immediately: it is what forced Webull's contradiction into
+the open instead of letting `coverage_by_kind/1` quietly disagree with `coverage/1`.
+
+### An honest negative result
+
+Gemini cannot produce a `:quotes`-only state at all — a `Quote` only ever arrives nested in a
+frame that has already produced a `TopOfBook`. That was reported rather than covered by a
+manufactured test for a direction the venue cannot reach. A test asserting an impossible state
+proves nothing and would have to be deleted the first time anyone read it carefully.
+
+### What this does not settle
+
+Nothing here explains the original `"too many L2 streams requested in a single session"`
+rejection in #22. It makes that failure *visible* — a consumer can now see ticker dark while
+the book is healthy, instead of reading 406/406 and looking elsewhere for days — but visibility
+is not a diagnosis. #22 stays open on its own evidence.
