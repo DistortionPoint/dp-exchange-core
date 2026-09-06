@@ -1,6 +1,6 @@
 # Packages pass streamed data on; they do not maintain books
 
-**Status:** Approved
+**Status:** Implemented
 **Date:** 2026-09-06
 
 ## Context
@@ -172,11 +172,67 @@ which ships in the Hex tarball. It is not presented as a performance improvement
 
 ### Coinbase (after Core publishes)
 
-- [ ] Delete the book state and every function that maintains it
-- [ ] Snapshot → `OrderBook`; update → `OrderBookDelta`
-- [ ] Tests proving no market state survives a frame, that a delta carries exactly the
+- [x] Delete the book state and every function that maintains it
+      **Found:** `dp_exchange_core` bumped to `~> 0.1.53` (was `~> 0.1.48`). `Socket`'s
+      `books` state key and `apply_book_event/3`, `apply_book_row/2`, `update_level/4`,
+      `remove_level/3`, `deliver_book/3` and `price_key/1` are all gone, along with the
+      `:gb_trees`/exact-scaled-integer machinery `price_key/1` existed to support.
+      `handle_disconnect/2` no longer wipes anything — there is nothing left to wipe.
+      Two side effects of the deleted machinery were deliberately NOT carried forward,
+      decided rather than defaulted: the precision refusal (>8 decimal digits) existed
+      only to guard the `:gb_trees` integer key, so a price at any precision now passes
+      through unchanged like every other decimal field this module decodes; and the
+      last-write-wins fold of numerically-equal, differently-scaled prices (`"1.5"` vs
+      `"1.50"`) was an accident of the old map's own key (`%Decimal{}` structs compare
+      unequal for equal numbers), never a documented venue behaviour, so both rows now
+      survive a snapshot rather than one silently winning. Both are recorded in the
+      CHANGELOG, not just this checklist.
+- [x] Snapshot → `OrderBook`; update → `OrderBookDelta`
+      **Found:** a `snapshot` decodes into `Types.OrderBook`, sorted once via
+      `Decimal.compare/2` — decode work, not maintenance, exactly as designed. An
+      `update` decodes into `Types.OrderBookDelta`, `levels` built by preserving the
+      venue's own row order (cons-and-reverse, same technique used for the snapshot's
+      per-side lists so a stable sort's tie-break also lands in venue order) and never
+      split by side beyond the tuple's own leading `:bid | :ask`. A zero `new_quantity`
+      is left exactly as the venue sent it in both the row-decode step and the delta —
+      nothing resolves it. Malformed rows are dropped and reported through the same
+      `:data_quality` path for both frame types, one bad row no longer blocking its
+      valid siblings in the same frame.
+
+      This surfaced one consequence the checklist's own wording didn't name:
+      `Feed.payload_kind/1` pattern-matched only `Types.Quote` and `Types.OrderBook`
+      with no catch-all, by design ("failing loudly beats silently mis-tagging its
+      coverage"). Left alone, the first real `Types.OrderBookDelta` a `level2` `update`
+      produced would have crashed `Feed` outright. Added the missing clause, mapping
+      `%Types.OrderBookDelta{}` to `:order_book` — the same kind `%Types.OrderBook{}`
+      gets, per Core's own checklist item 2 above (`coverage_by_kind/1` answers "is
+      book data arriving", not "in what shape"). Covered by new `Feed` tests, not only
+      `Socket` ones, since `Socket`-level tests can't reach this dispatch path.
+- [x] Tests proving no market state survives a frame, that a delta carries exactly the
       venue's own rows, and that a reconnect needs no state wipe because none is held
-- [ ] Remove `bench/order_book_resort.exs` — it benchmarks work that no longer exists
+      **Found:** all three added to `socket_test.exs` — "no market state survives a
+      frame" asserts the socket's own state keyset is unchanged (and never gains a
+      `:books`-shaped key) across a snapshot and an update; "a reconnect needs no state
+      wipe" asserts `handle_disconnect/2`'s output state is `==` its input, not merely
+      absent a book; a dedicated delta test asserts `delta.levels` matches the frame's
+      rows exactly, in order, including a zero-quantity row surviving unresolved and
+      interleaved with a live one on the other side. Rewrote or deleted every test that
+      asserted on the accumulated book (the "PATCHES the maintained book" and "a
+      reconnect clears the maintained book" tests no longer describe anything that
+      exists) after reading each one individually — two were judged to pin a real
+      finding rather than the accumulation and were kept, adapted: the duplicate-price
+      test (now asserting both rows survive, not one) and the too-precise-price test
+      (now asserting pass-through, not refusal) — both explained inline and in the
+      CHANGELOG rather than silently dropped. The big "matches the map+sort reference
+      exactly" oracle test was deleted outright, per this checklist's own instruction —
+      its update leg no longer has anything to compare against, and its snapshot leg's
+      sorting claim is covered more directly by a new, much smaller scrambled-input
+      test. One bug caught by the new duplicate-price test before it shipped: the first
+      draft of the per-side split reversed row order via `cons` without reversing back,
+      so a stable sort broke ties in the wrong direction — fixed in `split_sides/1`.
+- [x] Remove `bench/order_book_resort.exs` — it benchmarks work that no longer exists
+      **Found:** deleted; nothing else referenced it (`mix.exs` had no alias pointing at
+      it).
 
 ## 4. Rejected alternatives
 
@@ -189,4 +245,65 @@ which ships in the Hex tarball. It is not presented as a performance improvement
 
 ## 5. Retrospective
 
-_To be appended on completion._
+Shipped: Core `0.1.53` first (already recorded in §3 above), then `dp_exchange_coinbase`
+alone — this was always a one-venue fix; §Scope confirmed at design time that Coinbase was
+the only package holding a book, so there was no batch to coordinate. Coinbase's own version
+was hand-set to `0.2.0` in `mix.exs` to signal the break per this package's documented
+convention (a hand-edited `0.2.0` is how a breaking change is declared); CI computes the next
+patch from `max(mix.exs, Hex latest)`, so this actually publishes as `0.2.1`, not `0.2.0` —
+stated here so the number in the CHANGELOG isn't read as a promise CI will keep literally.
+629 tests, 0 failures; `mix quality` (format, `credo --strict`, `dialyzer`, `sobelow`) clean;
+coverage 92.23% (threshold 90); `mix docs` zero warnings.
+
+### The wiring gap this design's own text didn't name
+
+§2's "Coinbase after the change" bullet list is entirely about `Socket`. It says nothing
+about `Feed`, and `Feed.payload_kind/1` was written, deliberately, with no catch-all clause
+for exactly the reason its own comment gives: "an unrecognised struct here means a new
+payload kind was wired into `Socket` without being taught to this function, and failing
+loudly beats silently mis-tagging its coverage." That guard did its job on the first payload
+that could have tripped it — a real `level2` `update` frame would have crashed `Feed`
+outright the moment this shipped, not degraded gracefully. The design was correct that
+`Socket` is where the change lives; it undersold that `Socket`'s output type is also part of
+`Feed`'s own exhaustive match, and changing one without the other is a compile-clean,
+test-passing, production-crashing gap. Nothing in `mix test`, `mix dialyzer`, or `mix credo`
+would have caught it either, because `Feed`'s existing tests construct `OrderBookDelta`
+values directly rather than routing through `Socket`'s real dispatch — the crash only
+happens on the wire. Caught by re-reading `Feed`'s own moduledoc and grepping for every
+place `Socket.books`/`apply_book_event`/`deliver_book` were named in prose, which is what
+surfaced the `payload_kind/1` clause list as one of those places.
+
+### Two decisions the checklist asked for by name, both made the same direction
+
+The design anticipated needing judgment calls on the duplicate-price and precision-refusal
+tests ("decide deliberately and say which you did and why") without prescribing an answer.
+Both landed the same way: drop the behaviour, because both existed as *side effects* of
+`price_key/1`'s `:gb_trees` integer key rather than as independent rules anyone had decided
+on their own merits. The duplicate-price fold had no "measured live" citation anywhere in
+the codebase — unlike the 8-decimal `quote_increment` finding a few lines above it in the
+same moduledoc, which does — and folding two rows into one, silently picking a winner, is
+itself the shape of substitution this family's own "fail closed; never substitute" rule
+argues against. Once framed that way the decision stopped being a coin flip.
+
+### The bug the new tests found before anyone else did
+
+Building `OrderBookDelta.levels` in venue order required reusing the cons-and-reverse
+pattern for the snapshot's own per-side lists — but the first draft only reversed the combined
+list, not each side's accumulator, in `split_sides/1`. It compiled, every existing assertion
+still passed (row order didn't matter to any of them), and it was invisible until the
+duplicate-price test — written to prove two rows now survive rather than one — asserted their
+*relative* order and got the reverse of what the venue sent. A stable sort over equal keys
+inherits the accumulator's order, so this needed a tie to surface at all. That's the argument
+for writing tests that assert order on a "just pass it through" change: nothing about
+`Enum.sort_by/3`'s correctness would have caught it, because sorting non-equal keys was
+never wrong.
+
+### What this does not settle
+
+Reconnect reconciliation is now documented as the host's job — `:link_down`/`:link_up`
+bracket the gap, `:sequence` (always `nil` on Coinbase's `l2_data`, confirmed against its own
+reference docs) is the other half where a venue publishes one, and `get_order_book/2` is the
+correct resync point. None of that is exercised end-to-end against a real reconnect here; it
+is exactly what the design said it would be — a documented contract, not a tested one, since
+testing it would mean simulating a real venue's gap behaviour this package has no way to
+observe.
