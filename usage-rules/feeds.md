@@ -189,6 +189,32 @@ receiving production prices would be reading real market data believing it was f
 the substitution failure in its most dangerous form, and `Environment.streaming?/1` exists so
 a caller can ask before it commits.
 
+## A poll-based feed that goes silent still has to say so
+
+Robinhood's feed — and any venue's gap-filler for symbols a socket does not reach — is
+`Core.PollingFeed` underneath the facade. It can fail in a way a socket-based feed
+cannot: every fetch keeps failing while the process stays alive, ticking, and answering
+calls normally. Nothing crashes, no supervisor restarts it, and the only visible symptom
+is that data stops arriving — which reads downstream as a quiet market, not a broken
+venue. `PollingFeed` detects this itself (`status/1` calls it `delivering: false`) and,
+until now, said so only in a `Logger.warning` — a sentence a human had to go grepping for
+after the fact to find DpCryptoManagement's issue #21 (154 consecutive failed attempts,
+discovered only because someone searched the logs for that literal wording).
+
+`PollingFeed.start_link/1` takes an `:on_notice` option for exactly this — an injected
+function, same shape as `:on_refusal`, called with a `%Core.Notice{kind: :coverage_change}`
+the instant the feed crosses INTO delivering-nothing, and a second, `severity: :info`
+notice the instant it crosses back OUT. It fires once per transition — not once per failed
+fetch and not once per sweep while an outage continues — so a 342-symbol feed retrying
+every symbol every cycle does not turn one outage into a notice storm. `:on_notice`
+defaults to a no-op: a venue that has not wired it to its own `subscribe_notices/1`
+fanout yet still gets a working feed, not a crash.
+
+If you are building a venue on top of `PollingFeed`, wire `:on_notice` to whatever
+delivers your own package's notices to its subscribers. Until you do, this failure mode
+is invisible to your consumers exactly as it was before — the option existing is not the
+same as a venue using it.
+
 ## Reconnection is the package's problem, and the notice is yours
 
 A dropped socket reconnects, resubscribes, and emits link notices along the way —

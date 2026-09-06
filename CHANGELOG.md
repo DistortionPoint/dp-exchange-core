@@ -23,6 +23,36 @@ an acceptable changelog line.
 
 ### Added
 
+- **`PollingFeed` gains `:on_notice` — a feed that knows it has delivered nothing now
+  says so on a channel a consumer can act on, not only in a log line, per
+  DpCryptoManagement's issue #21.** `PollingFeed` already detected this condition and
+  named it in its own words — `Logger.warning("... has delivered NOTHING in 154
+  consecutive attempts ...")` — and stopped there. Issue #21 was found only because a
+  human went grepping logs for that literal sentence; issue #22 took days for the same
+  reason on a different venue. A `Logger.warning` is not a signal a supervising process
+  can subscribe to.
+
+  `:on_notice` is an injected function, the same shape `:on_refusal` already is, called
+  with a `%Core.Notice{kind: :coverage_change}` the instant the feed crosses INTO the
+  delivering-nothing state, and a `severity: :info` recovery notice the instant it
+  crosses back OUT — a consumer that learns a feed died and never learns it recovered is
+  only half-served. `:coverage_change` was chosen over inventing a new kind: it is the
+  same kind `dp_exchange_coinbase` uses for the sibling case (a channel subscribe that
+  exhausted its retries without ever becoming delivery), and "subscribed intent not
+  becoming delivery" is exactly what a feed delivering nothing is. It fires once per
+  transition, never once per failed tick and never once per sweep while an outage
+  continues — the existing "delivered NOTHING" log line still repeats every sweep by
+  design, so a consumer wanting only that repetition still has it; the notice channel is
+  additive, not a replacement. `details` carries the feed's `label`, the consecutive
+  failure count, and the last error — never a credential or a raw payload;
+  `Core.Notice.new/3` refuses credential-shaped keys outright and would raise if it
+  carried one.
+
+  Defaults to a no-op, so every existing caller of `PollingFeed.start_link/1` is
+  unaffected. Wiring Robinhood's and Schwab's own feeds to fan this out to their
+  `subscribe_notices/1` subscribers is a follow-up once this ships — Core has to publish
+  first, since both packages depend on it from Hex.
+
 - **`coverage_by_kind/1` — the Core half of splitting `coverage/1` by data kind, per
   DpCryptoManagement's issue #22.** `coverage/1` is correct and unchanged: it counts any
   payload for a symbol as delivering, a `Types.OrderBook` exactly as much as a

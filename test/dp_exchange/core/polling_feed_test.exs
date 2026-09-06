@@ -1,7 +1,7 @@
 defmodule DpExchange.Core.PollingFeedTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.PollingFeed
+  alias DpExchange.Core.{Notice, PollingFeed}
 
   # This module warns loudly and by design when a feed delivers nothing — that is the
   # behaviour under test, not noise to silence. Captured so a passing run stays quiet.
@@ -360,6 +360,112 @@ defmodule DpExchange.Core.PollingFeedTest do
       )
 
       assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+    end
+  end
+
+  describe "on_notice: the delivering-nothing transition (issue #21)" do
+    test "fires once on the crossing into delivering nothing, not once per failed tick or sweep after" do
+      # Three symbols, so `sweep` (the number of failures a full cycle takes) is 3 —
+      # large enough to prove this is NOT firing on every individual fetch failure.
+      test = self()
+
+      start_feed(
+        fetch: fn symbol ->
+          send(test, {:attempt, symbol})
+          {:error, :down}
+        end,
+        symbols: ~w(BTC-USD ETH-USD SOL-USD),
+        on_notice: fn notice -> send(test, {:notice, notice}) end
+      )
+
+      # The first full sweep: one failed attempt per symbol, in whatever order the
+      # staggered start times deliver them.
+      for _attempt <- 1..3, do: assert_receive({:attempt, _symbol}, 500)
+
+      assert_receive {:notice, notice}, 500
+
+      assert %Notice{kind: :coverage_change, severity: :warning} = notice
+      assert notice.provider == "polling-feed"
+      assert notice.details.label == "polling-feed"
+      assert notice.details.consecutive_failures == 3
+      assert notice.details.last_error == :down
+
+      # The outage continues for two more full sweeps' worth of attempts. No second
+      # notice — this is a transition, fired once, not a per-tick or per-sweep signal.
+      for _attempt <- 1..6, do: assert_receive({:attempt, _symbol}, 500)
+      refute_receive {:notice, _}, 200
+    end
+
+    test "emits a recovery notice, distinct from the dead one, when the feed resumes delivering" do
+      test = self()
+      counter = :counters.new(1, [])
+
+      start_feed(
+        fetch: fn symbol ->
+          case :counters.get(counter, 1) do
+            0 ->
+              :counters.add(counter, 1, 1)
+              {:error, :down}
+
+            _succeeded ->
+              {:ok, event(symbol)}
+          end
+        end,
+        symbols: ~w(BTC-USD),
+        on_notice: fn notice -> send(test, {:notice, notice}) end
+      )
+
+      assert_receive {:notice, dead_notice}, 500
+      assert %Notice{kind: :coverage_change, severity: :warning} = dead_notice
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+
+      assert_receive {:notice, recovered_notice}, 500
+      assert %Notice{kind: :coverage_change, severity: :info} = recovered_notice
+      assert recovered_notice.details.label == "polling-feed"
+      assert recovered_notice.details.consecutive_failures == 1
+
+      # Steady-state delivery afterward raises no further notice.
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      refute_receive {:notice, _}, 200
+    end
+
+    test "an absent :on_notice does not crash the feed while it is delivering nothing" do
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn symbol ->
+            send(test, {:attempt, symbol})
+            {:error, :down}
+          end,
+          symbols: ~w(BTC-USD)
+        )
+
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert Process.alive?(pid)
+    end
+
+    test "an explicit nil on_notice falls back to the no-op instead of crashing the feed (C1)" do
+      # Same nil-vs-absent trap `on_refusal` and every other injected option in this
+      # module already guard against: a venue's `Feed` wrapper forwards its own `opts`
+      # unchanged, so `on_notice: nil` is what arrives when nothing upstream set it.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn symbol ->
+            send(test, {:attempt, symbol})
+            {:error, :down}
+          end,
+          symbols: ~w(BTC-USD),
+          on_notice: nil
+        )
+
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 500
+      assert Process.alive?(pid)
     end
   end
 

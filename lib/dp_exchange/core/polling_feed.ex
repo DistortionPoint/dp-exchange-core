@@ -55,6 +55,19 @@ defmodule DpExchange.Core.PollingFeed do
   it has failed a full cycle with zero successes, and keeps warning while that
   holds. Never a silent retry loop.
 
+  The warning above is a log line, and a log nobody greps in time is exactly how
+  DpCryptoManagement's issue #21 stayed hidden — the feed said "has delivered
+  NOTHING in 154 consecutive attempts" to its own log, and a human found that
+  sentence by grepping, not because anything downstream reacted to it. So this
+  module ALSO emits an `on_notice` callback — the same injected-function shape as
+  `on_refusal` — carrying a `Core.Notice{kind: :coverage_change}` the instant it
+  crosses INTO the delivering-nothing state, and a recovery notice the instant it
+  crosses back out. Once per transition, not once per failed tick and not once
+  per sweep thereafter: a 342-symbol feed retrying every symbol every cycle would
+  otherwise turn one outage into a notice storm. `on_notice` defaults to a no-op,
+  so a caller that does not wire it up gets a working feed, not a crash — the
+  same contract `on_refusal` already keeps.
+
   ## A fetch that never returns fails just as loudly
 
   `fetch` and `fetch_all` run synchronously inside `handle_info`, and nothing in this
@@ -79,7 +92,7 @@ defmodule DpExchange.Core.PollingFeed do
 
   require Logger
 
-  alias DpExchange.Core.Config
+  alias DpExchange.Core.{Config, Notice}
 
   @typedoc """
   Fetches one symbol's current price.
@@ -93,6 +106,13 @@ defmodule DpExchange.Core.PollingFeed do
   """
   @type fetch ::
           (String.t() -> {:ok, map()} | {:error, term()} | {:refused, term()})
+
+  @typedoc """
+  Receives a `Core.Notice.t()` the instant this feed crosses into or back out of the
+  delivering-nothing state. Injected like `sink` and `on_refusal`, so the feed never
+  reaches outside its own inputs to publish one.
+  """
+  @type notice_handler :: (Notice.t() -> any())
 
   @default_interval_ms 30_000
 
@@ -215,6 +235,13 @@ defmodule DpExchange.Core.PollingFeed do
       # Defaults to a no-op: a caller that does not care about refusals gets a
       # working feed, not a crash.
       on_refusal: Config.opt(opts, :on_refusal, fn _symbol, _reason -> :ok end),
+      # Same shape, same trap, same fix as `on_refusal` above: a venue's `Feed` wrapper
+      # forwards its own `opts` unchanged, so an `on_notice` this feed's caller never set
+      # arrives as `on_notice: nil` rather than absent whenever ITS caller never set one
+      # either. `Config.opt/3` is what keeps that `nil` from reaching `state.on_notice.()`
+      # as a `BadFunctionError`. Defaults to a no-op: a caller that does not care about
+      # notices gets a working feed, not a crash.
+      on_notice: Config.opt(opts, :on_notice, fn _notice -> :ok end),
       symbols: MapSet.new(Config.opt(opts, :symbols, [])),
       start_delay_ms: Config.opt(opts, :start_delay_ms, @default_start_delay_ms),
       # See `@max_fetch_timeout_ms` above for why this exists and how the default is chosen.
@@ -222,7 +249,13 @@ defmodule DpExchange.Core.PollingFeed do
         Config.opt(opts, :fetch_timeout_ms, default_fetch_timeout_ms(interval_ms)),
       last_ok: %{},
       failures_since_ok: 0,
-      last_error: nil
+      last_error: nil,
+      # Latches to `:dead` the instant the feed crosses into delivering-nothing, and back
+      # to `:ok` on recovery. `record_failure/3` and `record_success/2` read this to fire
+      # `on_notice` exactly once per transition — never once per failed tick, and never
+      # once per sweep while an outage continues (unlike the "delivered NOTHING" log line,
+      # which repeats every sweep by design; see `delivering_nothing?/2`).
+      notice_state: :ok
     }
 
     if is_nil(state.fetch) and is_nil(state.fetch_all) do
@@ -389,6 +422,24 @@ defmodule DpExchange.Core.PollingFeed do
 
   defp record_success(state, false), do: state
 
+  # Recovery: this feed was latched `:dead` (see `notice_state` in `init/1`) and just
+  # published something. `on_notice` fires the recovery half of the pair here, once, on
+  # the transition back out — a consumer that learned a feed died and never learned it
+  # recovered is only half-served.
+  defp record_success(%{notice_state: :dead} = state, true) do
+    notice =
+      Notice.new(:coverage_change, state.label,
+        severity: :info,
+        message:
+          "#{state.label} has resumed delivering after #{state.failures_since_ok} " <>
+            "consecutive failures",
+        details: %{label: state.label, consecutive_failures: state.failures_since_ok}
+      )
+
+    state.on_notice.(notice)
+    %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
+  end
+
   defp record_success(state, true), do: %{state | failures_since_ok: 0, last_error: nil}
 
   # One failure is noise; a whole cycle of them with nothing succeeding means
@@ -397,15 +448,39 @@ defmodule DpExchange.Core.PollingFeed do
     failures = state.failures_since_ok + 1
     Logger.debug("[#{state.label}] #{what}: #{inspect(reason)}")
 
-    if delivering_nothing?(state, failures) do
-      Logger.warning(
-        "[#{state.label}] has delivered NOTHING in #{failures} consecutive attempts — " <>
-          "this venue is indistinguishable from quiet while it lasts. Last error: " <>
-          inspect(reason)
-      )
-    end
+    state =
+      if delivering_nothing?(state, failures) do
+        Logger.warning(
+          "[#{state.label}] has delivered NOTHING in #{failures} consecutive attempts — " <>
+            "this venue is indistinguishable from quiet while it lasts. Last error: " <>
+            inspect(reason)
+        )
+
+        notify_delivering_nothing(state, failures, reason)
+      else
+        state
+      end
 
     %{state | failures_since_ok: failures, last_error: reason}
+  end
+
+  # Fires `on_notice` exactly once per crossing into delivering-nothing. Once
+  # `notice_state` is already `:dead`, every later sweep re-enters this same "delivering
+  # nothing" branch (that repetition is what keeps the log line above alive for the
+  # duration of an outage), but this clause short-circuits so the NOTICE does not repeat
+  # with it — a notice per sweep on a long outage is still a storm, just a slower one.
+  defp notify_delivering_nothing(%{notice_state: :dead} = state, _failures, _reason), do: state
+
+  defp notify_delivering_nothing(state, failures, reason) do
+    notice =
+      Notice.new(:coverage_change, state.label,
+        severity: :warning,
+        message: "#{state.label} has delivered nothing in #{failures} consecutive attempts",
+        details: %{label: state.label, consecutive_failures: failures, last_error: reason}
+      )
+
+    state.on_notice.(notice)
+    %{state | notice_state: :dead}
   end
 
   # How stale the newest success may be before the feed counts as delivering
