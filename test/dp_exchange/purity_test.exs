@@ -43,15 +43,18 @@ defmodule DpExchange.PurityTest do
       # actually links against. A transitive reference no one noticed shows up here.
       allowed_prefixes = ~w(Elixir.DpExchange Elixir.Kernel Elixir.Access Elixir.Application
                             Elixir.ArgumentError Elixir.Base Elixir.Code Elixir.DateTime
-                            Elixir.Decimal Elixir.Enum Elixir.Exception Elixir.GenServer
-                            Elixir.Integer Elixir.Jason Elixir.Keyword Elixir.List
-                            Elixir.Logger Elixir.Macro Elixir.Map Elixir.MapSet
-                            Elixir.Module Elixir.Process Elixir.Req Elixir.RuntimeError
-                            Elixir.String Elixir.Supervisor Elixir.System Elixir.URI
-                            Elixir.Task Elixir.Stream Elixir.Float Elixir.Tuple)
+                            Elixir.Decimal Elixir.Enum Elixir.Exception Elixir.File
+                            Elixir.GenServer Elixir.Integer Elixir.Jason Elixir.Keyword
+                            Elixir.List Elixir.Logger Elixir.Macro Elixir.Map Elixir.MapSet
+                            Elixir.Module Elixir.Path Elixir.Process Elixir.Regex Elixir.Req
+                            Elixir.RuntimeError Elixir.String Elixir.Supervisor Elixir.System
+                            Elixir.URI Elixir.Task Elixir.Stream Elixir.Float Elixir.Tuple)
 
+      # `beam_lib`, `xref` and `erl_anno` are `:tools`/`:stdlib` — `Core.UnwiredCheck`'s
+      # call-graph engine for assertion 16 (`Core.AdapterContract`), the same family
+      # `beam_lib` was already reaching for in assertion 7's own imports-chunk check.
       allowed_erlang = ~w(erlang lists maps crypto logger elixir_erl_pass ets os
-                          telemetry rand binary re unicode)a
+                          telemetry rand binary re unicode beam_lib xref erl_anno)a
 
       called =
         "_build/#{Mix.env()}/lib/dp_exchange_core/ebin/*.beam"

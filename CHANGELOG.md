@@ -23,6 +23,55 @@ an acceptable changelog line.
 
 ### Added
 
+- **`Core.AdapterContract` gains assertion 16, "internal wiring" — every internal
+  export must have a caller inside the package's own `lib/`, catching the family's
+  single most-repeated defect: a mechanism built, documented, and never wired.** Six
+  instances in one week, every one shipped green because a test called the function
+  directly and coverage stayed high: `rate_limit_blocking` plumbed through
+  `Core.HttpClient` but never set by the caller (`dp_exchange_robinhood` issue #16,
+  `dp_exchange_webull` issue #23 — three separate option allowlists, a fix stopping at
+  the first still passed every test asserting the keyword was present —
+  `dp_exchange_coinbase` issue #26); `FrameSender`'s retry path in
+  `dp_exchange_coinbase`, reported but never retried (issue #22); `dp_exchange_schwab`'s
+  `subscribe_notices/1` facade, discarding `opts[:to]` instead of reaching `Feed`'s
+  notice registry; `dp_exchange_schwab`'s `Auth.refresh/2`, zero call sites in `lib/`
+  while `Socket` held a token good for 30 minutes and `websockex` reconnected with no
+  delay of its own.
+
+  `DpExchange.Core.UnwiredCheck` is the engine: it reads `:xref`'s real call graph
+  (`E`, the same OTP tool assertion 7's purity check already reads `imports` chunks
+  through), not a grep — a captured `&Mod.fun/1` and a literal `apply(Mod, :fun, args)`
+  both count as real usage. Excludes, without a hand-maintained allowlist: the facade
+  and fake (`@venue`/`@fake`, already bound for every other assertion), every behaviour
+  a module declares (read from its own `:attributes` chunk and that behaviour's own
+  `behaviour_info(:callbacks)` — `GenServer`, `WebSockex`, `Supervisor`,
+  `DpExchange.Core.Venue`, or any other), `child_spec/1`, `child_spec/2` and
+  `start_link/1` on every module regardless of declared behaviour, and every
+  compiler-injected export. A default-argument function (`def f(a, b \\ x)`, which
+  compiles to both `f/1` and `f/2`) is treated as one unit named at its highest arity,
+  wired the moment either arity has a caller from outside the pair — found necessary by
+  running this check against real code: `dp_exchange_schwab`'s pre-fix
+  `Feed.subscribe/2` and `Auth.headers/1` were each the unused lower-arity half of a
+  function whose higher arity every real caller already used explicitly, and reporting
+  each arity independently would have flagged both as noise.
+
+  Verified against the real defect: reconstructing `dp_exchange_schwab` at the commit
+  before both fixes landed (`c2f19b9`, parent of `09b8d1f` and `bf2e241`), the check
+  flags `Auth.refresh/2`, `Auth.needs_refresh?/2` and `Feed.subscribe_notices/2` by
+  name, with file and line — the exact mechanisms issue #16/#22's family and the
+  Schwab incidents left unwired. Run against all five venue packages as they stand
+  today, every one currently has at least one real finding — mostly `def`-exposed
+  getters over a module attribute that production code reads directly instead
+  (harmless but genuinely dead), plus a few worth a closer look:
+  `dp_exchange_webull`'s `MqttPacket.disconnect/0` and `MqttPacket.subscribe/2`, and
+  `dp_exchange_schwab`'s `Auth.needs_refresh?/2` and `StreamerProtocol.logout/2` —
+  `needs_refresh?/2` remains unwired even after `bf2e241`, which wired `refresh/2` but
+  not the function that was supposed to decide when to call it. Fixes are tracked
+  separately, per venue.
+
+  Documented in `usage-rules/adapter.md` next to the `rate_limit_blocking` section it
+  follows the same shape as.
+
 - **`PollingFeed` gains `:on_notice` — a feed that knows it has delivered nothing now
   says so on a channel a consumer can act on, not only in a log line, per
   DpCryptoManagement's issue #21.** `PollingFeed` already detected this condition and

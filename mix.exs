@@ -40,13 +40,25 @@ defmodule DpExchangeCore.MixProject do
   # No `mod:` — a library does not start itself (§7.7). Consumers supervise the
   # facade through `child_spec/1`; a package that opened sockets on load would
   # take restart strategy and shutdown order away from the host (D12).
+  #
+  # `:tools` ships `:xref`, which `Core.UnwiredCheck` calls directly — the "16.
+  # internal wiring" assertion's call-graph engine. `:tools` is part of every standard
+  # OTP install, the same way `:mix` and `:ex_unit` already are for this package's own
+  # dev/test PLT, so declaring it costs nothing and stops the compiler warning that
+  # `:xref.*` is an undefined module.
   def application do
     [
-      extra_applications: [:logger]
+      extra_applications: [:logger, :tools]
     ]
   end
 
-  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  # `test/fixtures` is separate from `test/support`: `test/support` holds
+  # `ReferenceVenue`, the fixture assertion 16 (`Core.UnwiredCheck`) validates itself
+  # against (`package_root: "test/support"` in adapter_contract_test.exs), so anything
+  # else compiled alongside it there would be scoped INTO that same self-check and
+  # show up as an internal function with no caller — which is exactly what happened to
+  # `UnwiredFixture` before it moved here.
+  defp elixirc_paths(:test), do: ["lib", "test/support", "test/fixtures"]
   defp elixirc_paths(_env), do: ["lib"]
 
   defp deps do

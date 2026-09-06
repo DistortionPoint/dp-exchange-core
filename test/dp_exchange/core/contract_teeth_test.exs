@@ -145,7 +145,7 @@ end
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{Capabilities, ReferenceVenue, Venue}
+  alias DpExchange.Core.{Capabilities, ReferenceVenue, UnwiredCheck, UnwiredFixture, Venue}
 
   describe "assertion 12 catches both directions of disagreement" do
     test "over-declaring is caught" do
@@ -320,6 +320,84 @@ defmodule DpExchange.Core.ContractTeethTest do
       refute function_exported?(ReferenceVenue, :coverage_by_kind, 1),
              "ReferenceVenue now exports coverage_by_kind/1 — this test no longer proves " <>
                "the suite tolerates an ABSENT callback and needs a fixture that lacks it"
+    end
+  end
+
+  describe "assertion 16 catches an unwired internal function" do
+    # Reproduces the shape of the real thing rather than a synthetic shell: a facade
+    # (excluded, like `@venue`), an internal module with one function the facade calls
+    # (`Feed.subscribe_notices/2`'s wired sibling) and one it should call but does not
+    # (`Auth.refresh/2`, `Feed.subscribe_notices/2` themselves, pre-fix — see
+    # `Core.UnwiredCheck`'s moduledoc). A test calling the unwired one directly, the way
+    # every one of the six real instances shipped, must not be enough to satisfy it.
+    test "an internal function only a test calls is flagged" do
+      u = System.unique_integer([:positive, :monotonic])
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "auth.ex",
+            code: """
+            defmodule TeethAuth#{u} do
+              def needs_refresh?(_credentials), do: true
+              def refresh(_credentials, _opts), do: {:ok, %{}}
+            end
+            """
+          },
+          %{
+            path: "venue.ex",
+            code: """
+            defmodule TeethVenue#{u} do
+              # The bug, reproduced: the facade never calls Auth.refresh/2 or
+              # Auth.needs_refresh?/1, exactly as dp_exchange_schwab's did before
+              # bf2e241 wired it in.
+              def sign(_credentials), do: :ok
+            end
+            """
+          }
+        ])
+
+      facade = Module.concat([:"Elixir", "TeethVenue#{u}"])
+      auth = Module.concat([:"Elixir", "TeethAuth#{u}"])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root, [facade])
+      mfas = Enum.map(violations, fn v -> {v.module, v.function, v.arity} end)
+
+      assert {auth, :refresh, 2} in mfas
+      assert {auth, :needs_refresh?, 1} in mfas
+    end
+
+    test "wiring the facade to the internal function clears the finding" do
+      u = System.unique_integer([:positive, :monotonic])
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "auth.ex",
+            code: """
+            defmodule TeethAuthFixed#{u} do
+              def refresh(_credentials, _opts), do: {:ok, %{}}
+            end
+            """
+          },
+          %{
+            path: "venue.ex",
+            code: """
+            defmodule TeethVenueFixed#{u} do
+              def sign(credentials), do: TeethAuthFixed#{u}.refresh(credentials, [])
+            end
+            """
+          }
+        ])
+
+      facade = Module.concat([:"Elixir", "TeethVenueFixed#{u}"])
+      auth = Module.concat([:"Elixir", "TeethAuthFixed#{u}"])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root, [facade])
+      mfas = Enum.map(violations, fn v -> {v.module, v.function, v.arity} end)
+
+      refute {auth, :refresh, 2} in mfas,
+             "the facade now calls Auth.refresh/2 — the same fix bf2e241 made for real"
     end
   end
 end

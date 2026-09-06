@@ -284,6 +284,40 @@ So, when you add a call:
   the first layer passes every test that asserts "the keyword list contains the option" and
   changes nothing on the wire.
 
+## An internal function nothing in `lib/` calls is a defect, not a stub
+
+**"Mechanism built, documented, and never wired."** Six instances in one week across
+this family, every one shipped green because a test called the function directly:
+
+| | what was built | what never called it |
+|---|---|---|
+| issues #16, #23, #26 | `rate_limit_blocking` plumbed through `Core.HttpClient` | the caller — three separate packages, #23 through three separate option allowlists |
+| issue #22 | `FrameSender`'s retry path — the moduledoc says a slow socket "becomes a failed batch, which a caller can report and retry" | the caller reported and never retried |
+| — | `dp_exchange_schwab`'s `subscribe_notices/1` facade, backed by `Feed`'s notice registry | the facade, which discarded `opts[:to]` and answered `:ok` unconditionally |
+| — | `dp_exchange_schwab`'s `Auth.refresh/2` | everything — zero call sites in `lib/`, while `Socket` held a token that could only expire, and `websockex` reconnects with no delay |
+
+Every one of those functions was reachable from a test. Coverage stayed green and the
+suite stayed silent, because **a test is not a caller.**
+
+`Core.AdapterContract`'s assertion 16 — "internal wiring" — checks the thing a human
+reviewer checks by eye and a test suite cannot: does anything in this package's own
+`lib/` actually reach this function. It reads `DpExchange.Core.UnwiredCheck`'s call
+graph from `:xref`, the same OTP tool assertion 7 already reads for the purity check, so
+a captured `&Mod.fun/1` or a literal `apply(Mod, :fun, args)` counts as real usage the
+way a grep never would. What it excludes — the facade, the fake, every behaviour's own
+callbacks, `child_spec/1` and `2`, `start_link/1`, and every compiler-injected export —
+is read from the same `venue:`/`fake:` bindings and behaviour declarations your contract
+test already supplies, never a hand-maintained list. See `Core.UnwiredCheck`'s
+moduledoc for the full account of what it does and does not catch, including the one
+real gap: a function reachable only through your own `Fake` and dead on every real path
+is not flagged, because `Fake` is part of `lib/` too.
+
+When assertion 16 fails, the finding names a real function at a real line. Read it as
+one of two things, never a third: either the function is genuinely dead and should go,
+or it is exactly the shape above — reachable, tested, and never actually wired to the
+thing that was supposed to call it. Wire it, or delete it. Do not add it to an
+exclusion list; there is no per-function list to add it to.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,

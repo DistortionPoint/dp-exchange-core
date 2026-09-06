@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Fifteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Sixteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -78,7 +78,10 @@ defmodule DpExchange.Core.AdapterContract do
       {14, "top of book is not a price — a BBO carries resting orders, never a traded price"},
       {15,
        "coverage by kind — optional; when a venue exports it, the union invariant against " <>
-         "coverage/1 holds and every key is a kind the venue's own capabilities declare"}
+         "coverage/1 holds and every key is a kind the venue's own capabilities declare"},
+      {16,
+       "internal wiring — every internal export has a caller inside this package's own " <>
+         "lib/, so a mechanism cannot ship built, documented and never reached"}
     ]
   end
 
@@ -95,6 +98,7 @@ defmodule DpExchange.Core.AdapterContract do
       coverage_by_kind(),
       purity(),
       isolation(),
+      wiring(),
       helpers(),
       arg_helpers(),
       purity_helpers()
@@ -746,6 +750,49 @@ defmodule DpExchange.Core.AdapterContract do
           send(b.pid, :go)
 
           assert Enum.sort([Task.await(a), Task.await(b)]) == [:refusing, :succeeding]
+        end
+      end
+    end
+  end
+
+  defp wiring do
+    quote location: :keep do
+      # --- 16. internal wiring ----------------------------------------------
+
+      describe "16. internal wiring" do
+        test "every internal export has a caller inside this package's own lib/" do
+          # "Mechanism built, documented, and never wired" — six instances in one week
+          # across this family, every one shipped green: `rate_limit_blocking` plumbed
+          # through Core.HttpClient but never set by a caller (issues #16, #23, #26 —
+          # #23 had to be fixed through three separate option allowlists, and a fix
+          # stopping at the first still passed every test asserting the keyword was
+          # present); FrameSender's retry path, reported but never retried (issue #22);
+          # `subscribe_notices/1`'s registry, built and never reached; `Auth.refresh/2`,
+          # zero call sites, while a Socket held a token that could only expire. Every
+          # one of those functions had a test calling it directly, so coverage stayed
+          # green and the suite stayed silent — a test is not a caller.
+          #
+          # `DpExchange.Core.UnwiredCheck` reads `:xref`'s real call graph rather than
+          # grepping for call sites, so a captured `&Mod.fun/1` and a literal
+          # `apply(Mod, :fun, args)` both count as real usage — see its moduledoc for
+          # what it excludes and why each exclusion is safe without a hand-maintained
+          # allowlist that rots. `@venue` and `@fake` are excluded here because both are
+          # already-bound public surface called only by consumers, not because either is
+          # hand-picked for this assertion.
+          config = Mix.Project.config()
+          app = config[:app]
+          lib_root = Path.expand(@package_root)
+          beam_dir = Mix.Project.build_path() |> Path.join("lib/#{app}/ebin")
+
+          facade_and_fake = Enum.reject([@venue, @fake], &is_nil/1)
+
+          assert {:ok, violations} =
+                   DpExchange.Core.UnwiredCheck.run(beam_dir, lib_root, facade_and_fake)
+
+          assert violations == [],
+                 "internal function(s) with no caller anywhere in this package's own " <>
+                   "lib/ — either dead code or a mechanism built and never wired:\n" <>
+                   DpExchange.Core.UnwiredCheck.format(violations)
         end
       end
     end
