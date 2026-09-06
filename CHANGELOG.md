@@ -104,6 +104,56 @@ an acceptable changelog line.
   Venue adoption (Coinbase, Gemini, Webull, Schwab, Robinhood) is tracked separately in
   the design doc's checklist and is not part of this change — Core ships first, by design.
 
+- **`Types.OrderBookDelta` — the Core half of "packages pass streamed data on; they do not
+  maintain books", per `docs/design/2026-09-06_stop-maintaining-books-in-packages.md`.**
+  `Types.OrderBook` is a full, sorted snapshot and Core had no incremental type at all, so a
+  venue streaming deltas had exactly one option: fold every one into a book it held itself
+  and hand the whole thing back. `dp_exchange_coinbase`'s `Socket` did this — a full book per
+  symbol, measured at ~22,800 bid and ~21,100 ask levels for `BTC-USD` on a consumer's live
+  node, rebuilt on every `l2_data` frame, inside a socket process that was starving its own
+  `:send_timeout` because it was never idle. That was market state duplicated in the one
+  place that could least afford it, while the host receiving it was already streaming the
+  same data into its own store.
+
+  `OrderBookDelta` carries `symbol`, `levels`, the venue's own `timestamp`, its `sequence`
+  where it publishes one (`nil` where it does not, exactly as `OrderBook`'s does) and
+  `provider`, with a validating `new/1` built on `Types.Validate` like every other type in
+  the directory. `levels` is `[{side, price, quantity}]` — `OrderBook.level/0`'s
+  `{price, quantity}` pair with the changed side prepended — kept as one flat list in the
+  venue's own order rather than split into per-side lists, because a single delta frame
+  changes both sides in one venue-ordered message and splitting it would either drop that
+  order or invent one never sent. **A `quantity` of zero means the level ceased to exist, not
+  a price of zero — carried through unchanged, never resolved here**, exactly the meaning
+  already documented at Coinbase's own `apply_book_row/2`.
+
+  This does not reintroduce the incident that made `Socket` build a book in the first place —
+  a caller reading one `l2_data` delta as though it were the whole book "would see a handful
+  of prices and nothing else." The fix is the distinct type, not accumulated state: a caller
+  cannot mistake an `%OrderBookDelta{}` for an `%OrderBook{}`, because the struct name says
+  which one it is holding.
+
+  **`:order_book` stays the right `data_kind()` for a delta stream — no new kind was added.**
+  `coverage_by_kind/1` answers "which kind of data is arriving", not "in what shape"; a host
+  asking whether book data is arriving does not care whether the next message is a snapshot
+  or a delta, and the struct type itself is what already tells a caller which shape it holds.
+  Adding a kind is not free — it is a closed vocabulary every venue declares against — and
+  this distinction was never what `coverage_by_kind/1` was built to make.
+
+  **Reconnect reconciliation is now the host's job, documented rather than left inferred**
+  (`usage-rules/feeds.md`, new "An order book stream delivers deltas, not a maintained book"
+  section): a package holding no book has nothing to wipe on reconnect, so the fact that
+  deltas after one are not contiguous with deltas before it is now visible instead of
+  silently absorbed. The existing `:link_down`/`:link_up` notices bracket where the gap
+  falls, and `:sequence` on both types lets a host confirm contiguity — consistent with this
+  family's existing rule that a notice is a prompt to re-read, never the record: the correct
+  response to `:link_up` is to re-pull `get_order_book/2` and resume from there, not to keep
+  applying deltas across a gap nothing can fill back in.
+
+  **This is additive to Core** — nothing existing changes shape. It exists to *enable* a
+  breaking change in `dp_exchange_coinbase`, tracked separately: that package will stop
+  building and delivering a full `OrderBook` per delta and start passing `OrderBookDelta`
+  straight through, once it depends on this version.
+
 ### Fixed
 
 - **The `nil`-vs-absent `Keyword.get` trap, closed as a class rather than one incident at a

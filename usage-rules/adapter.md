@@ -27,6 +27,51 @@ migration.
 If a capability is genuinely missing from the facade, that is a Core change with a
 deliberate release behind it, not a local addition.
 
+## Your job is to get the data and keep the connections up — not to process it
+
+**Market data passes through. What a package may hold is state describing what it is doing,
+and whether it is fulfilling what the host asked for.**
+
+That is the whole boundary, and it is worth stating as its own rule rather than leaving it
+to be inferred from the shapes the contract happens to offer, because a contract with only a
+snapshot type and no incremental one reads — wrongly — as an invitation to accumulate. It is
+not one. Decoding a venue's frames into `Core.Types.*` and delivering them to your
+subscribers is the job. Reconstructing the venue's own state from a stream of updates is a
+second job nobody asked your package to do, and the host is doing it already — this data is
+already flowing into the host's own store.
+
+**Hold — bookkeeping about your own job:**
+
+- Which pairs are subscribed to which shard or connection. This is the one piece of *market*
+  topology you are allowed to keep, because it is not market data — it is a record of what
+  the host asked for and where you put it.
+- The delivery and coverage tracking backing `coverage/1` and `coverage_by_kind/1` — whether
+  a symbol is actually arriving, by which route, and by which kind. This is a fact about
+  whether your package is doing its job, not a fact about the market.
+- A venue catalogue or alias map needed to attribute an inbound frame to the symbol the host
+  subscribed to under. Necessary to route the frame at all; still not the market's own state.
+
+**Do not hold — reconstructions of what the venue itself is doing:**
+
+- An order book. `Types.OrderBookDelta` exists so a book stream passes through as the venue's
+  own deltas instead of being folded into one.
+- A running last price, an accumulating candle, or any other rebuild of venue state from a
+  stream of updates. If a caller needs a maintained view, it builds one on its own side of
+  the facade, from the values you already hand it.
+
+**Why the line is drawn exactly here.** The host is already streaming this same data into a
+time-series store of its own, so a package-side copy is duplicated state sitting in the one
+place that can least afford to hold it — and holding it costs the job the package actually
+has. `dp_exchange_coinbase`'s `Socket` was the one package in this family that got this
+wrong: it held a full order book per symbol and rebuilt the whole thing on every delta,
+which cost 65–110 ms per frame. That work ran inside the same process responsible for
+`WebSockex.send_frame/2`, so a socket that was never idle rebuilding a book it was never
+asked to keep could not service its own sends — which is the `:send_timeout` behind issue
+#22. **Maintaining state we were not supposed to hold is what broke the connections we were
+supposed to keep.** The other four venue packages in this family already decode a frame and
+pass it on without holding a copy; this section states the convention they already follow,
+for the one package that did not.
+
 ## `capabilities/0` is a claim about a real venue
 
 ```elixir

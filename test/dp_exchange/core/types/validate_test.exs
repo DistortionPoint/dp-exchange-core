@@ -36,6 +36,7 @@ defmodule DpExchange.Core.Types.ValidateTest do
     OptionGreeks,
     Order,
     OrderBook,
+    OrderBookDelta,
     OrderLeg,
     Portfolio,
     Position,
@@ -400,6 +401,25 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "rejects a nil timestamp" do
       assert_raise ArgumentError, ~r/timestamp/, fn ->
         OrderBook.new(Keyword.put(@valid, :timestamp, nil))
+      end
+    end
+  end
+
+  describe "OrderBookDelta.new/1" do
+    @valid [
+      symbol: "BTC-USD",
+      levels: [{:bid, Decimal.new("100"), Decimal.new("1")}],
+      timestamp: @ts,
+      provider: :reference
+    ]
+
+    test "builds with valid attrs" do
+      assert %OrderBookDelta{symbol: "BTC-USD"} = OrderBookDelta.new(@valid)
+    end
+
+    test "rejects a nil levels — the whole point of the type is what it changed" do
+      assert_raise ArgumentError, ~r/levels/, fn ->
+        OrderBookDelta.new(Keyword.put(@valid, :levels, nil))
       end
     end
   end

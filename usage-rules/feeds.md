@@ -86,6 +86,92 @@ still gets a plain answer. It is **not** a per-channel report — Coinbase's `le
 freshness or latency API — same observed-arrival fact as `coverage/1`, split by kind, nothing
 about *when*.
 
+## An order book stream delivers deltas, not a maintained book
+
+`DpExchange.Core.Types.OrderBookDelta` is what a venue pushes for a book **update**:
+`DpExchange.Core.Types.OrderBook` — the full, sorted snapshot — is still what `get_order_book/2`
+returns and still what a venue's initial subscribe frame delivers, but every change after
+that arrives as a delta, passed straight through by the venue package rather than folded
+into a book the package holds for you.
+
+```elixir
+%DpExchange.Core.Types.OrderBookDelta{
+  symbol: "BTC-USD",
+  levels: [
+    {:bid, Decimal.new("64000.00"), Decimal.new("0")},
+    {:ask, Decimal.new("64001.50"), Decimal.new("1.2")}
+  ],
+  timestamp: ~U[2026-09-06 12:00:03.114Z],
+  sequence: 88_213_940,
+  provider: :coinbase
+}
+```
+
+**This package no longer maintains a book on your behalf.** `dp_exchange_coinbase` used to
+— a full order book per symbol, ~22,800 bid and ~21,100 ask levels for `BTC-USD` on a live
+node, rebuilt on every delta, inside a socket process that was already starving on its own
+`send_timeout` because it was never idle. That was market state duplicated in the one place
+that could least afford to hold it, and the host receiving it was already writing the same
+data into its own store. If you want a maintained book, build one from the stream of
+`OrderBookDelta` structs on your side of the boundary — that is genuinely your call to make,
+not a default this package was making for you.
+
+### `levels` is a flat list in the venue's own order, and a zero quantity means removal
+
+Each entry is `{side, price, quantity}` — `OrderBook.level/0`'s `{price, quantity}` with the
+side prepended, because a single delta frame changes both sides in one venue-ordered message
+and splitting it into two lists would either drop that order or invent one that was never
+sent.
+
+**A `quantity` of zero means the level at that price ceased to exist — it is not a price of
+zero, and this package does not resolve it for you.** That is the venue's own meaning,
+carried through unchanged; deciding what to do with a vanished level — drop it from a book
+you are building, log it, ignore it — is state-keeping, and state-keeping is exactly the job
+this type exists to keep out of the package.
+
+### A delta cannot be mistaken for a book, which is the whole reason it has its own type
+
+Reading a single delta as though it were the whole book "would see a handful of prices and
+nothing else" — a caller matching on `%DpExchange.Core.Types.OrderBook{}` cannot receive an
+`%OrderBookDelta{}` by accident, because the struct name says which one it is holding. That
+is the type-level fix for exactly the failure that used to be prevented by holding state
+instead.
+
+### `coverage_by_kind/1` still reports `:order_book` for a delta stream — deliberately
+
+A venue streaming deltas still declares `:order_book` in `capabilities().streamable`, and
+`coverage_by_kind/1` still answers `:order_book` for it, same as it would for a snapshot
+stream. **No new `data_kind()` was added for this.** `coverage_by_kind/1` exists to answer
+"which *kind* of data is arriving" — quotes dark, book healthy, and so on — not "in what
+*shape*". A host asking whether book data is arriving for a symbol does not care whether the
+next message is a full snapshot or an incremental delta; it cares whether book data is
+arriving at all, and `:order_book` already answers that. Splitting the vocabulary by shape
+would add a second axis to a closed vocabulary every venue declares against, for a
+distinction `coverage_by_kind/1` was never built to make — the struct type itself is what
+already tells a caller which shape it is holding.
+
+### Reconnect reconciliation is yours, and the tools are the ones you already have
+
+A package holding no book has nothing to wipe on reconnect, so the fact that deltas after a
+reconnect are **not contiguous** with deltas before it is now visible to you instead of
+silently absorbed. Two existing signals are what you reconcile against, and nothing new was
+added for this:
+
+  * **`:link_down` / `:link_up`** notices bracket exactly where the gap falls.
+  * **`:sequence`**, present on both `OrderBook` and `OrderBookDelta` wherever the venue
+    publishes one, lets you confirm whether what arrives after `:link_up` is actually
+    contiguous with what you already hold.
+
+Consistent with the rule earlier in this file — *a notice is a prompt to re-read, never the
+record* — the correct response to `:link_up` on a book stream is to re-pull
+`get_order_book/2` (or accept the fresh snapshot the venue's own protocol sends on
+resubscribe, where it sends one) and resume applying deltas from there, rather than to keep
+applying them across the gap on the assumption that nothing was missed. Two signals are
+enough to know *when* to re-sync and *whether* what you resumed on is contiguous; neither one
+reconstructs the missing deltas themselves, and nothing does — a gap in a delta stream is
+lost, not recoverable, which is exactly why re-reading the current state rather than trusting
+continuity is the only correct response to it.
+
 ## Notices are a separate channel
 
 ```elixir
