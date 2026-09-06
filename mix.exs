@@ -7,7 +7,7 @@ defmodule DpExchangeCore.MixProject do
   # the attribute assignment below by its exact literal form — do not reformat
   # it, and do not repeat that form anywhere else in this file, comments
   # included, or the script will rewrite the wrong line.
-  @version "0.1.54"
+  @version "0.1.55"
   @source_url "https://github.com/DistortionPoint/dp-exchange-core"
 
   def project do
