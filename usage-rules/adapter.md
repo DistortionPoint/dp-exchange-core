@@ -201,6 +201,44 @@ present-and-`nil` value is treated the same as an absent one. Reach for it, not
 forwarded `opts` — deliberately not `||`, because `||` is falsy on `false` too and would
 silently turn an explicit `log_requests: false` back into its default.
 
+### A call with nothing waiting on it must set `rate_limit_blocking: true`
+
+`Core.HttpClient` reads `:rate_limit_blocking` to decide between `acquire/3` — wait for
+capacity — and `check/3` — fail immediately if there is none. **It defaults to `false`**,
+because a caller a human is waiting on should get a fast, honest refusal rather than an
+unexplained pause.
+
+That default is wrong for every call made from a timer, a `Process.send_after/3`, or a
+background task, and getting it wrong there is not a slow call — it is a **permanent silent
+degradation**, because the work that was supposed to happen simply does not, and nothing is
+blocked to notice.
+
+This has now been the same defect three separate times, in three packages:
+
+| | what failed | cost |
+|---|---|---|
+| issue #16 | Robinhood's `Feed` never forwarded the option | 87 of 87 symbols dropping to 8 in one cycle |
+| issue #23 | Webull's `Feed`, `Subscription` **and** `Rest` each stripped it from their allowlists | 58 throttle failures in 13 minutes; 0 of 342 pairs streaming |
+| issue #26 | Coinbase's alias-map fetch never set it | alias resolution permanently off; 406 pairs requested, 5 delivered under the requested names |
+
+Every one is a background call, with nothing waiting on the result, failing rather than
+waiting a second — while Core's own throttle message names the fix *in the text it returns*.
+Reading that message requires already having shipped the bug, which is why it is written
+down here instead.
+
+So, when you add a call:
+
+- **Ask who is waiting on the result.** Nobody? Set `rate_limit_blocking: true`. A one-second
+  wait on a 60-second timer is free; a failure is total.
+- **Set it at the layer that knows.** A `Feed` knows its resubscribe is unattended and should
+  default it to `true`; a `Rest` module does not know whether its caller is a background
+  replay or a user-facing one-off, so it should **forward** the option and never default it.
+  `dp_exchange_robinhood`'s and `dp_exchange_webull`'s feeds are the worked examples.
+- **Check every allowlist between you and `HttpClient`.** Webull's took three: `Feed` built
+  the options, `Subscription` filtered them, `Rest` filtered them again. A fix that stops at
+  the first layer passes every test that asserts "the keyword list contains the option" and
+  changes nothing on the wire.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,
