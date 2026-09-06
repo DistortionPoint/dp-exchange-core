@@ -28,16 +28,25 @@ choosing where your money goes.
 | allowlist read / request / remove | — | ✅ | — | — | — |
 | withdrawal fee estimate | — | ✅ | — | — | — |
 | **withdraw** | — | ✅ | — | — | — |
-| payment methods | — | ✅ | — | — | — |
-| internal transfer | — | ✅ | — | — | — |
+| payment methods | ✅ read only | ✅ list / add | — | — | — |
+| internal transfer | ✅ | ✅ | — | — | — |
 
-**Gemini is the only venue in this family that moves money through its API**, and that is a
+**Gemini is the only venue in this family whose API moves funds off the venue**, and that is a
 statement about the venues, not about how far these packages got. Robinhood Crypto publishes
 nine operations and none is a transfer; Schwab's Trader API is accounts, orders and market
 data; Webull and Coinbase Advanced Trade fund through their own applications. Each is
 recorded with its source in that package's `docs/reference/*/negative-claims.md`.
 
-So a host writing against this group is writing against Gemini today. Write it against the
+**Coinbase is not a blank row, and reading it as one loses two live calls.** Advanced Trade
+publishes no deposit address, no networks list, no allowlist and no withdrawal, so
+`withdraw/5` and everything around it is `:unsupported` there. But `transfer_internal/4`
+**is live** — funds between two of the account's own portfolios — and
+`list_payment_methods/2` and `get_payment_method/3` read the funding sources.
+`add_payment_method/2` is not served: a bank is linked through the consumer product's flow,
+which needs a person. Gemini is the mirror image on that last pair — it serves
+`list_payment_methods/2` and `add_payment_method/2` and not `get_payment_method/3`.
+
+So a host **withdrawing** is writing against Gemini today. Write it against the
 contract anyway — the callbacks are the same shape everywhere, and the venues that answer
 `{:error, :not_supported}` do so uniformly.
 

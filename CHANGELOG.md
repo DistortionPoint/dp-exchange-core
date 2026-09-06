@@ -205,6 +205,32 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **Six false claims in shipped documentation, corrected against the code.** Nothing tests
+  prose, and all six were the same shape: a statement about the family that was true when it
+  was written and rotted silently.
+  - `usage-rules/testing.md` and `docs/guides/building-an-exchange-package.md` both said the
+    conformance suite has **fifteen** assertion groups. It has had **sixteen** since
+    assertion 16 ("internal wiring") landed, as `assertions/0` and `AdapterContract`'s own
+    moduledoc already said. The identical drift is recorded once before, at fourteen.
+  - `usage-rules/feeds.md`'s per-venue table had three of five `streamable` rows wrong:
+    Coinbase is `[:quotes, :order_book]` (not `[:quotes]`), Webull is
+    `[:quotes, :top_of_book, :trades]` (not `[:quotes]`), and Robinhood is `[:top_of_book]`
+    — deliberately **not** `[:quotes]`, because that venue publishes no last-trade data to
+    poll for.
+  - `usage-rules/money-movement.md` showed Coinbase as a blank row. `transfer_internal/4`
+    is live there, and so are `list_payment_methods/2` and `get_payment_method/3`; only
+    withdrawal and everything around it is `:unsupported`. "Gemini is the only venue that
+    moves money through its API" is now stated as what is actually true — the only one whose
+    API moves funds **off** the venue.
+  - `Capabilities`' `supports_order_preview` comment said only Schwab declares it. Coinbase
+    and Webull declare it too.
+  - `docs/guides/building-an-exchange-package.md` said no venue checked so far has a working
+    sandbox. Gemini's does, and `usage-rules/environments.md` has said so, measured, since
+    2026-08-28.
+  - `docs/reference/core/negative-claims.md` said Core makes no claim about what a venue
+    serves. Four of its shipped tables do exactly that, unchecked by any test; the audit
+    section now names them as the place a venue fact goes wrong in Core.
+
 - **The `nil`-vs-absent `Keyword.get` trap, closed as a class rather than one incident at a
   time (C1).** `polling_feed.ex`'s `:start_delay_ms` already carried a fix and an incident
   comment; the same trap was open at every other default-bearing option in `PollingFeed`,

@@ -16,7 +16,11 @@ The per-repo checklist. Every step exists because skipping it has cost something
       reproducible and reviewable against a fixed source.
 
 - [ ] If the docs describe a sandbox, **verify it actually works** before relying on it.
-      None of the venues checked so far has one that does.
+      Of the five venues so far, only Gemini's does in full — a real exchange with test
+      funds. Webull's UAT serves authenticated REST and has no broker at all
+      (`mqtt-uat.webullbroker.com` is NXDOMAIN), and Coinbase, Robinhood and Schwab
+      publish none. See `usage-rules/environments.md` for the measured detail, including
+      the Gemini documentation page that names the wrong sandbox host.
 
 ## 1. Scaffold
 
@@ -105,7 +109,7 @@ The per-repo checklist. Every step exists because skipping it has cost something
 
 ## 5. Test
 
-- [ ] `use DpExchange.Core.AdapterContract` — 15 assertion groups (see
+- [ ] `use DpExchange.Core.AdapterContract` — 16 assertion groups (see
       `DpExchange.Core.AdapterContract.assertions/0`), green.
 
 - [ ] Your fake satisfies the same suite as the real adapter. Less capable is allowed;

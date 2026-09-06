@@ -222,8 +222,9 @@ defmodule DpExchange.Core.Capabilities do
             # closes, which is why nothing needed it until an equities broker arrived.
             supported_sessions: [],
             # Whether the venue can validate an order *without placing it*, returning
-            # estimated cost. Only Schwab does, and it is the only way in the family to
-            # check an order against the venue's own rules before committing.
+            # estimated cost. Coinbase, Webull and Schwab declare `true`; Gemini and
+            # Robinhood declare `false`. Where it is true it is the only way to check an
+            # order against the venue's own rules before committing one.
             supports_order_preview: false,
             # Whether an order can be amended atomically. `false` means a caller must
             # cancel and re-place, which has a window in which no order is live — so this

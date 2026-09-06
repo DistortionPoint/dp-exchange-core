@@ -227,11 +227,16 @@ why notices are advisory, and it is the shape of nearly every incident behind th
 
 | venue | transport | `streamable` | `coverage/1` reports |
 |---|---|---|---|
-| Coinbase | WebSocket | `[:quotes]` | `:stream` |
+| Coinbase | WebSocket | `[:quotes, :order_book]` | `:stream` |
 | Gemini | WebSocket, 22 channels | `[:quotes, :top_of_book]` | `:stream` |
-| Webull | **MQTT** | `[:quotes]` | `:stream` |
+| Webull | **MQTT** | `[:quotes, :top_of_book, :trades]` | `:stream` |
 | Schwab | WebSocket (Streamer) | `[:quotes, :top_of_book, :order_book, :candles, :orders, :fills]` | `:stream` |
-| Robinhood | **REST poll inside the package** | `[:quotes]` | `:internal_poll` |
+| Robinhood | **REST poll inside the package** | `[:top_of_book]` | `:internal_poll` |
+
+Read that column from each package's own `capabilities/0` rather than from here: it is the
+one thing in this table that changes as a package wires a kind its venue already carried.
+Robinhood's is `[:top_of_book]` and **not** `[:quotes]` deliberately — the venue publishes no
+last-trade data to poll for, so a bid/ask is the only thing it can deliver.
 
 **Nothing above the facade branches on that column.** The one visible difference is the value
 `coverage/1` reports, which is a statement about *what is arriving*, never about how — and

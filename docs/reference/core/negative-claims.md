@@ -61,8 +61,9 @@ recorded state rather than an oversight.
 
 ## What is not audited here, and why
 
-Core makes no claim about what any venue does or does not serve. Every such claim lives in
-the venue package that makes it, next to the endpoint inventory it was read from:
+Core makes no *authoritative* claim about what any venue does or does not serve. The claim
+of record lives in the venue package that makes it, next to the endpoint inventory it was
+read from:
 
 - `dp_exchange_coinbase/docs/reference/coinbase/negative-claims.md`
 - `dp_exchange_gemini/docs/reference/gemini/negative-claims.md`
@@ -75,3 +76,12 @@ was being refused — and **four mislabelled absences**, where a venue's own gap
 this family's backlog. None of the thirteen was found by a test. Nothing fails when a comment
 is wrong, which is the entire argument for auditing them on a schedule rather than on
 suspicion.
+
+**Core's own shipped documentation restates some of those venue facts, and that copy drifts.**
+`usage-rules/feeds.md`'s `streamable` table, `usage-rules/money-movement.md`'s availability
+table, `usage-rules/environments.md`'s demo table and `usage-rules/auth.md`'s scheme table are
+all per-venue claims living in Core, none of which any test checks. On 2026-09-06 three of the
+five `streamable` rows and two of the Coinbase money-movement rows were stale against the
+venue packages' own `capabilities/0`. Re-read those four tables against each package's
+`capabilities/0` whenever this file is audited; they are the place a venue fact goes wrong in
+Core.
