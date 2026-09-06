@@ -32,11 +32,14 @@ rule. So this is one package returning to the boundary the others already hold.
 
 ## 1. Objectives
 
-- [ ] `Socket` holds no market state — connection state only
-- [ ] What the venue streamed is what the host receives, decoded into contract types
-- [ ] A caller still cannot mistake one delta for a whole book — the reason the maintenance
+All four met — see §3 for what each item found, and §5 for what the work turned up that this
+section did not anticipate.
+
+- [x] `Socket` holds no market state — connection state only
+- [x] What the venue streamed is what the host receives, decoded into contract types
+- [x] A caller still cannot mistake one delta for a whole book — the reason the maintenance
       was added in the first place
-- [ ] The change is declared, not silent: consumers receive a different shape
+- [x] The change is declared, not silent: consumers receive a different shape
 
 ## 2. Design
 
