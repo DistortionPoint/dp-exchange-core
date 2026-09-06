@@ -149,17 +149,30 @@ defmodule DpExchange.Core.NoticeTest do
       # purpose is to make notices SAFE, killing the whole BEAM node, not just its own
       # package. Every key below is unique and unseen before this test runs, so the
       # old implementation would mint one fresh, permanent atom per iteration.
-      before_count = :erlang.system_info(:atom_count)
+      # Asserted per-key via `String.to_existing_atom/1` rather than by watching
+      # `:erlang.system_info(:atom_count)`. That count is process-GLOBAL and this suite is
+      # `async: true`, so unrelated tests running concurrently move it — the first version
+      # of this test did watch the count, passed locally, and then failed in CI (which runs
+      # `max_cases: 8`) reporting a growth of 189 atoms that `reject_credentials!/1` had not
+      # created. A test that reports a regression the code did not commit is worse than no
+      # test: it teaches the reader to distrust it.
+      #
+      # This form is deterministic and asks the only question that matters, of the exact
+      # keys in question: did building these notices mint an atom for any of them?
+      keys = for i <- 1..5_000, do: "c8_regression_novel_key_#{i}_#{System.unique_integer()}"
 
-      for i <- 1..5_000 do
-        Notice.new(:data_quality, :v, details: %{"c8_regression_novel_key_#{i}" => i})
+      for key <- keys do
+        Notice.new(:data_quality, :v, details: %{key => 1})
       end
 
-      grown = :erlang.system_info(:atom_count) - before_count
-
-      assert grown < 100,
-             "atom table grew by #{grown} building 5,000 notices with novel string " <>
-               "details keys — reject_credentials!/1 is atomising caller input again"
+      # The old implementation normalised with `key |> to_string() |> String.downcase() |>
+      # String.to_atom()`, so the downcased form is precisely the atom it would have minted.
+      # If that ever comes back, these stop raising and the test fails.
+      for key <- keys do
+        assert_raise ArgumentError, fn ->
+          String.to_existing_atom(String.downcase(key))
+        end
+      end
     end
   end
 
