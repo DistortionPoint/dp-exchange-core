@@ -352,6 +352,57 @@ Two things it deliberately does **not** do:
 If this fails, the fix is in your fake: make it check credentials the way your real
 `Rest`/`Auth` module does, not in this package.
 
+## Assertion 18 — a process that links a child it starts must trap exits
+
+Found live in four of five venue packages on 2026-09-07: `Feed.init/1` never called
+`Process.flag(:trap_exit, true)`, and `Socket.start_link/1` ran from inside a `Feed`
+callback — which links the socket to `Feed` itself, not to a supervisor. An abnormal
+socket exit was therefore untrappable and killed `Feed`, and the `Supervisor` restarted
+it from its **static start opts** — every `subscribe/2` a consumer had made since boot,
+gone in the same instant. One socket dying anywhere took the whole feed's subscription
+state with it.
+
+Assertion 18 is **static**, not a behavioural "start the tree and kill a linked child"
+test — that was the first design and it was rejected, because starting a venue's real
+(non-fake) tree is not reliably network-free. `dp_exchange_schwab`'s `Feed` dials its
+Streamer unconditionally from `init/1`'s own `{:continue, :connect}`, regardless of
+whether anything has ever been subscribed, and the only way around that from Core is a
+venue-specific injection option name this suite is expressly forbidden from knowing (see
+this file's own "never declare transport"). A static check never starts a process at
+all, so it cannot dial out for any venue, present or future — see
+`DpExchange.Core.LinkSafetyCheck`'s moduledoc for the full reasoning.
+
+It scans every module in your `lib/` that declares `GenServer`, `:gen_statem`,
+`GenStateMachine` or `WebSockex` as a `@behaviour`, and for each one asks two questions
+of its own compiled code, taken as a whole rather than function by function: does it
+create a link — a remote call named `start_link` (any target module, any arity, since
+`X.start_link` always links by OTP convention), `Process.link/1`, or `spawn_link` — and
+does it also call `Process.flag(:trap_exit, true)` somewhere. The first without the
+second is the violation: a module that manufactures a link to a process it started and
+has no way to survive that process dying abnormally.
+
+`start_link/1`, `start_link/2`, `child_spec/1` and `child_spec/2` are never scanned as
+the *source* of a link — every process-behaviour module's own `start_link/N` delegates to
+that behaviour's own `start_link` (`WebSockex.start_link/4`, `GenServer.start_link/3`) to
+bootstrap itself, and that link belongs to whoever calls it, not to the module being
+bootstrapped. This is the same exclusion assertion 16 already makes for the same
+functions, reused rather than reinvented.
+
+What it does not check: whether you *handle* the resulting `{:EXIT, pid, reason}`
+correctly — clearing coverage, firing a `:link_down` notice, reopening the child. A
+process that traps exits but defines no matching `handle_info/2` still survives (`use
+GenServer` injects a default that logs and continues), which is the literal claim this
+assertion makes and no more. Whether your feed *recovers usefully* is genuinely different
+per venue and is exactly the kind of mechanism this contract's own rule ("never declare
+transport") forbids an assertion from encoding — that part is on you, and the five real
+fixes (`dp_exchange_coinbase` `e77b542`, `dp_exchange_gemini` `66acd3b`,
+`dp_exchange_webull` `d0c54a8`, `dp_exchange_schwab` `90dddc6`, `dp_exchange_robinhood`
+`51ad189`) are the reference for what a good recovery looks like.
+
+If this fails, add `Process.flag(:trap_exit, true)` as the first thing your process's
+`init/1` does, and a `handle_info({:EXIT, pid, reason}, state)` clause that isolates the
+crash to whatever it actually broke.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,

@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Seventeen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Eighteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -84,7 +84,11 @@ defmodule DpExchange.Core.AdapterContract do
          "lib/, so a mechanism cannot ship built, documented and never reached"},
       {17,
        "credential gate — on a venue requiring credentials, no active credentialed " <>
-         "endpoint's fake succeeds when called with credentials stripped"}
+         "endpoint's fake succeeds when called with credentials stripped"},
+      {18,
+       "link safety — a process behaviour that starts a linked child traps exits, so " <>
+         "that child's abnormal death cannot propagate untrapped into the process " <>
+         "that started it"}
     ]
   end
 
@@ -102,6 +106,7 @@ defmodule DpExchange.Core.AdapterContract do
       purity(),
       isolation(),
       wiring(),
+      link_safety(),
       credential_gate(),
       helpers(),
       arg_helpers(),
@@ -808,6 +813,51 @@ defmodule DpExchange.Core.AdapterContract do
                  "internal function(s) with no caller anywhere in this package's own " <>
                    "lib/ — either dead code or a mechanism built and never wired:\n" <>
                    DpExchange.Core.UnwiredCheck.format(violations)
+        end
+      end
+    end
+  end
+
+  defp link_safety do
+    quote location: :keep do
+      # --- 18. link safety --------------------------------------------------
+
+      describe "18. link safety" do
+        test "a process that starts a linked child also traps exits" do
+          # Found live in four of five venue packages on 2026-09-07: `Feed.init/1` never
+          # called `Process.flag(:trap_exit, true)`, and `Socket.start_link/1` ran from
+          # inside a `Feed` callback — which links the socket to `Feed`, not to a
+          # supervisor. An abnormal socket exit was therefore untrappable and killed
+          # `Feed`, and the venue's `Supervisor` restarted it from its STATIC start opts
+          # — every `subscribe/2` a consumer had made since boot, silently gone. Fixed
+          # identically in all five repos by trapping exits before anything gets linked:
+          # `dp_exchange_coinbase` e77b542, `dp_exchange_gemini` 66acd3b,
+          # `dp_exchange_webull` d0c54a8, `dp_exchange_schwab` 90dddc6,
+          # `dp_exchange_robinhood` 51ad189.
+          #
+          # This is deliberately STATIC, not a behavioural "start the tree and kill a
+          # linked child" test — see `DpExchange.Core.LinkSafetyCheck`'s moduledoc for
+          # why that was tried first and rejected: starting a venue's real (non-fake)
+          # tree is not reliably network-free (dp_exchange_schwab's `Feed` dials its
+          # Streamer unconditionally from `init/1`'s own `{:continue, :connect}}`,
+          # regardless of whether anything has been subscribed), and the only way around
+          # that is a venue-specific injection option name this suite is expressly
+          # forbidden from knowing. A static check over the compiled module — does it
+          # create a link, and does it also trap exits — never starts a process at all,
+          # so it cannot dial out for any venue, present or future.
+          config = Mix.Project.config()
+          app = config[:app]
+          lib_root = Path.expand(@package_root)
+          beam_dir = Mix.Project.build_path() |> Path.join("lib/#{app}/ebin")
+
+          assert {:ok, violations} = DpExchange.Core.LinkSafetyCheck.run(beam_dir, lib_root)
+
+          assert violations == [],
+                 "process(es) that link a child they start and never call " <>
+                   "Process.flag(:trap_exit, true) — that child's abnormal exit will " <>
+                   "crash the process that started it, and a Supervisor restarts from " <>
+                   "static opts, discarding every subscribe/2 made since boot:\n" <>
+                   DpExchange.Core.LinkSafetyCheck.format(violations)
         end
       end
     end

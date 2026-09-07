@@ -23,6 +23,74 @@ an acceptable changelog line.
 
 ### Added
 
+- **`AdapterContract` gains assertion 18, "link safety" — a process behaviour
+  (`GenServer`, `:gen_statem`, `GenStateMachine`, `WebSockex`) that links a child it
+  starts must also call `Process.flag(:trap_exit, true)`.** Found live in four of five
+  venue packages on 2026-09-07, all independently: `Feed.init/1` never trapped exits, and
+  `Socket.start_link/1` (or `PollingFeed.start_link/1`) ran from inside a `Feed`
+  callback, which links the child to `Feed` itself rather than to a supervisor. An
+  abnormal exit on that link was therefore untrappable and crashed `Feed`, and the
+  venue's `Supervisor` restarted it from its **static start opts** — every `subscribe/2`
+  a consumer had made since boot, gone in the same instant. One socket dying anywhere
+  took the whole feed's subscription state with it. Fixed identically in all five repos
+  by trapping exits before anything gets linked: `dp_exchange_coinbase` `e77b542`,
+  `dp_exchange_gemini` `66acd3b`, `dp_exchange_webull` `d0c54a8`, `dp_exchange_schwab`
+  `90dddc6`, `dp_exchange_robinhood` `51ad189`.
+
+  **Deliberately static, not the behavioural "start the tree and kill a linked child"
+  test that was designed first.** That design was rejected on evidence, not on general
+  principle: starting a venue's real (non-fake) tree is not reliably network-free.
+  `dp_exchange_schwab`'s `Feed` dials its Streamer unconditionally from `init/1`'s own
+  `{:continue, :connect}`, regardless of whether any symbol has ever been subscribed —
+  confirmed by starting its real tree under the local Core path dependency below and
+  reading the request that goes out. The only way to prevent that dial without opening a
+  real socket is to inject an already-open stand-in through an option each venue happens
+  to expose for its own tests (`:socket` here, differently named or absent on
+  `dp_exchange_robinhood`, which has no socket concept at all) — which is exactly what
+  this suite's own rule forbids: no assertion may name a socket, a channel string, a
+  transport module or a polling interval. There is also no reliable, venue-agnostic way
+  to *locate* "the feed" once a tree is running — `DpExchange.Core.FeedBehaviour` exists
+  for exactly that and has zero adopters across the five.
+
+  `DpExchange.Core.LinkSafetyCheck` instead reads each candidate module's own compiled
+  abstract code — the same `:beam_lib` technique `Core.UnwiredCheck` already uses for
+  assertion 16 — for two facts, module-wide rather than per-callback (the five real
+  fixes disagree on which callback creates the link and which calls
+  `Process.flag(:trap_exit, true)`, so the invariant is checked against the module as a
+  whole): a link-creating call (`start_link` on any target, `Process.link/1`, or
+  `spawn_link`, any arity) and the trap_exit guard. Neither is ever a process; nothing
+  here starts, so nothing here can dial out, for any venue present or future.
+  `start_link/1`, `start_link/2`, `child_spec/1` and `child_spec/2` are excluded as the
+  *source* of a link — the same two names assertion 16 already excludes, and for the
+  same reason: found running this check against the real, compiled
+  `dp_exchange_coinbase`, `Socket.start_link/1` (`use WebSockex`) delegates to
+  `WebSockex.start_link/4` to bootstrap itself, a call literally named `start_link` on
+  every process-behaviour module in the family, always — that link belongs to whoever
+  calls `Socket.start_link/1`, not to `Socket`.
+
+  Proven against a reconstructed pre-fix shape in `test/dp_exchange/core/
+  link_safety_check_test.exs` (a `GenServer` linking a socket from `handle_call/3` with
+  no `trap_exit`, fails; the same shape with `Process.flag(:trap_exit, true)` added,
+  passes) — no venue repo was touched to prove this. **Verified against all five real
+  venues**, each pointed at this Core checkout with a temporary `path:` dependency, `mix
+  test` run, then reverted before anything was committed: all five pass today —
+  `dp_exchange_coinbase` (668 tests), `dp_exchange_gemini` (771 tests),
+  `dp_exchange_webull` (725 tests), `dp_exchange_schwab` (484 tests — the one venue
+  whose real tree is not network-free, and the reason this assertion is static: it
+  passed without ever starting a process, so nothing in it could have dialed out),
+  `dp_exchange_robinhood` (228 tests) — all 0 failures, because all five already carry
+  today's fix.
+
+  **Assertion count is now eighteen.** `usage-rules/testing.md`,
+  `usage-rules/adapter.md` (a dedicated section next to assertion 17's) and
+  `docs/guides/building-an-exchange-package.md` updated.
+
+  **Affects all five venue packages on their next Core bump**, and every future one.
+  Inert today for all five — each already carries its own independent fix — so this
+  assertion exists to stop a *sixth* venue (or a regression in one of the five)
+  reintroducing the exact shape found on 2026-09-07, not to fail anything that ships
+  today.
+
 - **`AdapterContract` gains assertion 17, "credential gate" — on a venue declaring
   `credential_benefit: :required`, no active credentialed endpoint's `fake:` may answer
   `{:ok, _}` when called with credentials stripped.** Found independently in two venue
