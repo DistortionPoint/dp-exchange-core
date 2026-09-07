@@ -249,9 +249,14 @@ data.
 
 ## `streamable` is not `authenticated_streamable`
 
-Two lists, and the second must be a **superset** of the first — `Capabilities.new/1` enforces
-it, because a kind that streams anonymously and not with a credential is not a thing a venue
-does.
+Two lists, and the second must be a **subset** of the first — `Capabilities.new/1` enforces
+exactly that (`authenticated_streamable -- streamable == []`). `authenticated_streamable`
+names **which of the streamable kinds need a credential**, not extra kinds a credential
+unlocks. Requiring credentials for a kind the venue cannot stream at all is a declaration
+that can never be true, and a consumer would go looking for a credential that buys nothing.
+
+*(This paragraph said "superset" until 2026-09-07, which is the opposite of what the code
+has always enforced. Found by a cross-package audit; the rule itself never changed.)*
 
 Schwab's are identical, and that is itself information: **there is no public market data
 there and no anonymous socket.** Its Streamer login is built from the OAuth session, so every
