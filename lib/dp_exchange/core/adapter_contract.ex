@@ -764,8 +764,20 @@ defmodule DpExchange.Core.AdapterContract do
           a = spawn_probe.(:refusing)
           b = spawn_probe.(:succeeding)
 
-          assert_receive :ready
-          assert_receive :ready
+          # Explicit, generous timeout rather than ExUnit's 100ms default. This assertion
+          # proves two concurrent processes hold *different* values for one seam — it is
+          # not measuring how fast a spawn is, so waiting longer weakens nothing: it still
+          # fails if a `:ready` never arrives at all. On the default budget, two `Task`
+          # spawns plus scheduling can exceed 100ms under a full suite's parallel load, and
+          # this one did — observed failing once on seed 3 in `dp_exchange_schwab` and
+          # passing on an immediate re-run of the same seed.
+          #
+          # This macro is compiled into all five venue packages' own suites, so a flake here
+          # is a flake in every one of them, in a shared assertion whose whole purpose is to
+          # be trusted. A conformance check that fails at random is one people learn to
+          # re-run rather than read.
+          assert_receive :ready, 2_000
+          assert_receive :ready, 2_000
           send(a.pid, :go)
           send(b.pid, :go)
 
