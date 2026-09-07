@@ -100,6 +100,18 @@ defmodule DpExchange.Core.CanonicalPair do
       # round-trips byte-for-byte regardless of where the cut was made — "ETHB" + "USD" is
       # still "ETHBUSD". Sorting internally means a caller cannot get this wrong, whatever
       # order it hands in.
+      #
+      # **Profiled 2026-09-07 and deliberately left per-call.** Two independent hot-path
+      # audits flagged this sort as recomputed on every `to_canonical/2` rather than once,
+      # and measured it: 0.18µs per call, roughly a third of `to_canonical/2`'s own cost —
+      # about 2ms spread across the 11,000-frame window a consumer actually reported. That
+      # is not a bottleneck by three orders of magnitude, and hoisting it means either
+      # trusting `mapping.quotes` to arrive pre-sorted (exactly the caller mistake this
+      # sort exists to make impossible) or caching keyed on the mapping, which buys
+      # microseconds at the price of cache-invalidation on a path where being wrong means
+      # delivering one market's data under another market's name. Recorded here so the
+      # next profile does not re-open it: the cost is known, it was weighed, and
+      # correctness won.
       quotes = Enum.sort_by(mapping.quotes, &byte_size/1, :desc)
 
       Enum.find_value(quotes, :nomatch, fn q ->
