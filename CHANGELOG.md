@@ -23,6 +23,109 @@ an acceptable changelog line.
 
 ### Added
 
+- **`AdapterContract` gains assertion 19, "credential redaction" — a struct defined in a
+  package's own `lib/` holding a secret-named field must redact it under `inspect/1`.**
+  Found live in four of five venue packages on 2026-09-07: `Feed`/`Socket` held
+  `:credentials` as a bare map for their entire lifetime, and OTP's default crash report
+  prints a process's state in full on termination — a plain map prints every key it
+  holds, secrets included. Proven by crashing an equivalent process holding
+  `%{api_key: "...", api_secret: "..."}` as a bare state field and reading the log back.
+  A second leak was found the same way: a `FunctionClauseError`'s stacktrace prints the
+  actual arguments a failed clause was called with, so a bad call handing the same raw
+  map to a function whose every clause failed to match printed it too.
+  `Process.flag(:sensitive, true)` was tried and ruled out — it changes what
+  `:sys.get_state/1`/`:dbg` can see, not how a crash report or a stacktrace is formatted.
+  Fixed identically in four repos, by wrapping the credential in a struct whose `Inspect`
+  is derived with `except:` naming every secret field, at the point it enters a
+  long-lived process: `dp_exchange_coinbase` `4d00669` (`api_key`, `api_secret`),
+  `dp_exchange_webull` `80eaf02` (`app_key`, `app_secret`, `access_token`),
+  `dp_exchange_schwab` `336cbd8` (`access_token`, `refresh_token`, `client_id`,
+  `client_secret`), `dp_exchange_robinhood` `cfc4861` (`api_key`, `private_key`).
+  `dp_exchange_gemini` needed no fix — it signs and discards inside stateless pipelines
+  and holds no credential in process state at all.
+
+  **Verified behaviourally, not by looking for `@derive` in a venue's source.**
+  `DpExchange.Core.CredentialRedactionCheck` instantiates a real copy of every struct a
+  package's `lib/` defines (`struct/2`, never `struct!/2`, so `@enforce_keys` on an
+  unrelated field never blocks construction) with a distinctive value in each
+  secret-named field, and searches the actual rendered `inspect/1` output for it. A
+  hand-written `defimpl Inspect, for: YourStruct` that never mentions `@derive` at all
+  passes exactly as validly as the derived form every real fix used, because this checks
+  what a struct prints, never how it was made to print that way. Every module under test
+  is already loaded by construction — this only ever runs from inside the same
+  `mix test` invocation that compiled the package being checked, so nothing here starts a
+  fresh process or touches a network.
+
+  **The secret-name list has fifteen entries**: `api_key`, `api_secret`, `app_key`,
+  `app_secret`, `secret`, `password`, `passphrase`, `token`, `access_token`,
+  `refresh_token`, `client_secret`, `private_key`, `signature`, `authorization`,
+  `bearer` — matched against a struct field's own name exactly, never a substring, so
+  `token_type` is not caught by `token`. Twelve are `DpExchange.Core.Notice`'s own
+  `@credential_keys`, reused rather than reinvented — the same question ("is this name,
+  alone, secret-shaped") already answered there for a different purpose. Three extend it
+  because a real, shipped `Credentials` struct in this family has a field by that name
+  and `Notice`'s list did not cover it: `app_key`/`app_secret`
+  (`dp_exchange_webull`) and `client_secret` (`dp_exchange_schwab`). **`client_id` is
+  deliberately excluded** even though Schwab's own struct redacts it too — an OAuth
+  `client_id` is a public identifier by the convention the spec itself follows, and
+  treating it as inherently secret would be exactly the "too broad" failure mode that
+  gets a check disabled. Verified against every `defstruct` in all five venues' actual
+  `lib/` before the list was finalised: none collides with any of the twelve
+  `Notice`-derived names.
+
+  **Be honest about what this does not catch: the original defect was a raw map, never a
+  struct, and this check would not have caught it as it actually shipped.**
+  `Feed`/`Socket`, pre-fix, held `Keyword.get(opts, :credentials)` directly in state — an
+  opaque value never constructed as a literal anywhere in either module's own compiled
+  code. A struct-field check locks the fix in; it cannot reach back to the shape of the
+  bug before the fix existed. Two static, map-shaped versions of a broader check were
+  considered and rejected as the enforceable maximum instead: (1) "a process-behaviour
+  module's compiled code contains a map literal with a secret-named key" does not reach
+  the real pre-fix defect at all (the offending modules never constructed the map as a
+  literal) and fires constantly on completely correct code — every venue's `Auth` module
+  builds a transient map or keyword list with a secret-named key to hand to an HTTP
+  client or a signer, never storing it; (2) "reads `:credentials` from start options and
+  stores it without first passing it through a wrapping call" is closer to the real
+  shape but only detectable by assuming every future fix uses a sibling module
+  conventionally named `*.Credentials` with a `wrap/1` function — encoding an
+  implementation convention into a Core assertion the same way `AdapterContract`'s own
+  "no assertion may name a socket, a channel string, a transport module or a polling
+  interval" already forbids in the transport direction. Both fail the test this family
+  already applies to a candidate assertion — would it survive contact with real, correct
+  code across all five venues without being disabled — so the struct-field check is
+  documented as the narrower thing that is enforceable, not manufactured as broader
+  coverage this contract does not actually have.
+
+  Proven against a reconstructed pre-fix shape in `test/dp_exchange/core/
+  credential_redaction_check_test.exs` (a struct with no `Inspect` override at all,
+  fails; the same struct with `@derive {Inspect, except: [...]}` added, passes; a
+  hand-written `defimpl Inspect` that redacts, passes; one that does not, still fails; a
+  plain map holding the same secret-named key, never flagged, proving the documented
+  limitation directly rather than only in prose) — no venue repo was touched to prove
+  this. **Verified against all five real venues**, each pointed at this Core checkout
+  with a temporary `path:` dependency, `mix test` run, then reverted before anything was
+  committed: all five pass today — `dp_exchange_coinbase` (676 tests),
+  `dp_exchange_webull` (735 tests), `dp_exchange_schwab` (495 tests),
+  `dp_exchange_robinhood` (236 tests), `dp_exchange_gemini` (772 tests) — all 0 failures,
+  because all five already carry today's fix (or, for Gemini, never needed one).
+
+  This package's own `mix.exs` gains `consolidate_protocols: Mix.env() != :test`: the new
+  check's own test fixtures compile a struct's `Inspect` implementation at test runtime
+  via `Code.compile_string/2`, after `mix test`'s default protocol consolidation has
+  already baked a dispatch table that does not know that implementation exists yet — a
+  real venue package never hits this, since its `Credentials` module compiles as part of
+  the ordinary `mix compile` pass, before consolidation runs.
+
+  **Assertion count is now nineteen.** `usage-rules/testing.md`, `usage-rules/adapter.md`
+  (a dedicated section next to assertion 18's) and
+  `docs/guides/building-an-exchange-package.md` updated.
+
+  **Affects all five venue packages on their next Core bump**, and every future one.
+  Inert today for all five — four already carry their own independent fix, and Gemini
+  never needed one — so this assertion exists to stop a *sixth* venue (or a regression in
+  one of the five) reintroducing the exact shape found on 2026-09-07, not to fail
+  anything that ships today.
+
 - **`AdapterContract` gains assertion 18, "link safety" — a process behaviour
   (`GenServer`, `:gen_statem`, `GenStateMachine`, `WebSockex`) that links a child it
   starts must also call `Process.flag(:trap_exit, true)`.** Found live in four of five

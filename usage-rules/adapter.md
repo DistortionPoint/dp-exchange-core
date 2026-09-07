@@ -403,6 +403,65 @@ If this fails, add `Process.flag(:trap_exit, true)` as the first thing your proc
 `init/1` does, and a `handle_info({:EXIT, pid, reason}, state)` clause that isolates the
 crash to whatever it actually broke.
 
+## Assertion 19 — a struct holding a secret must redact it under `inspect/1`
+
+Found live in four of five venue packages on 2026-09-07: `Feed`/`Socket` held
+`:credentials` as a bare map for their whole lifetime, and OTP's default crash report
+prints a process's state in full on termination — a plain map prints every key it holds,
+secrets included. Proven by crashing an equivalent process holding `%{api_key: "...",
+api_secret: "..."}` as a bare state field and reading the log back. A second leak was
+found the same way: a `FunctionClauseError`'s stacktrace prints the actual arguments a
+failed clause was called with, so a bad call handed the same raw map to a function whose
+every clause failed to match printed it too. `Process.flag(:sensitive, true)` does not
+help — it changes what `:sys.get_state/1` and `:dbg` can see, not how a crash report or a
+stacktrace is formatted.
+
+If your package holds a credential anywhere for longer than one function call, wrap it in
+a dedicated struct — `%YourVenue.Credentials{}` — the moment it enters that long-lived
+process, and derive `Inspect` with `except:` naming every secret field:
+
+```elixir
+defmodule DpExchange.YourVenue.Credentials do
+  @derive {Inspect, except: [:api_key, :api_secret]}
+  defstruct [:api_key, :api_secret]
+end
+```
+
+Four venues shipped exactly this fix independently: `dp_exchange_coinbase` `4d00669`,
+`dp_exchange_webull` `80eaf02`, `dp_exchange_schwab` `336cbd8`, `dp_exchange_robinhood`
+`cfc4861`. `dp_exchange_gemini` needed none — it signs and discards inside stateless
+pipelines and never holds a credential in process state.
+
+Assertion 19 checks this **behaviourally**, not by looking for `@derive` in your source.
+For every struct your `lib/` defines, if any field is named one of fifteen known secret
+names (`api_key`, `api_secret`, `app_key`, `app_secret`, `secret`, `password`,
+`passphrase`, `token`, `access_token`, `refresh_token`, `client_secret`, `private_key`,
+`signature`, `authorization`, `bearer` — see `DpExchange.Core.CredentialRedactionCheck`'s
+moduledoc for why each name is on the list, and why `client_id` deliberately is not), it
+builds a real instance of your struct with a distinctive value in that field and searches
+the actual `inspect/1` output for it. A hand-written `defimpl Inspect, for: YourStruct`
+that never mentions `@derive` at all passes exactly as validly as the derived form above —
+this checks what your struct prints, never how you made it print that way.
+
+**Read this as a floor, not a ceiling.** A struct field named something this list does not
+cover but that genuinely carries a secret — your own venue may have a field this family
+has not seen yet — should still be wrapped and redacted; assertion 19 not flagging it is
+not permission to leave it in cleartext, only a statement of what this particular check
+happens to look for today.
+
+**Be honest about what this does not catch.** The original defect was a **raw map**, not a
+struct — `Feed`/`Socket`, pre-fix, held `Keyword.get(opts, :credentials)` directly in
+state, an opaque value never constructed as a literal anywhere in either module's own
+compiled code. This assertion locks the struct-based fix in; it cannot and does not reach
+back to catch the shape of the bug before that fix existed. **If your package holds a
+credential as a bare map or keyword list anywhere longer-lived than one function call,
+that is a defect this assertion will not find for you.** Wrap it in a struct regardless of
+whether assertion 19 currently has an opinion about your field names.
+
+If this fails, add `@derive {Inspect, except: [...]}` (or an equivalent hand-written
+`defimpl Inspect`) naming every secret field your struct holds, following the four
+commits above as the reference for the mechanism.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,

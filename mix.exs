@@ -17,6 +17,16 @@ defmodule DpExchangeCore.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      # `false` in :test only. `DpExchange.Core.CredentialRedactionCheck`'s own test
+      # fixtures compile a struct's `Inspect` implementation (derived or hand-written)
+      # at TEST RUNTIME via `Code.compile_string/2`, after `mix test`'s own protocol
+      # consolidation has already baked a dispatch table that does not know that
+      # implementation exists yet — consolidated, the new impl module is real and loaded
+      # but never reached, and `inspect/1` silently falls back to printing every field.
+      # A real venue package never hits this: its `Credentials` module compiles as part
+      # of the ordinary `mix compile` pass, before consolidation runs, so consolidation
+      # staying on in :dev and :prod costs that package nothing.
+      consolidate_protocols: Mix.env() != :test,
       deps: deps(),
       aliases: aliases(),
       dialyzer: dialyzer(),

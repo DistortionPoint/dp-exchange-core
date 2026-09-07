@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Eighteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Nineteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -88,7 +88,11 @@ defmodule DpExchange.Core.AdapterContract do
       {18,
        "link safety — a process behaviour that starts a linked child traps exits, so " <>
          "that child's abnormal death cannot propagate untrapped into the process " <>
-         "that started it"}
+         "that started it"},
+      {19,
+       "credential redaction — a struct holding a secret-named field redacts it under " <>
+         "inspect/1, so a crash report or a failed function clause's stacktrace never " <>
+         "prints it in cleartext"}
     ]
   end
 
@@ -108,6 +112,7 @@ defmodule DpExchange.Core.AdapterContract do
       wiring(),
       link_safety(),
       credential_gate(),
+      credential_redaction(),
       helpers(),
       arg_helpers(),
       credential_gate_helpers(),
@@ -925,6 +930,54 @@ defmodule DpExchange.Core.AdapterContract do
                        "consumer code that forgot to supply them"
             end
           end
+        end
+      end
+    end
+  end
+
+  defp credential_redaction do
+    quote location: :keep do
+      # --- 19. credential redaction ------------------------------------------
+
+      describe "19. credential redaction" do
+        test "a struct with a secret-named field redacts it under inspect/1" do
+          # Found live in four of five venue packages on 2026-09-07: `Feed`/`Socket` held
+          # `:credentials` as a bare map for their whole lifetime, and OTP's default crash
+          # report prints a process's state in full on termination — a plain map prints
+          # every key it holds, secrets included. Proven by crashing an equivalent process
+          # holding `%{api_key: "...", api_secret: "..."}` as a bare state field and
+          # reading the log back; a second path found the same way, a
+          # `FunctionClauseError`'s stacktrace prints the actual arguments a failed clause
+          # was called with. `Process.flag(:sensitive, true)` does not help — it changes
+          # what `:sys.get_state/1`/`:dbg` can see, not crash-report or stacktrace
+          # formatting. Fixed identically in four repos by wrapping the credential in a
+          # struct whose `Inspect` is derived with `except:` naming every secret field:
+          # `dp_exchange_coinbase` 4d00669, `dp_exchange_webull` 80eaf02,
+          # `dp_exchange_schwab` 336cbd8, `dp_exchange_robinhood` cfc4861.
+          #
+          # `DpExchange.Core.CredentialRedactionCheck` verifies this BEHAVIOURALLY —
+          # `struct/2` a real instance of every struct your `lib/` defines with a
+          # distinctive value in each secret-named field, and search the actual
+          # `inspect/1` rendering for it — never by looking for `@derive` in your source.
+          # A hand-written `defimpl Inspect` that never mentions `@derive` at all passes
+          # exactly as validly. See its moduledoc for the full secret-name list, why each
+          # name is on it, and — the part that matters most — what this does NOT catch:
+          # the original defect was a raw map, never a struct, and this check would not
+          # have caught it as it actually shipped. It locks the fix in; it cannot reach
+          # back to the shape of the bug before the fix existed.
+          config = Mix.Project.config()
+          app = config[:app]
+          lib_root = Path.expand(@package_root)
+          beam_dir = Mix.Project.build_path() |> Path.join("lib/#{app}/ebin")
+
+          assert {:ok, violations} =
+                   DpExchange.Core.CredentialRedactionCheck.run(beam_dir, lib_root)
+
+          assert violations == [],
+                 "struct(s) with a secret-named field that prints in cleartext under " <>
+                   "inspect/1 — a crash report or a failed function clause's stacktrace " <>
+                   "would print it too:\n" <>
+                   DpExchange.Core.CredentialRedactionCheck.format(violations)
         end
       end
     end
