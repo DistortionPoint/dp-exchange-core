@@ -910,6 +910,22 @@ defmodule DpExchange.Core.AdapterContract do
           # invariant about venues this suite has not reviewed and must not assume. A
           # conformance assertion that can make a live network call under some future
           # venue's implementation is a worse failure mode than the gap it would close.
+          #
+          # What this cannot see: `credential_gated?/1` only knows `@credentialed`, a
+          # fixed list of eleven names written when the contract had a small, stable
+          # credentialed surface. A callback outside that list — one that takes no
+          # dedicated `credentials` argument and instead reads a credential out of
+          # `opts`, which is how every one of `get_option_chain/2`, `list_watchlists/1`,
+          # `get_financials/3`, `get_news/1` and `get_screener/2` do it — is invisible to
+          # this loop no matter how it answers with no credential. Found independently in
+          # `dp_exchange_webull` and `dp_exchange_schwab` on 2026-09-07, both auditing
+          # their own widened surface by hand because this assertion could not: each
+          # fake had the identical defect (`{:ok, _}` with credentials stripped) on
+          # exactly the callbacks this list does not name, and each said the durable fix
+          # belongs here. It has not been built — `@credentialed` still names the same
+          # eleven — because closing it needs a way to know, per callback, whether a
+          # credential belongs in `opts` at all, which the contract does not declare
+          # anywhere today. Recorded in `docs/design/ideas/`.
           caps = @venue.capabilities()
 
           if caps.credential_benefit == :required do
