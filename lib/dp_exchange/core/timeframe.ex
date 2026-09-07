@@ -35,14 +35,27 @@ defmodule DpExchange.Core.Timeframe do
   entry in `@seconds`, so `aligned?/2` and `boundary/2` can answer for it.
 
   `nameable/0` is wider. It is the set of widths Core can **read as a label**,
-  and it adds `1w` and `1M`.
+  and it adds `1w`, `1M` and `1y`.
 
-  A `1w` bar's boundary depends on which weekday the venue starts its week, and
-  `1M` is not a fixed number of seconds at all. Neither will ever get a boundary
-  rule, because encoding a guess would reject real data — so `seconds/1` returns
-  `:error` for both, `aligned?/2` returns `true`, and `boundary/2` passes them
-  through untouched. Callers read "no boundary rule" as "cannot check", never as
-  "invalid".
+  A `1w` bar's boundary depends on which weekday the venue starts its week, `1M`
+  is not a fixed number of seconds at all, and neither is `1y` — a calendar
+  year is 365 or 366 days depending which one, and encoding either as a fixed
+  second count would silently mis-bucket the other. None of the three will ever
+  get a boundary rule, because encoding a guess would reject real data — so
+  `seconds/1` returns `:error` for all three, `aligned?/2` returns `true`, and
+  `boundary/2` passes them through untouched. Callers read "no boundary rule" as
+  "cannot check", never as "invalid".
+
+  **`1y` joined `1w` and `1M` on 2026-09-06, found downstream rather than
+  designed ahead of use.** `dp_exchange_webull`'s stock, option and futures bars
+  endpoint genuinely serves a yearly bar alongside the weekly and monthly ones —
+  `Rest.get_stock_bars/5`, tested against the venue's own `timespan` enum — and
+  until this widened, `Capabilities.new/1` raised on `1y` the same way it used
+  to raise on `1w` and `1M` before those were added: the exact under-declaration
+  this module's own history already records twice. Webull carried
+  `@core_unnameable_widths ~w(1y)`, subtracted from its declaration with a
+  comment naming this exact gap, because the alternative was declaring a width
+  it does not serve or omitting one it does. That workaround is now removable.
 
   **The distinction is load-bearing, and Core got it wrong twice before it was
   drawn.** `Capabilities.validate_history!/1` and the conformance suite both
@@ -87,17 +100,20 @@ defmodule DpExchange.Core.Timeframe do
   def known, do: @seconds |> Map.keys() |> Enum.sort_by(&Map.fetch!(@seconds, &1))
 
   # Widths Core can *name* but cannot *bucket*. A weekly bar's boundary depends on which
-  # weekday the venue starts its week, and a month is not a fixed number of seconds — so
-  # neither has an entry in `@seconds`, and neither ever will.
+  # weekday the venue starts its week, a month is not a fixed number of seconds, and
+  # neither is a year (365 or 366 days, depending which one) — so none of the three has
+  # an entry in `@seconds`, and none ever will.
   #
-  # They still need to be nameable. Schwab's `/pricehistory` serves both, and a venue that
-  # genuinely serves a weekly candle has only two options if the vocabulary refuses the
-  # label: omit a real width from its declaration, or not ship. Both are worse than
-  # carrying a width we can read but not align.
-  @unbucketable ~w(1w 1M)
+  # They still need to be nameable. Schwab's `/pricehistory` serves the first two, and
+  # `dp_exchange_webull`'s stock/option/futures bars serve all three (`1y` added
+  # 2026-09-06, found downstream — see the moduledoc); a venue that genuinely serves one
+  # of these has only two options if the vocabulary refuses the label: omit a real width
+  # from its declaration, or not ship. Both are worse than carrying a width we can read
+  # but not align.
+  @unbucketable ~w(1w 1M 1y)
 
   @doc """
-  Every timeframe Core can read as a label, shortest first, including the two it cannot
+  Every timeframe Core can read as a label, shortest first, including the three it cannot
   bucket.
 
   This is deliberately wider than `known/0`, and the difference is the point. `known/0`

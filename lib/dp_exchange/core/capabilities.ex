@@ -587,8 +587,8 @@ defmodule DpExchange.Core.Capabilities do
         raise ArgumentError,
               "historical_timeframes #{inspect(unknown)} are outside the timeframe vocabulary — " <>
                 "a width Core cannot name would be stored under a label nothing can read back. " <>
-                "Note this checks nameability, not bucketing: 1w and 1M are nameable and " <>
-                "deliberately have no boundary rule"
+                "Note this checks nameability, not bucketing: 1w, 1M and 1y are nameable " <>
+                "and deliberately have no boundary rule"
     end
   end
 

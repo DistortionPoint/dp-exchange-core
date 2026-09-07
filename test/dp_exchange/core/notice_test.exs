@@ -188,6 +188,45 @@ defmodule DpExchange.Core.NoticeTest do
     test "a caller with better information overrides the default" do
       assert Notice.new(:catalog_change, :v, severity: :error).severity == :error
     end
+
+    test "an unknown severity raises rather than building a struct that violates its " <>
+           "own typespec" do
+      # `severity` is as closed a vocabulary as `kind` but, before this fix, had no
+      # runtime check at all — a typo here silently built a `%Notice{}` whose `severity`
+      # was outside `:info | :warning | :error`, with nothing catching it.
+      assert_raise ArgumentError, ~r/unknown notice severity :critical/, fn ->
+        Notice.new(:link_down, :v, severity: :critical)
+      end
+    end
+  end
+
+  describe "the nil-vs-absent Keyword.get trap, fixed for :severity, :at and :details" do
+    # The same trap this family has paid for repeatedly elsewhere (`Config.opt/3`,
+    # `PollingFeed`, `HttpClient`): a venue forwarding its own `opts` unchanged hands this
+    # constructor a PRESENT key with an explicit `nil` whenever nothing upstream set it,
+    # and `Keyword.get/3` only substitutes a default for an ABSENT key.
+
+    test "an explicit nil severity falls back to the kind's default instead of building " <>
+           "an invalid struct" do
+      notice = Notice.new(:credentials_rejected, :v, severity: nil)
+      assert notice.severity == :error
+    end
+
+    test "an explicit nil at falls back to now instead of a nil timestamp" do
+      before = DateTime.utc_now()
+      notice = Notice.new(:link_up, :v, at: nil)
+
+      assert %DateTime{} = notice.at
+      assert DateTime.compare(notice.at, before) in [:eq, :gt]
+    end
+
+    test "an explicit nil details falls back to an empty map instead of raising" do
+      # Before this fix: `reject_credentials!/1` raised "must be a map, got nil" for
+      # what is, from a forwarding caller's side, simply an unset optional field — not a
+      # caller mistake worth failing on.
+      notice = Notice.new(:link_up, :v, details: nil)
+      assert notice.details == %{}
+    end
   end
 
   describe "catalog_change carries whether it was observed or announced" do

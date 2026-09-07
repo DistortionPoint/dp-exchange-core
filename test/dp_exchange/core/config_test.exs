@@ -203,7 +203,7 @@ defmodule DpExchange.Core.ConfigTest do
       assert resolved == :fallback
     end
 
-    test "resolve_snapshot/3 carries the caller's value across that boundary" do
+    test "resolve_snapshot/4 carries the caller's value across that boundary" do
       {:ok, server} = Agent.start_link(fn -> :ok end)
       Config.put_override(:carried, :caller_value)
 
@@ -211,7 +211,7 @@ defmodule DpExchange.Core.ConfigTest do
 
       resolved =
         Agent.get(server, fn _state ->
-          Config.resolve_snapshot(snapshot, :carried, :fallback)
+          Config.resolve_snapshot(snapshot, :dp_exchange_core, :carried, :fallback)
         end)
 
       assert resolved == :caller_value
@@ -221,7 +221,29 @@ defmodule DpExchange.Core.ConfigTest do
       # A long-lived server's dictionary is not scoped to any one caller, so honouring
       # it would leak one caller's configuration into another's request.
       Config.put_override(:server_local, :should_not_be_used)
-      assert Config.resolve_snapshot(%{}, :server_local, :fallback) == :fallback
+
+      assert Config.resolve_snapshot(%{}, :dp_exchange_core, :server_local, :fallback) ==
+               :fallback
+    end
+
+    test "an empty snapshot falls back to the APP THE CALLER NAMED, not a hardcoded one (C7)" do
+      # Before this fix, `resolve_snapshot/3` hardcoded `:dp_exchange_core` regardless of
+      # what app a caller intended — despite its own moduledoc claiming it falls back to
+      # application env "exactly as get/3 does", which takes `app` as an argument. A venue
+      # package snapshotting one of ITS OWN seams and resolving it inside its own
+      # GenServer would have consulted Core's application env instead of its own, never
+      # finding a value its consumer configured no matter how it was set.
+      Application.put_env(:dp_exchange_core_test_fixture_app, :own_seam, :configured_value)
+
+      on_exit(fn ->
+        Application.delete_env(:dp_exchange_core_test_fixture_app, :own_seam)
+      end)
+
+      assert Config.resolve_snapshot(%{}, :dp_exchange_core_test_fixture_app, :own_seam, nil) ==
+               :configured_value
+
+      # And it must NOT fall back to :dp_exchange_core's env for the same key.
+      assert Config.resolve_snapshot(%{}, :dp_exchange_core, :own_seam, :fallback) == :fallback
     end
   end
 end

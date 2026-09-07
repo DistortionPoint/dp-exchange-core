@@ -1,7 +1,31 @@
 defmodule DpExchange.Core.Types.StakingTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.Types.{StakingRate, StakingTransaction}
+  alias DpExchange.Core.Types.{StakingBalance, StakingRate, StakingTransaction}
+
+  describe "StakingBalance.by_provider defaults to %{}, never nil (C7)" do
+    # The typespec is a map, not `map() | nil` — "empty means no breakdown" (the
+    # moduledoc's own words) is only true if `new/1` can actually reach an empty map.
+    # Before this fix, an omitted `:by_provider` defaulted to `nil` via a bare defstruct
+    # entry, and an explicit `by_provider: nil` (a decode bug from a venue field that came
+    # back JSON `null`) reached the struct unchanged either way.
+    @balance_attrs [asset: "ETH", staked: Decimal.new("10"), provider: :v]
+
+    test "omitted defaults to an empty map" do
+      assert StakingBalance.new(@balance_attrs).by_provider == %{}
+    end
+
+    test "an explicit nil normalises to an empty map rather than leaking through" do
+      assert StakingBalance.new(@balance_attrs ++ [by_provider: nil]).by_provider == %{}
+    end
+
+    test "a real breakdown is kept" do
+      breakdown = %{"provider_a" => Decimal.new("6"), "provider_b" => Decimal.new("4")}
+
+      assert StakingBalance.new(@balance_attrs ++ [by_provider: breakdown]).by_provider ==
+               breakdown
+    end
+  end
 
   describe "StakingRate.bps_to_pct/1" do
     # Lives in Core rather than in each venue package because it is the conversion most

@@ -445,20 +445,23 @@ defmodule DpExchange.Core.CapabilitiesTest do
       end
     end
 
-    test "1w and 1M are accepted — nameable is wider than bucketable, deliberately" do
-      # Core models no boundary for either, and never will: a weekly bar's start depends
-      # on the venue's week, and a month is not a fixed number of seconds. That is a
-      # reason not to check their alignment, not a reason to refuse a venue that serves
-      # them. Schwab's /pricehistory serves both, and before this the only ways to ship
-      # were to omit a real width or to not ship.
+    test "1w, 1M and 1y are accepted — nameable is wider than bucketable, deliberately" do
+      # Core models no boundary for any of the three, and never will: a weekly bar's
+      # start depends on the venue's week, a month is not a fixed number of seconds, and
+      # neither is a year. That is a reason not to check their alignment, not a reason to
+      # refuse a venue that serves them. Schwab's /pricehistory serves the first two;
+      # `dp_exchange_webull`'s stock/option/futures bars serve all three (`1y` added
+      # 2026-09-06). Before each was added, the only ways to ship were to omit a real
+      # width or to not ship.
       declaration =
         caps(
           endpoints: %{{:get_historical_prices, 4} => :experimental},
-          historical_timeframes: ~w(1d 1w 1M)
+          historical_timeframes: ~w(1d 1w 1M 1y)
         )
 
-      assert declaration.historical_timeframes == ~w(1d 1w 1M)
+      assert declaration.historical_timeframes == ~w(1d 1w 1M 1y)
       assert Timeframe.seconds("1w") == :error
+      assert Timeframe.seconds("1y") == :error
     end
 
     test "a venue whose history endpoint is unsupported need not name widths" do

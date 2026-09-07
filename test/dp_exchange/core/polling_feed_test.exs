@@ -68,6 +68,55 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert coverage["BTC-USD"] == :internal_poll
       refute Map.has_key?(coverage, "ETH-USD")
     end
+
+    test "a refused symbol is reported through on_refusal instead of crashing the feed" do
+      # Before this fix: `{:refused, _}` matched neither `{:ok, events}` nor
+      # `{:error, reason}` in `fetch_all_and_publish/1`'s case statement, so it raised
+      # `CaseClauseError` inside `handle_info` and took the whole feed down — exactly the
+      # gap `dp_exchange_robinhood`'s Feed moduledoc documented as the reason it stayed on
+      # per-symbol `:fetch` rather than adopt this venue's own repeatable-query bulk mode.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch_all: fn _symbols -> {:refused, [{"DOGE-USD", "not listed"}]} end,
+          symbols: ~w(DOGE-USD),
+          on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
+        )
+
+      assert_receive {:refused, "DOGE-USD", "not listed"}, 500
+      Process.sleep(50)
+      assert Process.alive?(pid)
+    end
+
+    test "a batch refusing every symbol still reports and does not crash" do
+      pid =
+        start_feed(
+          fetch_all: fn _symbols -> {:refused, [{"A-USD", :nope}, {"B-USD", :nope}]} end,
+          symbols: ~w(A-USD B-USD)
+        )
+
+      Process.sleep(50)
+      assert Process.alive?(pid)
+      assert PollingFeed.coverage(pid) == %{}
+    end
+
+    test "a successful call with zero events counts toward delivering nothing" do
+      # `{:ok, []}` succeeds at the transport layer but delivers nothing — a bad
+      # credential filtered to an empty result set server-side is indistinguishable, from
+      # this module's side, from a fetch that failed outright. Before this fix, an empty
+      # bulk response went through `record_success(state, false)`, a silent no-op that
+      # never reached `delivering_nothing?` — so a bulk venue stuck returning `{:ok, []}`
+      # every cycle would never trip the escalation this module's moduledoc promises.
+      pid = start_feed(fetch_all: fn _symbols -> {:ok, []} end, symbols: ~w(BTC-USD))
+
+      Process.sleep(120)
+      status = PollingFeed.status(pid)
+
+      refute status.delivering
+      assert status.failures_since_ok > 0
+      assert status.last_error == :empty_response
+    end
   end
 
   describe "per-symbol mode (:fetch)" do

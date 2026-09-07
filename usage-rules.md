@@ -126,11 +126,13 @@ one is a conversation with the venue, the other is not.
 ### Timeframes: nameable is wider than bucketable
 
 `Timeframe.known/0` is what Core can **bucket** — `aligned?/2` and `boundary/2` answer for
-those. `Timeframe.nameable/0` is what Core can **read as a label**, and adds `1w` and `1M`.
+those. `Timeframe.nameable/0` is what Core can **read as a label**, and adds `1w`, `1M`
+and `1y`.
 
-Weekly and monthly have no boundary rule and never will: a weekly bar's start depends on
-which weekday the venue begins its week, and a month is not a fixed number of seconds. So
-`seconds/1` returns `:error` for both and `aligned?/2` returns `true` — **"no rule" means
+Weekly, monthly and yearly have no boundary rule and never will: a weekly bar's start
+depends on which weekday the venue begins its week, a month is not a fixed number of
+seconds, and neither is a year (365 or 366 days, depending which one). So `seconds/1`
+returns `:error` for all three and `aligned?/2` returns `true` — **"no rule" means
 "cannot check", never "invalid"**. Validate a declaration against `nameable/0`; reach for
 `known/0` only when you need the width in seconds.
 

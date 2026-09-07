@@ -306,6 +306,22 @@ delivers your own package's notices to its subscribers. Until you do, this failu
 is invisible to your consumers exactly as it was before — the option existing is not the
 same as a venue using it.
 
+An `:ok` bulk response with zero events (`{:ok, []}`) counts as delivering nothing for
+this same escalation, even though the call itself succeeded — a bad credential filtered
+to an empty result set server-side looks identical to a failure from `PollingFeed`'s
+side, and is treated the same way rather than silently resetting nothing.
+
+## `:fetch_all` can refuse individual symbols without crashing the feed
+
+`t:PollingFeed.fetch_all/0`'s third outcome, `{:refused, refusals}` (`refusals ::
+[{symbol, reason}]`), is the batch analogue of `:fetch`'s own `{:refused, reason}`: name
+every symbol in this call the venue stated it does not carry, and each is reported once
+through `:on_refusal` rather than retried forever as an ordinary `{:error, reason}` would
+be. If your bulk endpoint's response format cannot yet tell you which symbol in a batch
+was bad — verify that live before assuming it can — return `{:error, reason}` for the
+whole cycle instead; that fails closed (retried, never silently dropped) rather than
+guessing which symbol to blame.
+
 ## Reconnection is the package's problem, and the notice is yours
 
 A dropped socket reconnects, resubscribes, and emits link notices along the way —

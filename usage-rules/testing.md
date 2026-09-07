@@ -12,7 +12,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Sixteen assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Seventeen assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 

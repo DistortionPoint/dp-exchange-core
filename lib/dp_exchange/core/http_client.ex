@@ -377,7 +377,27 @@ defmodule DpExchange.Core.HttpClient do
               wrap_exchange_error(opts, reason)
             else
               retry_delay = Config.opt(opts, :retry_delay, 1000)
-              backoff_delay = retry_delay * (4 - attempts_left)
+
+              # `4 - attempts_left` was a magic number hardcoding the DEFAULT
+              # `retry_attempts` (3) as `retry_attempts + 1`. It happened to stay
+              # positive only because every existing caller and every existing test used
+              # the default or something smaller. `retry_attempts` is a documented,
+              # caller-configurable option — `:retry_attempts` above — and a caller
+              # setting it to 4 or more starts `attempts_left` above `4`, so `4 -
+              # attempts_left` goes negative on the very first retry and
+              # `Process.sleep/1` raises `FunctionClauseError` in the CALLING process,
+              # uncaught, which this library does not supervise. Found 2026-09-06,
+              # the same failure shape this module's moduledoc already records for
+              # `retry_attempts: nil` (`4 - nil` via Erlang term ordering) — this is the
+              # same trap for a valid, in-range integer instead of a forwarded `nil`.
+              #
+              # Scaled by attempts actually made instead: always >= 1, whatever
+              # `retry_attempts` was configured to, and identical to the old formula's
+              # own numbers at the default of 3 (1, then 2), so no existing behaviour
+              # changes for the common case.
+              total_attempts = Config.opt(opts, :retry_attempts, 3)
+              attempts_made = total_attempts - attempts_left + 1
+              backoff_delay = retry_delay * attempts_made
               provider = Config.opt(opts, :provider, "unknown")
               short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
 

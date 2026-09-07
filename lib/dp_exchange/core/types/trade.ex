@@ -24,6 +24,19 @@ defmodule DpExchange.Core.Types.Trade do
   Defaults to `false`, and `get_trades/2` excludes broken trades unless asked. **`false`
   means the venue said not broken or said nothing** — a venue with no concept of busts
   reports `false` because nothing was busted, which is the same answer.
+
+  ## An explicit `broken: nil` is "said nothing", not a caller mistake
+
+  `:broken` is not in `@enforce_keys` — a caller omitting it gets the struct's own default,
+  `false`, exactly as documented above. But `@enforce_keys` guards presence, not `nil` (see
+  `DpExchange.Core.Types.Validate`), and a PRESENT `broken: nil` — the shape a JSON decode
+  produces from a venue field that came back `null` — bypassed the default entirely and
+  built `%Trade{broken: nil}`, a value outside its own `boolean()` typespec that only
+  happens to look safe because `nil` and `false` are both falsy in a bare `if`. A `case`
+  matching `true` and `false` with no third clause does not get that courtesy, and this is
+  exactly the field a phantom high or low rides in on. `new/1` normalises it to `false` —
+  "the venue said nothing" is what `nil` already means here, by this module's own stated
+  policy — rather than let it leak into a value nothing downstream expects.
   """
 
   alias DpExchange.Core.Types.Validate
@@ -45,10 +58,15 @@ defmodule DpExchange.Core.Types.Trade do
   @doc """
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
-  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`. Unlike
+  the enforced fields, an explicit `broken: nil` is not an error: it is normalised to
+  `false`, per this module's "`broken: nil` is 'said nothing'" section above.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    attrs = attrs |> Map.new() |> Map.update(:broken, false, &(&1 || false))
+    Validate.new!(__MODULE__, @enforce_keys, attrs)
+  end
 
   @doc """
   The trade's notional value — price times quantity.

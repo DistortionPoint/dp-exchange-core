@@ -102,7 +102,7 @@ defmodule DpExchange.Core.Notice do
   `:degraded` — the venue is answering, but from a slower path than usual.
   """
 
-  alias DpExchange.Core.Notice
+  alias DpExchange.Core.{Config, Notice}
 
   @typedoc """
   What the notice is about.
@@ -145,6 +145,8 @@ defmodule DpExchange.Core.Notice do
             credentials_expiring session_refresh_failed rate_limited coverage_change
             catalog_change refusal data_quality degraded)a
 
+  @severities ~w(info warning error)a
+
   @credential_keys ~w(api_key api_secret secret password passphrase token access_token
                       refresh_token private_key signature authorization bearer)a
 
@@ -170,9 +172,26 @@ defmodule DpExchange.Core.Notice do
   ## Raises
 
   On an unknown `kind`, because a typo would otherwise become a notice no consumer
-  matches on and no one ever sees. And on **any credential-shaped key in `details`**: these
-  packages are public, notices get pasted into issues, and a leak is not fixed by a later
-  release.
+  matches on and no one ever sees. On an unknown `severity` for the same reason — it is
+  "not a log level, a call to action," so a value outside `:info | :warning | :error` is
+  a caller mistake, not a value to pass through. And on **any credential-shaped key in
+  `details`**: these packages are public, notices get pasted into issues, and a leak is
+  not fixed by a later release.
+
+  ## `:severity`, `:at` and `:details` read through `DpExchange.Core.Config.opt/3`, not `Keyword.get/3`
+
+  The same trap this family has paid for repeatedly elsewhere (see `DpExchange.Core.Config.opt/3`'s own
+  moduledoc): a venue building `opts` from its own forwarded options, or from a value it
+  computed and got `nil` back from in an edge case, hands this constructor a PRESENT key
+  with a `nil` value rather than an absent one. `Keyword.get/3` only substitutes its
+  default for an absent key, so `severity: nil` used to build a `%Notice{severity: nil}`
+  that silently violated its own typespec and was never caught — `severity` was not
+  validated at all before this fix, unlike `kind`. `at: nil` used to build
+  `%Notice{at: nil}`, violating `@enforce_keys`' own non-nil promise the same way a
+  decode bug does for `Core.Types.*` (see `Core.Types.Validate`). `details: nil` used to
+  raise "must be a map, got nil" for what is, from a forwarding caller's side, simply an
+  unset optional field — the same shape `DpExchange.Core.Config.opt/3` exists to treat as absent
+  everywhere else in this family.
 
   ## Examples
 
@@ -185,6 +204,9 @@ defmodule DpExchange.Core.Notice do
 
       iex> DpExchange.Core.Notice.new(:link_down, :v, details: %{api_key: "sk-live-123"})
       ** (ArgumentError) notice details carry credential-shaped keys: [:api_key]. A notice names WHICH credential failed, never its value — these packages are public and notices get pasted into issues
+
+      iex> DpExchange.Core.Notice.new(:link_down, :v, severity: :critical)
+      ** (ArgumentError) unknown notice severity :critical — must be one of [:info, :warning, :error]
   """
   @spec new(kind(), atom() | String.t(), keyword()) :: t()
   def new(kind, provider, opts \\ []) do
@@ -192,14 +214,17 @@ defmodule DpExchange.Core.Notice do
       raise ArgumentError, "unknown notice kind #{inspect(kind)}"
     end
 
-    details = Keyword.get(opts, :details, %{})
+    details = Config.opt(opts, :details, %{})
     reject_credentials!(details)
+
+    severity = Config.opt(opts, :severity, default_severity(kind))
+    validate_severity!(severity)
 
     %Notice{
       kind: kind,
       provider: provider,
-      severity: Keyword.get(opts, :severity, default_severity(kind)),
-      at: Keyword.get(opts, :at, DateTime.utc_now()),
+      severity: severity,
+      at: Config.opt(opts, :at, DateTime.utc_now()),
       message: Keyword.get(opts, :message),
       details: details
     }
@@ -248,6 +273,20 @@ defmodule DpExchange.Core.Notice do
 
   defp reject_credentials!(other) do
     raise ArgumentError, "notice details must be a map, got #{inspect(other)}"
+  end
+
+  # `severity` is as closed a vocabulary as `kind` — "not a log level, a call to
+  # action" — but had no runtime check at all before this fix. `kind` raising on a typo
+  # while `severity` silently built a struct that violated its own typespec was the same
+  # asymmetry `Core.Types.Validate`'s moduledoc describes for `@enforce_keys`: presence
+  # (or, here, membership) enforced in one place and not in the otherwise-identical one
+  # beside it.
+  defp validate_severity!(severity) do
+    unless severity in @severities do
+      raise ArgumentError,
+            "unknown notice severity #{inspect(severity)} — must be one of " <>
+              inspect(@severities)
+    end
   end
 
   # A default, not a rule: a caller with better information overrides it. These are the

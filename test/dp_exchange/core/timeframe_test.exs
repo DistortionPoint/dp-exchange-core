@@ -27,6 +27,7 @@ defmodule DpExchange.Core.TimeframeTest do
       # mis-buckets every candle it touches, and every value stays plausible.
       assert :error = Timeframe.seconds("1w")
       assert :error = Timeframe.seconds("1M")
+      assert :error = Timeframe.seconds("1y")
       assert :error = Timeframe.seconds("3m")
     end
 
@@ -65,11 +66,14 @@ defmodule DpExchange.Core.TimeframeTest do
       for tf <- Timeframe.known(), do: assert(Timeframe.nameable?(tf))
     end
 
-    test "1w and 1M are nameable but have no width" do
-      # The whole reason the two lists differ. A venue may serve a weekly candle; nothing
-      # in Core can say where a weekly bucket starts. Refusing the label would force such
-      # a venue to under-declare what it serves.
-      for tf <- ~w(1w 1M) do
+    test "1w, 1M and 1y are nameable but have no width" do
+      # The whole reason the two lists differ. A venue may serve a weekly, monthly or
+      # yearly candle; nothing in Core can say where any of those buckets start (a week
+      # depends on the venue's start-of-week, a month is not a fixed number of seconds,
+      # and neither is a year — 365 or 366 days depending which one). Refusing the label
+      # would force such a venue to under-declare what it serves — exactly what
+      # `dp_exchange_webull` had to work around for `1y` until this widened (2026-09-06).
+      for tf <- ~w(1w 1M 1y) do
         assert Timeframe.nameable?(tf)
         assert Timeframe.seconds(tf) == :error
         refute tf in Timeframe.known()
@@ -78,7 +82,7 @@ defmodule DpExchange.Core.TimeframeTest do
 
     test "a string outside the vocabulary is neither" do
       refute Timeframe.nameable?("3m")
-      refute Timeframe.nameable?("1y")
+      refute Timeframe.nameable?("2w")
       refute Timeframe.nameable?(:"1d")
       refute Timeframe.nameable?(nil)
     end
@@ -118,6 +122,7 @@ defmodule DpExchange.Core.TimeframeTest do
       # reason that we do not model its width.
       assert Timeframe.aligned?(~U[2026-08-04 16:01:33Z], "1w")
       assert Timeframe.aligned?(~U[2026-08-04 16:01:33Z], "1M")
+      assert Timeframe.aligned?(~U[2026-08-04 16:01:33Z], "1y")
     end
 
     test "a non-DateTime is not aligned" do

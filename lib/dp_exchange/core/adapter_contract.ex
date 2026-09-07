@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Sixteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Seventeen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -81,7 +81,10 @@ defmodule DpExchange.Core.AdapterContract do
          "coverage/1 holds and every key is a kind the venue's own capabilities declare"},
       {16,
        "internal wiring — every internal export has a caller inside this package's own " <>
-         "lib/, so a mechanism cannot ship built, documented and never reached"}
+         "lib/, so a mechanism cannot ship built, documented and never reached"},
+      {17,
+       "credential gate — on a venue requiring credentials, no active credentialed " <>
+         "endpoint's fake succeeds when called with credentials stripped"}
     ]
   end
 
@@ -99,8 +102,10 @@ defmodule DpExchange.Core.AdapterContract do
       purity(),
       isolation(),
       wiring(),
+      credential_gate(),
       helpers(),
       arg_helpers(),
+      credential_gate_helpers(),
       purity_helpers()
     ]
   end
@@ -182,10 +187,11 @@ defmodule DpExchange.Core.AdapterContract do
 
         test "declared candle widths are in the shared vocabulary" do
           # `nameable/0`, not `known/0`. The vocabulary of *labels* is deliberately wider
-          # than the set Core can *bucket*: `1w` and `1M` have no boundary rule and never
-          # will, because a weekly bar's start depends on the venue's week and a month is
-          # not a fixed number of seconds. A venue that genuinely serves them must be able
-          # to say so — the alternative is under-declaring what it serves.
+          # than the set Core can *bucket*: `1w`, `1M` and `1y` have no boundary rule and
+          # never will, because a weekly bar's start depends on the venue's week, a month
+          # is not a fixed number of seconds, and neither is a year. A venue that
+          # genuinely serves them must be able to say so — the alternative is
+          # under-declaring what it serves.
           caps = @venue.capabilities()
           assert caps.historical_timeframes -- Timeframe.nameable() == []
         end
@@ -385,13 +391,22 @@ defmodule DpExchange.Core.AdapterContract do
 
           caps = @venue.capabilities()
 
-          for endpoint <-
-                Capabilities.endpoints_at(caps, :proven) ++
-                  Capabilities.endpoints_at(caps, :experimental),
-              answerable?(endpoint) do
+          # Enumerated from EVERY facade callback and asked through `active?/2`, not from
+          # `Capabilities.endpoints_at(caps, :proven) ++ endpoints_at(caps, :experimental)`.
+          # `endpoints_at/2` iterates only the EXPLICIT entries in `caps.endpoints` — but
+          # `Capabilities`'s own moduledoc makes an ABSENT entry active too ("anything not
+          # named in the map is :experimental — the only honest default"). An endpoint
+          # never mentioned in `endpoints` at all was therefore active by that same
+          # default and invisible to the old enumeration regardless — under-declaring by
+          # silence passed the exact check that catches under-declaring by a wrong value.
+          # See `DpExchange.Core.ContractTeethTest`'s `Broken.SilentlyUnsupported`.
+          for endpoint <- Venue.behaviour_info(:callbacks),
+              answerable?(endpoint),
+              Capabilities.active?(caps, endpoint) do
             refute call_on(@fake, endpoint) == {:error, :not_supported},
-                   "#{inspect(endpoint)} declares active but the fake answered " <>
-                     ":not_supported — the fake and the declaration disagree"
+                   "#{inspect(endpoint)} is active (declared, or by the undeclared-is-" <>
+                     "experimental default) but the fake answered :not_supported — the " <>
+                     "fake and the declaration disagree"
           end
         end
 
@@ -798,14 +813,76 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  defp credential_gate do
+    quote location: :keep do
+      # --- 17. credential gate ----------------------------------------------
+
+      describe "17. credential gate" do
+        test "on a venue requiring credentials, no active credentialed endpoint's fake " <>
+               "succeeds when called with credentials stripped" do
+          # Found independently in two venue packages the same week this assertion was
+          # written: six credentialed functions on a venue where **every request is
+          # signed and there is no anonymous endpoint** answered `{:ok, _}` for `%{}` or
+          # `nil` credentials, because nothing checked the argument at all. Tier 1
+          # in-process fakes are the only tier that runs on every CI run and the only one
+          # most consumers ever exercise, so a fake that succeeds where the real venue
+          # would refuse silently certifies broken consumer code — a caller that forgot
+          # its credentials would see its own tests pass.
+          #
+          # Fake-only, and gated on `credential_benefit: :required` rather than run
+          # unconditionally: a venue with `:no_difference` or `:higher_ceiling` may
+          # legitimately serve some of these endpoints without a credential (some venues'
+          # `get_fees/2` or `get_transfers/2` genuinely differ), and asserting a refusal
+          # there would be inventing a rule the venue never claimed. `:required` is a
+          # positive statement that public data is not served at all without one, which
+          # is exactly the claim a `{:ok, _}` from stripped credentials would contradict.
+          #
+          # Deliberately NOT asserting shape equality against the real venue
+          # (`call_on(@venue, args) == call_on(@fake, args)`): that would only be safe if
+          # every venue's auth check fails locally before any HTTP dial-out, which is an
+          # invariant about venues this suite has not reviewed and must not assume. A
+          # conformance assertion that can make a live network call under some future
+          # venue's implementation is a worse failure mode than the gap it would close.
+          caps = @venue.capabilities()
+
+          if caps.credential_benefit == :required do
+            assert @fake,
+                   "pass `fake:` to run this assertion. It never dials out — only the " <>
+                     "fake is called — but it needs the venue's in-process fake to " <>
+                     "call against."
+
+            for {name, arity} <- Venue.behaviour_info(:callbacks),
+                credential_gated?(name),
+                Capabilities.active?(caps, {name, arity}) do
+              args = stripped_credential_args(name, arity)
+
+              refute match?({:ok, _}, call_on(@fake, {name, arity}, args)),
+                     "#{inspect({name, arity})} answered {:ok, _} with credentials " <>
+                       "stripped, but #{inspect(@venue)} declares credential_benefit: " <>
+                       ":required — a fake that succeeds without credentials certifies " <>
+                       "consumer code that forgot to supply them"
+            end
+          end
+        end
+      end
+    end
+  end
+
   defp helpers do
     quote location: :keep do
       # --- helpers ---------------------------------------------------------
 
       defp call_endpoint(endpoint), do: call_on(@venue, endpoint)
 
-      defp call_on(module, {name, arity}) do
-        apply(module, name, endpoint_args(name, arity))
+      defp call_on(module, {name, arity}),
+        do: call_on(module, {name, arity}, endpoint_args(name, arity))
+
+      # The 3-arity form takes explicit args rather than deriving them from `{name,
+      # arity}` — assertion 17 needs the SAME shape `endpoint_args/2` builds but with
+      # credentials stripped, which is a different question from "what does this
+      # endpoint normally take".
+      defp call_on(module, {name, _arity}, args) do
+        apply(module, name, args)
       rescue
         error -> {:raised, error}
       catch
@@ -852,6 +929,42 @@ defmodule DpExchange.Core.AdapterContract do
       defp arg_value(:opts), do: []
 
       defp sample_symbol, do: List.first(@sample_pairs) || "BTC-USD"
+
+      defp credentialed?(name), do: name in @credentialed
+    end
+  end
+
+  # Assertion 17's own helpers, split from `arg_helpers/0` rather than added to it: a
+  # single quoted block growing past credo's complexity ceiling is the same "400-line
+  # block nobody reads" this file's groups already exist to avoid, just measured in
+  # cyclomatic complexity instead of line count.
+  defp credential_gate_helpers do
+    quote location: :keep do
+      # `test_connection/2` and `get_rate_limit_status/2` are the two `@credentialed`
+      # entries whose own callback doc explicitly allows `credentials() | nil` —
+      # `test_connection/2`'s whole point is answering "the credential, IF GIVEN, is
+      # accepted", so both are expected to succeed on plain reachability with no
+      # credential at all, even on a venue whose DATA endpoints require one. Assertion 17
+      # gates on `@credentialed` minus these two, not on `@credentialed` itself.
+      @credential_gated @credentialed -- [:test_connection, :get_rate_limit_status]
+
+      defp credential_gated?(name), do: name in @credential_gated
+
+      # The same shape `endpoint_args/2` builds, with the credentials position replaced
+      # by an empty map — assertion 17's whole question is "what happens with no
+      # credentials", and `%{}` is the same "nothing given" shape
+      # `Broken.OverDeclares.get_transfers(%{}, [])` already uses elsewhere in this
+      # family's own test fixtures.
+      defp stripped_credential_args(name, arity) do
+        kind = if credentialed?(name), do: :credentialed, else: :public
+
+        @arg_shapes
+        |> Map.get({kind, arity}, List.duplicate(:opts, arity))
+        |> Enum.map(&stripped_arg_value/1)
+      end
+
+      defp stripped_arg_value(:credentials), do: %{}
+      defp stripped_arg_value(other), do: arg_value(other)
     end
   end
 

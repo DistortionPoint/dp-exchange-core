@@ -481,6 +481,27 @@ defmodule DpExchange.Core.HttpClientTest do
       assert {:error, _message} = get(plug: plug, retry_attempts: 2, retry_delay: 1)
       assert :counters.get(counter, 1) == 2
     end
+
+    test "a retry_attempts above the hardcoded default does not crash on backoff" do
+      # `backoff_delay = retry_delay * (4 - attempts_left)` hardcoded `4` as
+      # `retry_attempts + 1` for the default of 3. Any caller configuring
+      # `retry_attempts: 5` or higher (a documented, supported option, not an edge case)
+      # starts `attempts_left` above 4, so `4 - attempts_left` goes negative on the very
+      # first retry and `Process.sleep/1` raises `FunctionClauseError` — in the CALLING
+      # process, uncaught, exactly the failure shape this module's own moduledoc already
+      # records for `retry_attempts: nil`. Verified: before this fix, this test raised
+      # instead of asserting.
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Req.Test.json(%{conn | status: 500}, %{})
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: 5, retry_delay: 1)
+      assert message =~ "Server error (500)"
+      assert :counters.get(counter, 1) == 5
+    end
   end
 
   describe "body parsing" do

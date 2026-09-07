@@ -52,7 +52,7 @@ a demo host and should never be sent to one.
 
 A `GenServer` runs in its own process and will not find the caller's dictionary at all — it
 is not in the caller's `$callers` chain. **Resolve in the caller and put the answer in the
-message**: `DpExchange.Core.Config.snapshot/1` on the way in, `DpExchange.Core.Config.resolve_snapshot/3` on the way out.
+message**: `DpExchange.Core.Config.snapshot/1` on the way in, `DpExchange.Core.Config.resolve_snapshot/4` on the way out.
 
 Resolving inside the server is too late, and it fails in the direction that looks like it
 works: production is unaffected, so only a consumer's async suite breaks.

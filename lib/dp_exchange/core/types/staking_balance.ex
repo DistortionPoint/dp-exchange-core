@@ -28,6 +28,15 @@ defmodule DpExchange.Core.Types.StakingBalance do
 
   Keys are the venue's provider identifiers, used as-is. Empty means the venue does not
   break the position down, **not** that there is one provider.
+
+  ## `:by_provider` defaults to `%{}`, never `nil`
+
+  The typespec below is a map, not `map() | nil` — "empty means no breakdown" (above) is
+  only true if empty is actually reachable, and a bare `nil` is neither a map a caller can
+  iterate nor the documented "no breakdown" signal. `new/1` defaults an absent key to `%{}`
+  and normalises an explicit `by_provider: nil` (the shape a decode bug produces from a
+  venue field that came back JSON `null`) to `%{}` as well, rather than let either produce a
+  struct that violates its own typespec.
   """
 
   alias DpExchange.Core.Types.Validate
@@ -38,9 +47,9 @@ defmodule DpExchange.Core.Types.StakingBalance do
     :staked,
     :available_to_trade,
     :available_for_withdrawal,
-    :by_provider,
     :venue_time,
-    :provider
+    :provider,
+    by_provider: %{}
   ]
 
   @type t :: %__MODULE__{
@@ -56,8 +65,15 @@ defmodule DpExchange.Core.Types.StakingBalance do
   @doc """
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
-  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+  `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`. Unlike
+  the enforced fields, an explicit `by_provider: nil` is not an error: it is normalised to
+  `%{}`, the struct's own default, per this module's "`:by_provider` defaults to `%{}`"
+  section above — "the venue does not break the position down" is not a caller mistake to
+  raise on.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    attrs = attrs |> Map.new() |> Map.update(:by_provider, %{}, &(&1 || %{}))
+    Validate.new!(__MODULE__, @enforce_keys, attrs)
+  end
 end

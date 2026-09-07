@@ -318,6 +318,40 @@ or it is exactly the shape above — reachable, tested, and never actually wired
 thing that was supposed to call it. Wire it, or delete it. Do not add it to an
 exclusion list; there is no per-function list to add it to.
 
+## Assertion 17 — your Fake must not be more capable than your real venue
+
+Found independently in two venue packages the same week this assertion was added: six
+credentialed functions on a venue where **every request is signed and there is no
+anonymous endpoint** answered `{:ok, _}` for `%{}` or `nil` credentials, because nothing
+in the fake checked the argument at all. Tier 1 (in-process fakes) is the only tier that
+runs on every CI run and the only one most consumers ever exercise — a fake that
+succeeds where the real venue would refuse silently certifies consumer code that forgot
+to supply credentials.
+
+If your `capabilities/0` declares `credential_benefit: :required`, assertion 17 calls
+every active credentialed endpoint on your `fake:` with the credentials argument
+replaced by `%{}` and refuses `{:ok, _}` back. It is Fake-only — it never dials the real
+venue — so it carries none of the risk a live-network assertion would.
+
+Two things it deliberately does **not** do:
+
+- It does not run at all unless you declare `:required`. A venue where credentials are
+  `:no_difference` or `:higher_ceiling` may legitimately serve some of these endpoints
+  without one, and this assertion would otherwise be inventing a rule your venue never
+  claimed.
+- It excludes `test_connection/2` and `get_rate_limit_status/2` from the gate even on a
+  `:required` venue. Both callbacks document `credentials() | nil` on purpose —
+  `test_connection/2`'s whole job is answering "the credential, IF GIVEN, is accepted",
+  so both are expected to answer plain reachability with none at all.
+- It does **not** assert that your fake's refusal has the same *shape* as your real
+  venue's (`{:error, {:missing_credentials, :your_venue}}` vs whatever your fake
+  returns) — only that it is not `{:ok, _}`. Matching shapes would need to call the real
+  venue with stripped credentials too, and that is a live network call this suite will
+  not make on your behalf.
+
+If this fails, the fix is in your fake: make it check credentials the way your real
+`Rest`/`Auth` module does, not in this package.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,

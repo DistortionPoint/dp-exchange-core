@@ -31,6 +31,24 @@ defmodule Broken.UnderDeclares do
   def get_transfers(_credentials, _opts), do: {:ok, []}
 end
 
+defmodule Broken.SilentlyUnsupported do
+  @moduledoc false
+  # Under-declares by SAYING NOTHING rather than by declaring `:unsupported` — the gap
+  # `Broken.UnderDeclares` above does not reach. `{:get_fx_rate, 3}` never appears in
+  # `endpoints`, so `Capabilities.active?/2`'s own documented default ("anything not named
+  # in the map is :experimental — the only honest default") makes it active. The function
+  # answers `{:error, :not_supported}` anyway: the exact disagreement assertion 12 exists
+  # to catch, reachable here only because it was never named rather than because it was
+  # named wrong.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+  end
+
+  @spec get_fx_rate(String.t(), DateTime.t(), keyword()) :: term()
+  def get_fx_rate(_pair, _at, _opts), do: {:error, :not_supported}
+end
+
 defmodule Broken.StringRefusal do
   @moduledoc false
   # The atom/string confusion, in the code as it was found: a caller matching the atom
@@ -142,6 +160,56 @@ defmodule Broken.CoverageByKind.UndeclaredKind do
   end
 end
 
+defmodule Broken.CredentialGate.NeverChecks do
+  @moduledoc false
+  # Declares `credential_benefit: :required` — public data is not served at all without
+  # credentials — and then serves `get_balances/2` regardless of what credentials it was
+  # given. The exact shape found independently in two venue packages the same week this
+  # assertion was written: a venue where every request is signed and there is no
+  # anonymous endpoint, whose fake nonetheless answered `{:ok, _}` for `%{}` or `nil`.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:get_balances, 2} => :proven},
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec get_balances(map(), keyword()) :: term()
+  def get_balances(_credentials, _opts), do: {:ok, []}
+end
+
+defmodule Broken.CredentialGate.Conforming do
+  @moduledoc false
+  # Same declaration, but the fake actually gates on credentials — this is what
+  # assertion 17 must NOT reject, or it would be flagging a venue for having the
+  # property it declares.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:get_balances, 2} => :proven},
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec get_balances(map(), keyword()) :: term()
+  def get_balances(credentials, _opts) do
+    if map_size(credentials) > 0 do
+      {:ok, []}
+    else
+      {:error, {:missing_credentials, :fixture}}
+    end
+  end
+
+  # `test_connection/2` legitimately answers without credentials even here — its own
+  # callback doc allows `credentials() | nil`, "the credential, IF GIVEN, is accepted".
+  # Assertion 17 must not gate this one at all.
+  @spec test_connection(map() | nil, keyword()) :: term()
+  def test_connection(_credentials, _opts), do: {:ok, %{reachable: true}}
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -170,6 +238,36 @@ defmodule DpExchange.Core.ContractTeethTest do
     test "a string refusal does not satisfy the atom assertion" do
       refute Broken.StringRefusal.get_transfers(%{}, []) == {:error, :not_supported}
       assert Broken.StringRefusal.get_transfers(%{}, []) == {:error, "not_supported"}
+    end
+
+    test "under-declaring BY SILENCE — never naming the endpoint at all — used to slip " <>
+           "past the same check that catches under-declaring by a wrong VALUE" do
+      # `AdapterContract`'s "an active endpoint does not answer :not_supported" test used
+      # to enumerate `Capabilities.endpoints_at(caps, :proven) ++
+      # Capabilities.endpoints_at(caps, :experimental)` — which iterates only the
+      # EXPLICIT entries in `capabilities().endpoints`. `Capabilities.active?/2`'s own
+      # documented default treats an ABSENT key as active too ("anything not named in the
+      # map is :experimental"), so an endpoint never mentioned at all was active by that
+      # same default and the enumeration silently skipped it anyway.
+      caps = Broken.SilentlyUnsupported.capabilities()
+
+      # It is active by the documented default...
+      assert Capabilities.active?(caps, {:get_fx_rate, 3})
+
+      # ...and answers :not_supported anyway — over-declaring, by omission.
+      assert Broken.SilentlyUnsupported.get_fx_rate("USD-EUR", DateTime.utc_now(), []) ==
+               {:error, :not_supported}
+
+      # This is exactly what the old enumeration missed: the endpoint above is active,
+      # but it appears in NEITHER list, because it was never entered into `endpoints` at
+      # all — not `:proven`, not `:experimental`, not `:unsupported`.
+      refute {:get_fx_rate, 3} in Capabilities.endpoints_at(caps, :proven)
+      refute {:get_fx_rate, 3} in Capabilities.endpoints_at(caps, :experimental)
+
+      # The fixed check enumerates every facade callback and asks `active?/2` directly,
+      # which is what `AdapterContract` now does — see its "12. capabilities and
+      # behaviour agree" group.
+      assert {:get_fx_rate, 3} in Venue.behaviour_info(:callbacks)
     end
   end
 
@@ -398,6 +496,68 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       refute {auth, :refresh, 2} in mfas,
              "the facade now calls Auth.refresh/2 — the same fix bf2e241 made for real"
+    end
+  end
+
+  describe "assertion 17 catches a fake that never checks credentials" do
+    # Replicates `AdapterContract`'s "17. credential gate" computation against these
+    # fixtures directly, the same pattern assertions 1, 4, 12 and 15 already use in this
+    # file — the private helpers the real assertion calls
+    # (`credential_gated?/1`, `stripped_credential_args/2`) only exist inside a module
+    # that `use`s `AdapterContract`, so the equivalent check is rebuilt here from the same
+    # public primitives (`Capabilities.active?/2`, `Venue.behaviour_info/1`) the real one
+    # is built on.
+    @credentialed ~w(get_balances get_accounts get_fees get_transfers place_order
+                     cancel_order get_order get_orders get_trade_history
+                     test_connection get_rate_limit_status)a
+    @credential_gated @credentialed -- [:test_connection, :get_rate_limit_status]
+
+    test "a fake succeeding with stripped credentials, on a venue requiring them, is caught" do
+      caps = Broken.CredentialGate.NeverChecks.capabilities()
+      assert caps.credential_benefit == :required
+
+      gated_and_active =
+        for {name, arity} <- Venue.behaviour_info(:callbacks),
+            name in @credential_gated,
+            Capabilities.active?(caps, {name, arity}),
+            do: {name, arity}
+
+      assert {:get_balances, 2} in gated_and_active
+
+      assert match?(
+               {:ok, _},
+               Broken.CredentialGate.NeverChecks.get_balances(%{}, [])
+             ),
+             "this fixture answers :ok with stripped credentials on purpose — the suite " <>
+               "must reject a fake that does this"
+    end
+
+    test "a fake that actually gates on credentials satisfies the same check" do
+      caps = Broken.CredentialGate.Conforming.capabilities()
+      assert caps.credential_benefit == :required
+
+      refute match?(
+               {:ok, _},
+               Broken.CredentialGate.Conforming.get_balances(%{}, [])
+             ),
+             "the conforming fixture refuses stripped credentials and must not be flagged"
+
+      assert match?(
+               {:ok, _},
+               Broken.CredentialGate.Conforming.get_balances(%{fake: "cred"}, [])
+             ),
+             "real credentials still work — this is a gate, not a permanent refusal"
+    end
+
+    test "test_connection/2 is excluded from the gate even on a venue requiring credentials" do
+      # Its own callback doc allows `credentials() | nil` — answering without one is the
+      # documented behaviour, not the defect this assertion exists to catch.
+      refute :test_connection in @credential_gated
+
+      assert match?(
+               {:ok, _},
+               Broken.CredentialGate.Conforming.test_connection(nil, [])
+             )
     end
   end
 end

@@ -36,7 +36,7 @@ defmodule DpExchange.Core.Config do
 
   A `GenServer` runs in its own process and will not find the caller's dictionary at all,
   because it is not in the caller's `$callers` chain. **Resolve in the caller and put the
-  answer in the message** — `snapshot/1` on the way in, `resolve_snapshot/3` on the way
+  answer in the message** — `snapshot/1` on the way in, `resolve_snapshot/4` on the way
   out. Resolving inside the server is too late, and it fails in the direction that looks
   like it works: production is unaffected, so only the consumer's async suite breaks.
 
@@ -183,7 +183,7 @@ defmodule DpExchange.Core.Config do
 
   Call this in the process that has the override — the caller — and pass the result into
   the `GenServer.call/3` or `cast/2`. The server then resolves with
-  `resolve_snapshot/3`.
+  `resolve_snapshot/4`.
 
   ## Examples
 
@@ -199,24 +199,36 @@ defmodule DpExchange.Core.Config do
   @doc """
   Resolves `key` inside a process that received a `snapshot/1`.
 
-  The snapshot wins; otherwise this falls back to application env exactly as `get/3`
-  does. It deliberately does **not** consult the server's own process dictionary: a
+  The snapshot wins; otherwise this falls back to `app`'s application env, exactly as
+  `get/3` does — **`app` is a required argument for that reason**: this used to hardcode
+  `:dp_exchange_core` regardless of what a caller passed, so a venue package snapshotting
+  one of ITS OWN seams (as `dp_exchange_schwab`'s poller does with
+  `DpExchange.Core.Config.snapshot/1`)
+  and resolving it inside its own GenServer would have had this function consult Core's
+  application env instead of its own — silently never finding a value the venue's own
+  consumer configured, no matter how it was set. Found with no live caller yet: every
+  known consumer reapplies a snapshot with `put_override/2` in a loop rather than calling
+  this, which is why the mismatch between "falls back exactly as `get/3` does" and a
+  hardcoded app went unnoticed. Fixed before a first caller could inherit it.
+
+  This deliberately does **not** consult the server's own process dictionary: a
   long-lived server's dictionary is not scoped to any one caller, so honouring it would
   leak one caller's configuration into another's request.
 
   ## Examples
 
-      iex> DpExchange.Core.Config.resolve_snapshot(%{seam: :from_caller}, :seam, :fallback)
+      iex> DpExchange.Core.Config.resolve_snapshot(%{seam: :from_caller}, :dp_exchange_core, :seam, :fallback)
       :from_caller
 
-      iex> DpExchange.Core.Config.resolve_snapshot(%{}, :dp_exchange_core, :fallback)
+      iex> DpExchange.Core.Config.resolve_snapshot(%{}, :dp_exchange_core, :never_set_anywhere, :fallback)
       :fallback
   """
-  @spec resolve_snapshot(%{optional(key()) => term()}, key(), term()) :: term()
-  def resolve_snapshot(snapshot, key, default \\ nil)
+  @spec resolve_snapshot(%{optional(key()) => term()}, app(), key(), term()) :: term()
+  def resolve_snapshot(snapshot, app, key, default \\ nil)
 
-  def resolve_snapshot(snapshot, key, default) when is_map(snapshot) and is_atom(key) do
-    Map.get_lazy(snapshot, key, fn -> Application.get_env(:dp_exchange_core, key, default) end)
+  def resolve_snapshot(snapshot, app, key, default)
+      when is_map(snapshot) and is_atom(app) and is_atom(key) do
+    Map.get_lazy(snapshot, key, fn -> Application.get_env(app, key, default) end)
   end
 
   defp override_key(key), do: {__MODULE__, key}

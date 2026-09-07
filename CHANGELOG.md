@@ -23,6 +23,229 @@ an acceptable changelog line.
 
 ### Added
 
+- **`AdapterContract` gains assertion 17, "credential gate" — on a venue declaring
+  `credential_benefit: :required`, no active credentialed endpoint's `fake:` may answer
+  `{:ok, _}` when called with credentials stripped.** Found independently in two venue
+  packages the same week: `dp_exchange_robinhood`'s fake answered `{:ok, _}` from six
+  credentialed functions (`get_balances/2`, `get_accounts/2`, `place_order/3`,
+  `cancel_order/3`, `get_order/3`, `get_orders/2`) regardless of what credentials they
+  were given, on a venue where **every request is signed and there is no anonymous
+  endpoint** — the fake was lying about the most basic property of the venue. A separate
+  fake/real error-shape divergence was found the same day in `dp_exchange_gemini`. Tier 1
+  in-process fakes are the only tier that runs on every CI run and the only one most
+  consumers ever exercise, so a fake more capable than the real venue silently certifies
+  consumer code that forgot to supply credentials.
+
+  Fake-only — it never dials the real venue, so it carries none of the risk a
+  live-network assertion would — and gated strictly on `credential_benefit: :required`,
+  not run unconditionally: a venue declaring `:no_difference` or `:higher_ceiling` may
+  legitimately serve some of these endpoints without a credential, and asserting a
+  refusal there would invent a rule the venue never claimed. `test_connection/2` and
+  `get_rate_limit_status/2` are excluded from the gate on any venue, `:required` or not
+  — both callbacks document `credentials() | nil` on purpose, and answering plain
+  reachability with none at all is the documented behaviour, not the defect this
+  assertion exists to catch.
+
+  **Deliberately does not assert real/fake refusal-shape equality**
+  (`call_on(@venue, stripped) == call_on(@fake, stripped)`), which was the second,
+  stronger proposal and would also have caught Robinhood's `{:refused,
+  :missing_credentials}` vs. the real venue's `{:error, {:missing_credentials,
+  :robinhood}}`. That check is only safe while every venue's auth check fails locally
+  before any HTTP dial-out — true today, but Core would be assuming an invariant about a
+  venue it has not reviewed, and a conformance assertion that can make a live network
+  call under some future venue's implementation is a worse failure mode than the gap it
+  would close. Verified against the real generated assertion, not only a manual
+  replica: temporarily setting `credential_benefit: :required` on `ReferenceVenue` (whose
+  `get_balances/2` ignores its credentials argument, correctly, for its real
+  `:higher_ceiling` declaration) makes assertion 17 fail with `{:get_trade_history, 2}
+  answered {:ok, _} with credentials stripped`, confirming the check fires on real
+  generated code before being reverted; `contract_teeth_test.exs` carries the permanent
+  regression fixtures (`Broken.CredentialGate.NeverChecks` and `.Conforming`).
+
+  **Assertion count is now seventeen.** `usage-rules/testing.md` and
+  `docs/guides/building-an-exchange-package.md` updated; `usage-rules/adapter.md` gains a
+  dedicated section next to assertion 16's.
+
+  **Potentially breaking for any venue package declaring `credential_benefit: :required`
+  whose fake does not already gate every credentialed endpoint on its `credentials`
+  argument.** Of the five, this specifically means `dp_exchange_robinhood` (the venue
+  this defect was found in) will exercise this assertion for real on its next Core bump;
+  whether it still fails depends on whether that package's own fake fix has landed by
+  then. The other four venues do not currently declare `credential_benefit: :required`
+  (per this repo's own review of their `capabilities/0`), so this assertion is inert for
+  them today and only bites if one of them adopts `:required` without also gating its
+  fake.
+
+### Fixed
+
+- **`Timeframe.nameable/0` was missing `1y`, the same way it was once missing `1w` and
+  `1M`.** `dp_exchange_webull`'s stock, option and futures bars genuinely serve a yearly
+  candle alongside the weekly and monthly ones (`Rest.get_stock_bars/5`, tested against
+  the venue's own `timespan` enum), but `Capabilities.new/1` raised on `1y` the way it
+  used to raise on `1w`/`1M` before those were added — the exact under-declaration this
+  module's own moduledoc already records twice over. Webull carried
+  `@core_unnameable_widths ~w(1y)`, subtracted from its `historical_timeframes`
+  declaration with a comment naming this exact gap as a Core limitation rather than an
+  under-declaration on its own part.
+
+  `@unbucketable` is now `~w(1w 1M 1y)` — a year is not a fixed number of seconds any
+  more than a month is, and `seconds/1`/`aligned?/2`/`boundary/2` treat it exactly as
+  they already treat the other two: no boundary rule, never rejected as invalid.
+  `known/0` is unaffected; only `nameable/0` (and therefore what `Capabilities.new/1`
+  will accept in `historical_timeframes`) widens.
+
+  **Additive, not breaking**: every existing valid `historical_timeframes` declaration
+  remains valid, since `nameable/0` only grew. **Unblocks `dp_exchange_webull`**
+  declaring its eleventh width — its `@core_unnameable_widths` workaround and the
+  subtraction using it are removable once it takes this version.
+
+- **`AdapterContract`'s assertion 12 ("an active endpoint does not answer
+  :not_supported") only checked endpoints EXPLICITLY present in `capabilities().endpoints`
+  — an endpoint never mentioned there at all slipped past it, even though
+  `Capabilities`'s own moduledoc makes an absent entry active too ("anything not named in
+  the map is `:experimental` — the only honest default").** `Capabilities.endpoints_at/2`
+  iterates only the map's explicit entries by design (its own `@doc` says "every endpoint
+  DECLARED at maturity"), so `Capabilities.endpoints_at(caps, :proven) ++
+  Capabilities.endpoints_at(caps, :experimental)` — the set the assertion used to check —
+  never contained an endpoint a venue simply never declared. A venue implementing a stub
+  that returns `{:error, :not_supported}` for, say, `get_fx_rate/3`, while never entering
+  `{:get_fx_rate, 3}` into `endpoints` at all, is under-declaring by silence rather than by
+  a wrong value — and passed the exact check built to catch under-declaring, because that
+  check only ever looked at what was explicitly written down. `core_endpoints/0`'s own
+  "every core endpoint carries an explicit maturity" test closes this for the ~16 endpoints
+  named there; it does not touch the other ~70 a venue is free to leave undeclared.
+
+  Fixed by enumerating `Venue.behaviour_info(:callbacks)` and asking
+  `Capabilities.active?/2` directly, rather than enumerating `endpoints_at/2`'s two lists.
+  `active?/2` already applies the documented undeclared-is-experimental default, so this
+  closes the gap without changing what "active" means — it changes what gets CHECKED
+  against that meaning. `DpExchange.Core.ReferenceVenue` declares every single callback
+  explicitly (see `endpoint_maturities/0`), so Core's own conformance run is unaffected;
+  `Broken.SilentlyUnsupported` in `contract_teeth_test.exs` reproduces the gap and proves
+  the fix closes it.
+
+  **Potentially breaking for all five venue packages** (`dp_exchange_coinbase`,
+  `dp_exchange_gemini`, `dp_exchange_robinhood`, `dp_exchange_schwab`,
+  `dp_exchange_webull`): any of them relying on the documented undeclared-default for a
+  peripheral endpoint while that endpoint's implementation genuinely answers
+  `{:error, :not_supported}` will now fail this assertion in their own CI, where it
+  previously passed silently. That failure is correct — it is exactly the under-declaring
+  defect assertion 12 exists to catch — and the fix is to declare the endpoint
+  `:unsupported` explicitly, not to weaken the check.
+
+- **`PollingFeed`'s `:fetch_all` path crashed the whole feed process on a `{:refused, _}`
+  return — the one outcome `fetch_all_and_publish/1`'s case statement did not match —
+  instead of recording one refused symbol.** `dp_exchange_robinhood`'s `Feed` moduledoc
+  documented this exact gap as the reason it stayed on per-symbol `:fetch` rather than
+  adopt this venue's own documented repeatable-query bulk endpoint (`?symbol=BTC-USD&
+  symbol=ETH-USD` in one signed request): "a `{:refused, _}` returned from `:fetch_all`
+  does not match either clause `fetch_all_and_publish/1` handles and would crash this
+  feed's process instead of recording one refused symbol." Verified by reproducing it: a
+  `fetch_all` returning `{:refused, _}` raised `CaseClauseError` inside `handle_info`,
+  taking the GenServer down.
+
+  `t:PollingFeed.fetch_all/0` — previously undocumented as a type at all — now names a
+  third outcome, `{:refused, refusals}` where `refusals :: [{symbol, reason}]`, the batch
+  analogue of `fetch`'s own `{:refused, reason}`: each named symbol is reported once
+  through `on_refusal`, exactly as the per-symbol path already does, instead of being
+  retried forever as an ordinary `{:error, reason}` would be.
+
+- **`PollingFeed`'s `:fetch_all` path could deliver `{:ok, []}` forever without ever
+  tripping the "delivered NOTHING" escalation.** `record_success(state, false)` — the
+  clause a zero-event bulk response routed through — was a silent no-op: it never called
+  `delivering_nothing?/2`, so a bulk venue answering successfully with an empty result set
+  every cycle (a bad credential filtered to nothing server-side, for one) produced no log
+  line and no `on_notice`, the exact silent-failure shape this module's moduledoc names as
+  the reason the escalation exists at all. `{:ok, []}` now routes through
+  `record_failure/3` with reason `:empty_response`, so it is counted, logged and escalated
+  the same as any other empty cycle. `record_success/2`'s now-unreachable `false` clause is
+  removed; every remaining call site always delivered something, so it is `record_success/1`.
+
+- **`HttpClient`'s retry backoff hardcoded `4 - attempts_left`, assuming the default
+  `retry_attempts` of 3.** `retry_attempts` is a documented, caller-configurable option;
+  configuring it to 4 or more starts `attempts_left` above 4, so `4 - attempts_left` goes
+  negative on the very first retry and `Process.sleep/1` raises `FunctionClauseError` — in
+  the CALLING process, uncaught, since this library does not supervise its callers. The
+  same failure shape this module's moduledoc already records for `retry_attempts: nil`
+  (`4 - nil` via Erlang term ordering), reachable here for a valid, in-range, documented
+  integer instead. No existing test used `retry_attempts` above the default, so nothing
+  caught it. Fixed by scaling the backoff from attempts actually made
+  (`retry_attempts - attempts_left + 1`) rather than a constant tied to the default — always
+  `>= 1` regardless of configuration, and numerically identical to the old formula's own
+  output at the default of 3.
+
+- **`Notice.new/3` validated `kind` against the closed vocabulary but never validated
+  `severity`**, despite `severity` being documented as equally closed ("not a log level — a
+  call to action"). `Notice.new(:link_down, :v, severity: :critical)` silently built a
+  `%Notice{severity: :critical}` outside its own `t:Notice.severity/0` typespec. `severity`
+  is now checked against `[:info, :warning, :error]`, raising `ArgumentError` the same way
+  an unknown `kind` already did.
+
+- **`Notice.new/3` read `:severity`, `:at` and `:details` with `Keyword.get/3`, which does
+  not substitute its default for a PRESENT-and-`nil` value — the same trap
+  `DpExchange.Core.Config.opt/3`, `PollingFeed` and `HttpClient` have each paid for
+  separately.** A caller forwarding its own options (or computing a value and getting
+  `nil` back in an edge case) could produce `severity: nil` (a struct violating its own
+  typespec, previously unvalidated besides), `at: nil` (violating `@enforce_keys`' own
+  non-nil promise, the same way a `Core.Types.*` decode bug does — see `Types.Validate`),
+  or `details: nil` (raising "must be a map, got nil" for what is, from a forwarding
+  caller's side, simply an unset optional field). All three now read through
+  `DpExchange.Core.Config.opt/3`: an explicit `nil` falls back to the same default an
+  absent key already used.
+
+- **`Core.Types.Trade.new/1` accepted an explicit `broken: nil`, bypassing the struct's own
+  documented default (`false`) and typespec (`boolean()`, never `boolean() | nil`).**
+  `:broken` is deliberately not `@enforce_keys`'d — an omitted value should default to
+  `false`, and that part worked — but `@enforce_keys` guards presence, not `nil` (see
+  `Types.Validate`), so a PRESENT `broken: nil` (the shape a JSON decode produces from a
+  venue field that came back `null`) reached the struct unchanged. `nil` and `false` are
+  both falsy in a bare `if`, which is exactly why nothing had noticed; a `case` matching
+  `true` and `false` with no third clause does not get that courtesy, and `:broken` is the
+  field a phantom high or low rides in on. `new/1` now normalises an explicit `nil` to
+  `false` — this type's own moduledoc already says `false` means "the venue said not
+  broken **or said nothing**," so this is the documented policy applied consistently
+  rather than a new judgement call.
+
+- **`Core.Types.StakingBalance`'s `:by_provider` defaulted to `nil` via a bare `defstruct`
+  entry, though its typespec is a bare map (`%{optional(String.t()) => Decimal.t()}`, never
+  `| nil`) and its own moduledoc states "empty means the venue does not break the position
+  down" — a promise only true if `%{}` is what a caller actually gets.** Both an omitted
+  `:by_provider` and an explicit `by_provider: nil` produced `%StakingBalance{by_provider:
+  nil}`, a value nothing downstream could safely `Map.get/2` or iterate the way the
+  typespec promises. `defstruct` now defaults `by_provider: %{}`, and `new/1` normalises an
+  explicit `nil` to `%{}` the same way, consistent with `Trade.broken`'s fix above.
+
+- **`DpExchange.Core.Config.resolve_snapshot/3` hardcoded
+  `Application.get_env(:dp_exchange_core, key, default)` regardless of what a caller
+  passed, despite its own moduledoc claiming it falls back to application env "exactly as
+  `get/3` does" — and `get/3` takes `app` as an argument.** A venue package snapshotting
+  one of its OWN seams (`DpExchange.Core.Config.snapshot/1`, which is app-agnostic —
+  process-scoped overrides are keyed only by `key`) and resolving it inside its own
+  GenServer would have had this function consult **Core's** application
+  env instead of its own, silently never finding a value its consumer configured no
+  matter how it was set. Found with no live caller yet — every known consumer
+  (`dp_exchange_schwab`'s poller) reapplies a snapshot with `put_override/2` in a loop
+  rather than calling this — so the mismatch between the documented behaviour and the
+  hardcoded app went unnoticed. Fixed before a first caller could inherit it.
+
+  **Breaking, in signature only:** `resolve_snapshot/3` is now `resolve_snapshot/4`,
+  taking `app` as its second argument (`resolve_snapshot(snapshot, app, key, default)`),
+  matching `get(app, key, default)`'s own order. No known caller in any of the five venue
+  packages uses this function today, so the practical impact is expected to be zero, but
+  a positional call written against the old three-argument form will not compile against
+  this version.
+
+- **`Core.Instrument.new/1` built its struct with plain `struct!/2` rather than
+  `Types.Validate.new!/3`, so an explicit `symbol: nil` — `@enforce_keys` guards presence,
+  not `nil` — built an `%Instrument{symbol: nil}` violating its own `symbol: String.t()`
+  typespec, the one field this whole type exists to attach base/quote/status/type to.**
+  Every `Core.Types.*` struct already routes its `new/1` through `Validate.new!/3`;
+  `Instrument` (outside the `Core.Types.*` namespace, but carrying the identical
+  `@enforce_keys`-guards-presence-not-nil shape) did not. Fixed to match the family
+  convention.
+
+### Added
+
 - **`Core.AdapterContract` gains assertion 16, "internal wiring" — every internal
   export must have a caller inside the package's own `lib/`, catching the family's
   single most-repeated defect: a mechanism built, documented, and never wired.** Six

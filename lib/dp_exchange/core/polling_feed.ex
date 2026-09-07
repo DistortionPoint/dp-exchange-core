@@ -108,6 +108,33 @@ defmodule DpExchange.Core.PollingFeed do
           (String.t() -> {:ok, map()} | {:error, term()} | {:refused, term()})
 
   @typedoc """
+  Fetches many symbols in one call, for a venue whose upstream API answers a batch as
+  cheaply as one symbol.
+
+  `{:ok, events}` publishes every event and is the only outcome most bulk fetchers ever
+  need. `{:error, reason}` is retried next cycle, same as `fetch`'s `:error` — this module
+  still cannot tell a delisted symbol from a network blip and must not decide for one.
+
+  `{:refused, refusals}` is `fetch`'s `:refused` scaled to a batch: `refusals` is a
+  `[{symbol, reason}]` list naming every symbol in THIS call that the venue stated it does
+  not carry at all, reported through `on_refusal` once each rather than retried forever.
+  Added because its absence was a real gap: before it existed, a batch fetcher that found
+  one bad symbol mixed into an otherwise-live request had no outcome to return that this
+  module's `fetch_all_and_publish/1` did not already handle, other than reporting the
+  whole batch as an ordinary `{:error, reason}` — which, unlike a real `:refused`, is
+  retried forever and never reaches `on_refusal`, so the caller never learns to drop the
+  symbol from its scope. `dp_exchange_robinhood` documented this exact gap as the reason
+  it stayed on per-symbol `:fetch` rather than adopt this endpoint's own documented
+  repeatable-query bulk mode.
+
+  A bulk response with zero events (`{:ok, []}`) is treated as delivering nothing for
+  escalation purposes even though the call itself succeeded — see `fetch_all_and_publish/1`.
+  """
+  @type fetch_all ::
+          ([String.t()] ->
+             {:ok, [map()]} | {:error, term()} | {:refused, [{String.t(), term()}]})
+
+  @typedoc """
   Receives a `Core.Notice.t()` the instant this feed crosses into or back out of the
   delivering-nothing state. Injected like `sink` and `on_refusal`, so the feed never
   reaches outside its own inputs to publish one.
@@ -251,7 +278,7 @@ defmodule DpExchange.Core.PollingFeed do
       failures_since_ok: 0,
       last_error: nil,
       # Latches to `:dead` the instant the feed crosses into delivering-nothing, and back
-      # to `:ok` on recovery. `record_failure/3` and `record_success/2` read this to fire
+      # to `:ok` on recovery. `record_failure/3` and `record_success/1` read this to fire
       # `on_notice` exactly once per transition — never once per failed tick, and never
       # once per sweep while an outage continues (unlike the "delivered NOTHING" log line,
       # which repeats every sweep by design; see `delivering_nothing?/2`).
@@ -337,21 +364,42 @@ defmodule DpExchange.Core.PollingFeed do
            fn -> state.fetch_all.(MapSet.to_list(symbols)) end,
            state.fetch_timeout_ms
          ) do
+      {:ok, []} ->
+        # A bulk endpoint that answers successfully with zero events delivers exactly
+        # nothing, same as an outright failure would — a bad credential filtered down to
+        # an empty result set server-side is indistinguishable from one that raised, from
+        # this module's side. Routing it through `record_success(state, false)` would be a
+        # silent no-op forever: that path never reaches `delivering_nothing?`, so a bulk
+        # venue stuck returning `{:ok, []}` every cycle would never trip the escalation
+        # this module's moduledoc promises for exactly this shape.
+        record_failure(state, "bulk fetch", :empty_response)
+
       {:ok, events} ->
-        now = System.monotonic_time(:millisecond)
+        publish_and_record(state, events)
 
-        # Coverage is recorded from what came BACK, not what was asked for. A
-        # symbol missing from the response is one the venue did not answer for,
-        # and marking it covered would be the feed asserting a delivery that
-        # never happened.
-        Enum.each(events, state.sink)
-
-        seen = Map.new(events, fn event -> {event.symbol, now} end)
-        record_success(%{state | last_ok: Map.merge(state.last_ok, seen)}, events != [])
+      {:refused, refusals} ->
+        # See `t:fetch_all/0` — the batch analogue of `fetch`'s own `{:refused, reason}`.
+        # Each named symbol is reported once, the same as the per-symbol path, rather than
+        # silently retried forever as an ordinary `{:error, reason}` would be.
+        Enum.each(refusals, fn {symbol, reason} -> state.on_refusal.(symbol, reason) end)
+        record_failure(state, "bulk fetch", {:refused, refusals})
 
       {:error, reason} ->
         record_failure(state, "bulk fetch", reason)
     end
+  end
+
+  defp publish_and_record(state, events) do
+    now = System.monotonic_time(:millisecond)
+
+    # Coverage is recorded from what came BACK, not what was asked for. A
+    # symbol missing from the response is one the venue did not answer for,
+    # and marking it covered would be the feed asserting a delivery that
+    # never happened.
+    Enum.each(events, state.sink)
+
+    seen = Map.new(events, fn event -> {event.symbol, now} end)
+    record_success(%{state | last_ok: Map.merge(state.last_ok, seen)})
   end
 
   defp fetch_one_and_publish(symbol, state) do
@@ -359,7 +407,7 @@ defmodule DpExchange.Core.PollingFeed do
       {:ok, event} ->
         %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
         |> tap(fn _state -> state.sink.(event) end)
-        |> record_success(true)
+        |> record_success()
 
       # The venue says it does not carry this symbol. Reported outward — a
       # consumer drops it from its collection scope — rather than retried every
@@ -420,13 +468,17 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
-  defp record_success(state, false), do: state
-
   # Recovery: this feed was latched `:dead` (see `notice_state` in `init/1`) and just
   # published something. `on_notice` fires the recovery half of the pair here, once, on
   # the transition back out — a consumer that learned a feed died and never learned it
   # recovered is only half-served.
-  defp record_success(%{notice_state: :dead} = state, true) do
+  #
+  # Called only on an actual delivery (a non-empty publish): `fetch_all_and_publish/1`
+  # routes a `{:ok, []}` bulk response through `record_failure/3` instead, precisely so
+  # this function's `:dead` clause — and the recovery notice it fires — only ever fires
+  # when something was truly delivered. There is no `record_success(state, false)`
+  # clause; every caller already knows it delivered before reaching here.
+  defp record_success(%{notice_state: :dead} = state) do
     notice =
       Notice.new(:coverage_change, state.label,
         severity: :info,
@@ -440,7 +492,7 @@ defmodule DpExchange.Core.PollingFeed do
     %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
   end
 
-  defp record_success(state, true), do: %{state | failures_since_ok: 0, last_error: nil}
+  defp record_success(state), do: %{state | failures_since_ok: 0, last_error: nil}
 
   # One failure is noise; a whole cycle of them with nothing succeeding means
   # the feed is delivering nothing, which reads downstream as a quiet venue.

@@ -105,5 +105,38 @@ defmodule DpExchange.Core.TypesTest do
     end
   end
 
+  describe "Trade.broken defaults to false and never leaks nil (C7)" do
+    # `:broken` is not `@enforce_keys`'d — a caller omitting it gets the documented
+    # default. Before this fix, a PRESENT `broken: nil` (what a JSON decode produces from
+    # a venue field that came back `null`) bypassed that default entirely and built
+    # `%Trade{broken: nil}`, a value outside the `boolean()` typespec that only looked
+    # safe because `nil` and `false` are both falsy in a bare `if`.
+    @trade_attrs [
+      id: "1",
+      symbol: "BTC-USD",
+      side: :buy,
+      price: Decimal.new(1),
+      quantity: Decimal.new(1),
+      timestamp: ~U[2026-08-27 12:00:00Z],
+      provider: :v
+    ]
+
+    test "omitted defaults to false" do
+      assert Trade.new(@trade_attrs).broken == false
+    end
+
+    test "an explicit nil normalises to false rather than leaking through" do
+      assert Trade.new(@trade_attrs ++ [broken: nil]).broken == false
+    end
+
+    test "an explicit true is kept" do
+      assert Trade.new(@trade_attrs ++ [broken: true]).broken == true
+    end
+
+    test "an explicit false is kept" do
+      assert Trade.new(@trade_attrs ++ [broken: false]).broken == false
+    end
+  end
+
   defp dec(n), do: Decimal.new(n)
 end

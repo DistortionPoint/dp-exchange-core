@@ -30,7 +30,18 @@ defmodule DpExchange.Core.Instrument do
   ceremony. A consumer building a catalogue falls back to `get_symbols/1` plus its
   own derivation for those, and marks anything it cannot resolve `:unknown` —
   surfaced for review, never guessed.
+
+  ## `@enforce_keys` guards presence, not `nil`
+
+  Same trap as every `Core.Types.*` struct — see `DpExchange.Core.Types.Validate`. A
+  `symbol: nil` is PRESENT, so `struct!/2` alone would build it without complaint even
+  though the typespec below declares `symbol: String.t()`, never `String.t() | nil` — the
+  one field this whole module exists to attach base/quote/status/type to. `new/1` runs
+  through `Validate.new!/3`, the same constructor every `Core.Types.*` module uses, so an
+  explicit `nil` fails exactly the way an absent key already did.
   """
+
+  alias DpExchange.Core.Types.Validate
 
   @enforce_keys [:symbol]
   defstruct [
@@ -60,11 +71,12 @@ defmodule DpExchange.Core.Instrument do
   an unrecognised product type is `:unknown` (excluded from collection and
   surfaced for review), NOT `:spot`. A venue that invents a new contract type
   must not have it silently admitted into a spot-only fleet.
+
+  Raises `ArgumentError` if `:symbol` is absent OR `nil` — see this module's
+  "`@enforce_keys` guards presence, not `nil`" section.
   """
   @spec new(keyword()) :: t()
-  def new(fields) do
-    struct!(__MODULE__, fields)
-  end
+  def new(fields), do: Validate.new!(__MODULE__, @enforce_keys, fields)
 
   @doc """
   Normalise a venue's product-type string.

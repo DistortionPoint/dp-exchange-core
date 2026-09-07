@@ -19,6 +19,16 @@ defmodule DpExchange.Core.InstrumentTest do
     test "refuses to be built without a symbol" do
       assert_raise ArgumentError, fn -> Instrument.new(base: "BTC", quote: "USD") end
     end
+
+    test "refuses to be built with an explicit nil symbol (C7)" do
+      # `@enforce_keys` guards presence, not `nil` — before this fix, `new/1` called
+      # `struct!/2` directly rather than routing through `Types.Validate`, so a PRESENT
+      # `symbol: nil` built an `%Instrument{}` whose typespec says `symbol: String.t()`
+      # can never be `nil`, with no check anywhere catching it.
+      assert_raise ArgumentError, fn ->
+        Instrument.new(symbol: nil, base: "BTC", quote: "USD")
+      end
+    end
   end
 
   describe "instrument_from/1 — an unrecognised type must be visible" do
