@@ -60,6 +60,32 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   nothing was ever started, checks source-derived fact rather than simulated behaviour, and
   cannot dial out because nothing here ever runs.
 
+  ### One half of that reasoning expired the same day it was written
+
+  The network-call objection was true of `dp_exchange_schwab`, whose `Feed.init/1` returned
+  `{:ok, state, {:continue, :connect}}` and dialled the Streamer before anything had
+  subscribed. **That was itself a boundary violation** — the family's rule is that a
+  consumer who has not asked for a venue must not find a socket open — and it was fixed
+  hours later, in `dp_exchange_schwab` `9973c0d`. All five venues now defer every dial to
+  `subscribe/2` or a first tick, so starting a tree touches no network.
+
+  The *second* objection stands unchanged: there is still no contract-sanctioned way to
+  locate "the feed" generically. `Core.FeedBehaviour` has zero adopters, and walking
+  `child_spec/1`'s tree finds every long-lived child rather than the one this invariant is
+  about. So a behavioural check is now **possible but still not clean**, and it is recorded
+  here rather than built, so the next person weighing it starts from what is actually true.
+
+  ### What a static check cannot see, stated so nobody over-trusts it
+
+  This proves the guard is *present*, not that a crash is *isolated*. A module can trap
+  exits and still handle the resulting `{:EXIT, _, _}` wrongly. That is not hypothetical:
+  `dp_exchange_webull` already had `trap_exit` and per-shard isolation on 2026-09-07 and
+  **still** left `coverage/1` reporting a crashed shard's symbols as `:stream` — a real
+  defect this assertion would have passed. Whether coverage tells the truth after a child
+  dies is a per-venue invariant Core cannot express, because Core does not know which
+  symbols a given child carried. It belongs in each venue's own suite, and every venue has
+  such a test as of that date.
+
   ## What it checks
 
   For every module compiled from this package's own `lib/` that declares one of
