@@ -282,8 +282,15 @@ defmodule DpExchange.Core.PollingFeedTest do
            symbols: ~w(BTC-USD)}
         )
 
+      # Asserted on the resolved state rather than by waiting for a fetch to arrive.
+      # "Falls back to the default" IS a statement about the resolved value, so checking it
+      # directly says exactly that; waiting 8s for the delay to elapse only says it eventually
+      # fetched, and infers the rest. It also cost 8 of this suite's 12.4 seconds — a single
+      # test, and the kind of wall-clock wait that produced three CI-only flakes in this
+      # family this week. `nothing is fetched during the start delay` above still proves the
+      # delay is honoured behaviourally, on a 300ms delay it sets itself.
       assert Process.alive?(pid)
-      assert_receive {:published, _event}, 9_000
+      assert :sys.get_state(pid).start_delay_ms == 8_000
     end
   end
 
