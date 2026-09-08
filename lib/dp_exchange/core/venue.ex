@@ -685,7 +685,17 @@ defmodule DpExchange.Core.Venue do
   @doc "Accounts visible to the credential."
   @callback get_accounts(credentials(), keyword()) :: result([map()])
 
-  @doc "The fee schedule that applies to this credential."
+  @doc """
+  The fee schedule that applies to this credential.
+
+  `credentials()` is required by this callback's own shape, but not every venue's fee
+  schedule actually varies by credential — some venues publish one flat rate for
+  everyone, and answering it costs no venue call at all. Where that is true,
+  `AdapterContract`'s assertion 17 (the credential gate) is satisfied by declaring the
+  endpoint in `Capabilities.no_venue_contact` rather than by refusing without a
+  credential this callback has nothing to check: see that field's own moduledoc, and
+  `dp_exchange_webull`'s `get_fees/2` for the venue this was found on.
+  """
   @callback get_fees(credentials(), keyword()) :: result(map())
 
   @doc "Deposit and withdrawal history — needed to compute cost basis for transferred-in assets."

@@ -368,6 +368,45 @@ an acceptable changelog line.
   `DpExchange.Core.Venue`'s `market_status/1` doc and `usage-rules/adapter.md`'s
   assertion 17 section both updated to state the resolution and its reasoning.
 
+- **A second assertion 17 finding, this one a false positive that drove a wrong fix
+  downstream: `dp_exchange_webull`'s `get_fees/2` legitimately answers `{:ok, _}` with
+  credentials stripped, because it makes no venue call at all — it returns a flat
+  crypto spread rate captured from the venue's own published pricing
+  (`source: :published_rate`).** Neither exemption above covers it: it is not a
+  `test_connection/2`-style reachability check (name-based), and it is not exempt by
+  asset class (`market_status_crypto_exempt?/2`'s ground) — Webull is not crypto-only.
+  Assertion 17's then-unqualified rule flagged it anyway, and a 2026-09-06 sweep on
+  `dp_exchange_webull` "fixed" the finding by gating `get_fees/2` behind a credential
+  it never used, reasoning that the real path "had never run through `Auth.headers/2`"
+  — true, and the reason there was nothing to gate. That broke a real consumer who
+  resolves venue fees to score candidate strategy genomes before any account is
+  attached, no credential existing at that point by design: an assertion driving a
+  wrong fix is worse than no assertion.
+
+  **`Capabilities` gains `no_venue_contact`, a list of `{name, arity}` a venue declares
+  when a specific active endpoint's real implementation never builds a request to the
+  venue** — the same per-endpoint shape `endpoints` already uses, so it cannot rot into
+  one more hand-maintained name list the way `@credentialed` did. `no_venue_contact?/2`
+  reads it; assertion 17 now also skips an endpoint declared there. This is narrower
+  than `credential_benefit`, which is a claim about the venue in general — declaring an
+  endpoint here is a claim the venue package must be able to point at real code to back,
+  and a wrong declaration defeats the same protection a wrong `credential_benefit`
+  would. Full argument in `Capabilities`'s own moduledoc and `AdapterContract`'s "17.
+  credential gate" comment.
+
+  **Verified against all five venue packages**, each pointed at this Core checkout with
+  a temporary `path:` dependency, `mix test` run, then reverted before anything was
+  committed: `dp_exchange_coinbase`, `dp_exchange_gemini`, `dp_exchange_robinhood` and
+  `dp_exchange_schwab` are unaffected (none declares `no_venue_contact` and assertion 17
+  behaves exactly as before). `dp_exchange_webull` needs its own fix — `get_fees/2`
+  ungated on both `Rest` and `Fake`, and `{:get_fees, 2}` added to its
+  `no_venue_contact` declaration — landed in that package's own repo.
+
+  Teeth tests added to `contract_teeth_test.exs` pinning both directions with fixture
+  venues: a `:required` venue whose endpoint is declared in `no_venue_contact` and
+  answers unconditionally must NOT be flagged, and the identical fixture with the
+  endpoint undeclared must be.
+
 - **`PollingFeed`'s own test suite no longer sleeps a guessed duration to synchronise on
   a timer-driven poll cycle.** Ten `Process.sleep/1` calls used purely as a wait-then-
   assert device are replaced with `assert_receive` on a message the module already sends

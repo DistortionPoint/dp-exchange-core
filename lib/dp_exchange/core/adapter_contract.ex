@@ -983,6 +983,32 @@ defmodule DpExchange.Core.AdapterContract do
           # assumed silently, and recorded here for the same reason the two-name
           # exemption above is recorded here rather than in a venue's own test file. See
           # `usage-rules/adapter.md` for the consumer-facing version of this argument.
+          #
+          # ## `get_fees/2`, and `Capabilities.no_venue_contact` (2026-09-07)
+          #
+          # `market_status_crypto_exempt?/2` above is grounded in a per-VENUE fact (the
+          # asset class serves no session for a credential to gate). This one is
+          # grounded in a per-ENDPOINT fact that no asset-class or venue-identity
+          # predicate can express: `dp_exchange_webull`'s `get_fees/2` answers a flat
+          # crypto spread captured from the venue's own published pricing
+          # (`source: :published_rate`) and builds no request at all, on a venue that
+          # otherwise correctly requires credentials for everything else. A
+          # 2026-09-06 sweep gated it anyway to satisfy this assertion in its
+          # then-unqualified form, reasoning that the real path "had never run through
+          # `Auth.headers/2`" — true, and the reason there was nothing to gate. That
+          # broke a real consumer who resolves fees before any account is attached.
+          #
+          # Rather than a THIRD name-based or venue-based exemption growing here, the
+          # venue itself now declares this: `Capabilities.no_venue_contact` is a list
+          # of `{name, arity}` an active endpoint may appear in when its real
+          # implementation, on that venue, never builds a request — the same
+          # per-endpoint shape `endpoints` already uses, so it cannot rot into a single
+          # hand-maintained list the way `@credentialed` did. Declaring an endpoint
+          # there is a claim the venue package must be able to point at real code to
+          # back — see `Capabilities`'s own moduledoc for what belongs there and what
+          # does not. This assertion trusts the declaration; it is the venue's
+          # moduledoc and code review that keep it honest, the same trust this suite
+          # already places in `credential_benefit` itself.
           caps = @venue.capabilities()
 
           if caps.credential_benefit == :required do
@@ -995,6 +1021,7 @@ defmodule DpExchange.Core.AdapterContract do
                 answerable?({name, arity}),
                 credential_gated?(name),
                 not market_status_crypto_exempt?(name, @venue),
+                not Capabilities.no_venue_contact?(caps, {name, arity}),
                 Capabilities.active?(caps, {name, arity}) do
               args = stripped_credential_args(name, arity)
 

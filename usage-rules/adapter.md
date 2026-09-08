@@ -394,6 +394,21 @@ Two things it deliberately does **not** do:
 
   See `DpExchange.Core.Venue`'s own `market_status/1` doc and `AdapterContract`'s "17.
   credential gate" comment for the full argument.
+
+  `dp_exchange_webull`'s `get_fees/2` is a second, later case, and it needed a third
+  mechanism rather than reusing either of the first two: it is not exempt by name (a
+  `:credentialed`-style list, correctly retired for rotting), and it is not exempt by
+  asset class (`get_fees/2` answers a flat crypto spread even though this venue is not
+  crypto-only, so `market_status_crypto_exempt?/2`'s ground does not apply). What
+  actually distinguishes it is a fact about the ENDPOINT, not the venue: it answers a
+  rate captured from Webull's own published pricing and never builds a request, so no
+  credential could change what it returns. `Capabilities.no_venue_contact` names that
+  fact directly — a list of `{name, arity}` your `capabilities/0` declares, the same
+  per-endpoint shape `endpoints` already uses, so it cannot rot into one more
+  hand-maintained name list. Declare an endpoint there only when you can point at its
+  real implementation and show the absence of any request-building call; assertion 17
+  trusts the declaration, so a wrong one defeats the same protection a wrong
+  `credential_benefit` would. See `Capabilities`'s own moduledoc for the full argument.
 - It does **not** assert that your fake's refusal has the same *shape* as your real
   venue's (`{:error, {:missing_credentials, :your_venue}}` vs whatever your fake
   returns) — only that it is not `{:ok, _}`. Matching shapes would need to call the real

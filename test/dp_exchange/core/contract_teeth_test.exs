@@ -256,6 +256,44 @@ defmodule Broken.CredentialGate.MixedAssetMarketStatus do
   def market_status(_opts), do: {:ok, :open}
 end
 
+defmodule Broken.CredentialGate.NoVenueContactFees do
+  @moduledoc false
+  # A `:required` venue whose `get_fees/2` answers a captured published rate and never
+  # builds a request — `dp_exchange_webull`'s real shape. Declared in
+  # `no_venue_contact`, so the gate must not flag it even though this venue is not
+  # crypto-only and `get_fees/2` is not one of the two name-based exemptions either.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:get_fees, 2} => :proven},
+      no_venue_contact: [{:get_fees, 2}],
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec get_fees(map(), keyword()) :: term()
+  def get_fees(_credentials, _opts), do: {:ok, %{crypto_spread_pct: Decimal.new("1.00")}}
+end
+
+defmodule Broken.CredentialGate.UndeclaredNoVenueContactFees do
+  @moduledoc false
+  # The identical fixture, minus the `no_venue_contact` declaration — this is the
+  # 2026-09-06 shape found on `dp_exchange_webull` before the fix: nothing declares the
+  # endpoint credential-free, so the gate must still catch it.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:get_fees, 2} => :proven},
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec get_fees(map(), keyword()) :: term()
+  def get_fees(_credentials, _opts), do: {:ok, %{crypto_spread_pct: Decimal.new("1.00")}}
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -633,6 +671,36 @@ defmodule DpExchange.Core.ContractTeethTest do
              "this fixture answers :ok with stripped credentials on purpose — a venue " <>
                "serving more than crypto is not exempt, so a real fake shaped this way " <>
                "must be rejected the same as any other unchecked credentialed callback"
+    end
+
+    # `get_fees/2` is not a name-based exemption and not crypto-only-exempt — whether
+    # the gate reaches it depends on `Capabilities.no_venue_contact?/2`, exercised
+    # directly here the same way `AdapterContract` reads it.
+    test "get_fees/2 is exempt when declared in no_venue_contact" do
+      venue = Broken.CredentialGate.NoVenueContactFees
+      caps = venue.capabilities()
+
+      assert caps.credential_benefit == :required
+      assert Capabilities.no_venue_contact?(caps, {:get_fees, 2})
+
+      assert match?({:ok, _}, venue.get_fees(%{}, [])),
+             "an endpoint declared no_venue_contact answers a captured or locally " <>
+               "computed value with no credential by design — the gate must not flag " <>
+               "this callback here"
+    end
+
+    test "get_fees/2 is still reached by the gate when not declared in no_venue_contact" do
+      venue = Broken.CredentialGate.UndeclaredNoVenueContactFees
+      caps = venue.capabilities()
+
+      assert caps.credential_benefit == :required
+      refute Capabilities.no_venue_contact?(caps, {:get_fees, 2})
+
+      assert match?({:ok, _}, venue.get_fees(%{}, [])),
+             "this fixture answers :ok with stripped credentials on purpose — with no " <>
+               "no_venue_contact declaration this is exactly the 2026-09-06 " <>
+               "dp_exchange_webull defect, and a real fake shaped this way must still " <>
+               "be rejected"
     end
   end
 end

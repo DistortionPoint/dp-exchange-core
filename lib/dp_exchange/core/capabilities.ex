@@ -49,6 +49,38 @@ defmodule DpExchange.Core.Capabilities do
   The split is clean. **A venue declares what it *can* serve** — `supported_quotes`, and a
   `catalog_size` class so a consumer knows one venue lists thousands and another millions.
   **A consumer decides what it *will* collect.**
+
+  ## `no_venue_contact` is a refinement of Kind 1, not a fourth kind
+
+  `credential_benefit: :required` is a claim about the VENUE: no active endpoint is
+  served without a credential. It is a true claim about `dp_exchange_webull` and is also
+  a **wrong** predictor of `get_fees/2` there, which answers a flat crypto spread rate
+  captured from Webull's own published pricing (`source: :published_rate` in its result)
+  and never builds a request — no credential could change what it returns, because
+  nothing it returns comes from asking. `no_venue_contact` names that per-ENDPOINT fact
+  explicitly, so a consumer (and `AdapterContract`'s assertion 17) can tell "the venue
+  requires credentials in general" apart from "this specific endpoint has no venue call
+  for a credential to gate."
+
+  This was found the hard way: a 2026-09-06 sweep on `dp_exchange_webull` gated
+  `get_fees/2` behind a credential to satisfy assertion 17's (then-unqualified) rule,
+  reasoning that the real path "had never run through `Auth.headers/2`" — true, and the
+  reason there was nothing to gate, not a reason to add a gate. That broke a real
+  consumer who resolves fees before any account is attached, by design carrying no
+  credential at that point.
+
+  **What belongs here is narrow, and the field name says the test:** would this
+  endpoint's answer, on THIS venue, change if the venue itself were unreachable? An
+  endpoint that reads only compile-time constants or arguments already in hand belongs
+  here. An endpoint that reaches the venue via any transport — HTTP, WebSocket, a cached
+  response from one — does not, even if it currently succeeds without a credential for
+  an unrelated reason (a public endpoint on a `:no_difference` venue is not
+  `no_venue_contact`; it still dials out, credentials are just not what gates it).
+  Declaring an endpoint here that does contact the venue defeats assertion 17 exactly
+  the way the hand-maintained exemption list it replaced did, so a venue adding an entry
+  here should be able to point at the real implementation and show the absence of any
+  request-building call — the same standard `dp_exchange_webull`'s `get_fees/2` moduledoc
+  documents for itself.
   """
 
   alias DpExchange.Core.Timeframe
@@ -199,6 +231,12 @@ defmodule DpExchange.Core.Capabilities do
 
   @enforce_keys [:endpoints, :supported_quotes]
   defstruct endpoints: %{},
+            # Active endpoints that never build a request to the venue at all — they
+            # answer from data captured at build time (a published, hand-checked rate;
+            # a documented invariant like "this asset class has no trading session") or
+            # from purely local computation. See `no_venue_contact?/2` and the
+            # moduledoc section this belongs to.
+            no_venue_contact: [],
             supported_quotes: [],
             # --- Kind 2: domain -------------------------------------------------
             supported_order_types: [],
@@ -255,6 +293,7 @@ defmodule DpExchange.Core.Capabilities do
 
   @type t :: %__MODULE__{
           endpoints: %{optional({atom(), arity()}) => maturity()},
+          no_venue_contact: [{atom(), arity()}],
           supported_quotes: [String.t()],
           supported_order_types: [atom()],
           supported_time_in_force: [atom()],
@@ -398,6 +437,7 @@ defmodule DpExchange.Core.Capabilities do
     declaration = struct!(__MODULE__, fields)
 
     validate_endpoints!(declaration)
+    validate_no_venue_contact!(declaration)
     validate_vocabulary!(declaration)
     validate_history!(declaration)
     validate_streaming!(declaration)
@@ -450,6 +490,34 @@ defmodule DpExchange.Core.Capabilities do
     for {endpoint, ^maturity} <- endpoints, do: endpoint
   end
 
+  @doc """
+  Whether an endpoint is declared to make no venue call at all.
+
+  A narrower claim than `credential_benefit: :required`, which describes the venue in
+  general: this says one specific active endpoint answers from data already in hand — a
+  captured, published constant or a purely local computation — so it never dials out and
+  no credential could change what it returns. See the moduledoc's `no_venue_contact`
+  section for what belongs here and what does not.
+
+  `AdapterContract`'s assertion 17 reads this to know which active endpoints on a
+  `credential_benefit: :required` venue may legitimately answer `{:ok, _}` with
+  credentials stripped.
+
+  ## Examples
+
+      iex> caps = DpExchange.Core.Capabilities.new(
+      ...>   endpoints: %{{:get_fees, 2} => :experimental},
+      ...>   no_venue_contact: [{:get_fees, 2}],
+      ...>   supported_quotes: []
+      ...> )
+      iex> DpExchange.Core.Capabilities.no_venue_contact?(caps, {:get_fees, 2})
+      true
+      iex> DpExchange.Core.Capabilities.no_venue_contact?(caps, {:get_price, 2})
+      false
+  """
+  @spec no_venue_contact?(t(), {atom(), arity()}) :: boolean()
+  def no_venue_contact?(%__MODULE__{no_venue_contact: list}, endpoint), do: endpoint in list
+
   @doc "The maturity vocabulary."
   @spec maturities() :: [maturity()]
   def maturities, do: @maturities
@@ -480,6 +548,29 @@ defmodule DpExchange.Core.Capabilities do
 
   defp validate_endpoints!(%__MODULE__{endpoints: other}) do
     raise ArgumentError, "endpoints must be a map, got #{inspect(other)}"
+  end
+
+  defp validate_no_venue_contact!(%__MODULE__{no_venue_contact: list} = declaration)
+       when is_list(list) do
+    for endpoint <- list do
+      unless match?({name, arity} when is_atom(name) and is_integer(arity), endpoint) do
+        raise ArgumentError,
+              "no_venue_contact entries must be {function, arity}, got #{inspect(endpoint)}"
+      end
+
+      if Map.get(declaration.endpoints, endpoint) == :unsupported do
+        raise ArgumentError,
+              "#{inspect(endpoint)} is in no_venue_contact but declared :unsupported in " <>
+                "endpoints — an endpoint the venue does not answer at all cannot also " <>
+                "claim to answer without contacting the venue"
+      end
+    end
+
+    :ok
+  end
+
+  defp validate_no_venue_contact!(%__MODULE__{no_venue_contact: other}) do
+    raise ArgumentError, "no_venue_contact must be a list, got #{inspect(other)}"
   end
 
   defp validate_vocabulary!(declaration) do
