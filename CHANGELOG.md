@@ -329,6 +329,45 @@ an acceptable changelog line.
   `usage-rules/adapter.md`'s assertion 17 section rewritten to describe the widened rule
   and both exemptions by name.
 
+- **The `market_status/1` finding left open by the widening above is resolved — not by
+  adding it to `@credential_gate_exempt`.** `dp_exchange_schwab`'s real `market_status/1`
+  calls an authenticated `/markets` endpoint and its fake correctly refuses without a
+  credential; a name-based exemption (the same mechanism `test_connection/2` and
+  `get_rate_limit_status/2` use) would have silenced that protection to accommodate two
+  venues where the callback currently answers without ever touching one — the exact
+  "decorative check" this suite exists to avoid.
+
+  Added a second, narrower exemption instead, scoped to what `market_status/1`'s own
+  callback doc actually claims ("crypto venues answer `:open`"): the credential gate now
+  also skips this one callback when `@venue.asset_classes() == [:crypto]`. Crypto has no
+  exchange-mandated trading session for a credential to gate, so the claim is true of the
+  asset class, not fetched from the venue — a fact no credential can change. A venue
+  serving anything else stays gated on `market_status/1` exactly as before.
+
+  **Verified against the same three `:required` venues** that exercised the widening,
+  pointed at this Core checkout with a temporary `path:` dependency, `mix test` run, then
+  reverted before anything was committed:
+
+    * `dp_exchange_schwab` — unaffected; `asset_classes/0` is not `[:crypto]`, so
+      `market_status/1` is checked exactly as before, and its fake already passes.
+    * `dp_exchange_robinhood` — now passes without any code change on its side: its
+      `asset_classes/0` is `[:crypto]`, so the new exemption reaches its unconditional
+      `{:ok, :open}` and the finding closes. Its own repo still records a stated reason
+      for that answer, per its own review.
+    * `dp_exchange_webull` — still fails, correctly: `asset_classes/0` is `[:crypto,
+      :equity, :option, :future, :event_contract]`, not `[:crypto]`, so the new exemption
+      does not reach it and `market_status/1` remains gated. Resolved in that package's
+      own repo by declaring the endpoint `:unsupported` — its OpenAPI documents no
+      market-status or trading-calendar call, and the one such endpoint Webull publishes
+      anywhere belongs to a separate Broker API product this package cannot reach.
+
+  A teeth test added to `contract_teeth_test.exs` pins both directions with fixture
+  venues: a crypto-only `:required` venue answering `market_status/1` unconditionally
+  must NOT be flagged, and the identical fixture serving one more asset class must be.
+
+  `DpExchange.Core.Venue`'s `market_status/1` doc and `usage-rules/adapter.md`'s
+  assertion 17 section both updated to state the resolution and its reasoning.
+
 - **`PollingFeed`'s own test suite no longer sleeps a guessed duration to synchronise on
   a timer-driven poll cycle.** Ten `Process.sleep/1` calls used purely as a wait-then-
   assert device are replaced with `assert_receive` on a message the module already sends

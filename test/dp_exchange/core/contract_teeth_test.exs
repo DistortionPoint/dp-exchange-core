@@ -210,6 +210,52 @@ defmodule Broken.CredentialGate.Conforming do
   def test_connection(_credentials, _opts), do: {:ok, %{reachable: true}}
 end
 
+defmodule Broken.CredentialGate.CryptoOnlyMarketStatus do
+  @moduledoc false
+  # A crypto-only `:required` venue. `market_status/1` answers `:open` unconditionally
+  # and never touches a credential — `Core.Venue`'s own doc says crypto venues answer
+  # `:open`, and this venue's `asset_classes/0` being exactly `[:crypto]` is what lets
+  # the credential gate skip this one callback (`market_status_crypto_exempt?/2` in
+  # `AdapterContract`). This is `dp_exchange_robinhood`'s real shape.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:market_status, 1} => :proven},
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec asset_classes() :: [atom()]
+  def asset_classes, do: [:crypto]
+
+  @spec market_status(keyword()) :: term()
+  def market_status(_opts), do: {:ok, :open}
+end
+
+defmodule Broken.CredentialGate.MixedAssetMarketStatus do
+  @moduledoc false
+  # Same declaration, but this venue also serves equities — `dp_exchange_schwab`'s real
+  # shape, where `market_status/1` calls an authenticated `/markets` endpoint. Here the
+  # callback is written the naive way, answering `:open` unconditionally with no
+  # credential check at all, which must still be CAUGHT: a venue that is not crypto-only
+  # can have real, authenticated market hours, so the exemption above must not reach it.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:market_status, 1} => :proven},
+      supported_quotes: ~w(USD),
+      credential_benefit: :required
+    )
+  end
+
+  @spec asset_classes() :: [atom()]
+  def asset_classes, do: [:crypto, :equity]
+
+  @spec market_status(keyword()) :: term()
+  def market_status(_opts), do: {:ok, :open}
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -558,6 +604,35 @@ defmodule DpExchange.Core.ContractTeethTest do
                {:ok, _},
                Broken.CredentialGate.Conforming.test_connection(nil, [])
              )
+    end
+
+    # `market_status/1` is not in `@credential_gated` above (it takes no positional
+    # credential at all) and is not a name-based exemption either — whether the gate
+    # reaches it depends on `asset_classes/0`, replicated directly here the same way
+    # `market_status_crypto_exempt?/2` computes it in `AdapterContract`.
+    test "market_status/1 is exempt on a crypto-only :required venue" do
+      venue = Broken.CredentialGate.CryptoOnlyMarketStatus
+      caps = venue.capabilities()
+
+      assert caps.credential_benefit == :required
+      assert venue.asset_classes() == [:crypto]
+
+      assert match?({:ok, _}, venue.market_status(credentials: %{})),
+             "a crypto-only venue answers :open with no credential by design — the " <>
+               "gate must not flag this callback here"
+    end
+
+    test "market_status/1 is still reached by the gate on a venue that is not crypto-only" do
+      venue = Broken.CredentialGate.MixedAssetMarketStatus
+      caps = venue.capabilities()
+
+      assert caps.credential_benefit == :required
+      assert venue.asset_classes() != [:crypto]
+
+      assert match?({:ok, _}, venue.market_status(credentials: %{})),
+             "this fixture answers :ok with stripped credentials on purpose — a venue " <>
+               "serving more than crypto is not exempt, so a real fake shaped this way " <>
+               "must be rejected the same as any other unchecked credentialed callback"
     end
   end
 end

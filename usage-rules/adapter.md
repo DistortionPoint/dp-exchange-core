@@ -364,11 +364,36 @@ Two things it deliberately does **not** do:
   never calls the venue at all, for instance), this assertion will fail on it, and that
   failure is the finding: either your `credential_benefit: :required` declaration
   overstates your venue, or that endpoint's exemption belongs argued in your own
-  package's review, not assumed silently. `dp_exchange_webull` and
-  `dp_exchange_robinhood`'s `market_status/1` are exactly this case as of the widening
-  above — both answer `{:ok, :open}` unconditionally because each is a crypto-only venue
-  whose facade never calls out for a market-hours fact at all — and neither has been
-  resolved in Core; it is an open finding in each venue's own repo.
+  package's review, not assumed silently.
+
+  `dp_exchange_webull` and `dp_exchange_robinhood`'s `market_status/1` were exactly this
+  case as of the widening above, and both are now resolved — differently, because the
+  two venues turned out not to share a reason:
+
+    * **`market_status/1` is not exempt by name**, the way the two callbacks above are.
+      Its own callback doc makes an unconditional claim — "crypto venues answer `:open`"
+      — but `dp_exchange_schwab` serves equities and its real `market_status/1` calls an
+      authenticated `/markets` endpoint; its fake correctly refuses without a credential,
+      and a name-based exemption would have silenced that protection on the one venue
+      where this assertion is doing real work, purely to accommodate two venues where it
+      currently is not.
+    * Instead there is a second, narrower exemption, scoped by what the doc's claim is
+      actually about: skipped only when your venue's own `asset_classes/0` is exactly
+      `[:crypto]`. Crypto has no exchange-mandated trading session for a credential to
+      gate, so `dp_exchange_robinhood` (crypto-only) is exempt on that ground — its
+      `{:ok, :open}` with no credential is the documented behaviour for a crypto-only
+      venue, argued in its own review and recorded in `AdapterContract`'s "17. credential
+      gate" comment rather than assumed silently.
+    * `dp_exchange_webull` is not crypto-only (`asset_classes/0` is `[:crypto, :equity,
+      :option, :future, :event_contract]`), so it does not qualify and stays fully
+      gated. It satisfies the gate by declaring `market_status/1` `:unsupported`
+      (`{:error, :not_supported}`) instead: its OpenAPI documents no market-status or
+      trading-calendar endpoint at all — the one such endpoint Webull publishes anywhere
+      belongs to a separate Broker API product on a different host, reachable only with a
+      broker-tier credential this contract's `credentials()` does not model.
+
+  See `DpExchange.Core.Venue`'s own `market_status/1` doc and `AdapterContract`'s "17.
+  credential gate" comment for the full argument.
 - It does **not** assert that your fake's refusal has the same *shape* as your real
   venue's (`{:error, {:missing_credentials, :your_venue}}` vs whatever your fake
   returns) — only that it is not `{:ok, _}`. Matching shapes would need to call the real

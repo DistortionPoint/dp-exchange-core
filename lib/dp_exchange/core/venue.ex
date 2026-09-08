@@ -953,6 +953,18 @@ defmodule DpExchange.Core.Venue do
   this an equities package alarms every night and every weekend — and a real outage becomes
   indistinguishable from Saturday. The venue is the only thing that knows its own calendar;
   the *policy* — whether to trade in extended hours — stays with the consumer.
+
+  ## "Crypto venues answer `:open`" is not a credential exemption by itself
+
+  `AdapterContract`'s assertion 17 (the credential gate) skips a `:required` venue's
+  `market_status/1` **only when that venue's own `asset_classes/0` is exactly
+  `[:crypto]`** — crypto has no exchange-mandated trading session, so no credential can
+  change what this call reports. That is narrower than it may look: `dp_exchange_schwab`
+  serves equities and its real `market_status/1` calls an authenticated venue endpoint,
+  so a venue that is not crypto-only stays gated and must either authenticate this call
+  for real or declare it `:unsupported` — see "17. credential gate" in
+  `DpExchange.Core.AdapterContract` for the full argument and why this is scoped to
+  `asset_classes/0` rather than to the callback's name.
   """
   @callback market_status(keyword()) :: result(market_status())
 

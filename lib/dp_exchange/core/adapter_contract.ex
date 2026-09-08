@@ -945,15 +945,44 @@ defmodule DpExchange.Core.AdapterContract do
           # assertion trivially, so including them costs nothing and excluding them by
           # hand would only be one more list to keep in sync.
           #
-          # This does NOT special-case a callback that happens to make no venue call at
-          # all on some venue — Webull's and Robinhood's `market_status/1` answers
-          # `{:ok, :open}` unconditionally for a crypto-only venue and will fail this
-          # widened check. That is a real finding, not a bug in the assertion: it is
-          # true today that those two fakes answer without a credential on a `:required`
-          # venue, and whether that is "genuinely public" (a documented per-asset-class
-          # fact, never fetched from the venue) or a `credential_benefit` that should
-          # exempt it explicitly is a per-venue call this suite does not make for you —
-          # see `usage-rules/adapter.md`.
+          # ## `market_status/1`, resolved (2026-09-07)
+          #
+          # This callback's own doc makes one unconditional claim: "crypto venues answer
+          # `:open`." That is NOT a licence to exempt `market_status/1` by name the way
+          # `test_connection/2` and `get_rate_limit_status/2` are exempt above —
+          # `dp_exchange_schwab`'s real `market_status/1` calls an authenticated
+          # `/markets` endpoint, and its fake correctly refuses without a credential. A
+          # name-based exemption would silence that protection for the one venue where
+          # this assertion is doing real work today, purely to accommodate two venues
+          # where it currently is not — exactly the "decorative check" this suite exists
+          # to avoid.
+          #
+          # What actually distinguishes Webull's and Robinhood's `market_status/1` from
+          # Schwab's is not the callback name, it is each venue's `asset_classes/0`. A
+          # venue whose entire surface is `[:crypto]` has no exchange-mandated trading
+          # session for a credential to gate — "crypto trades continuously" is true of
+          # the ASSET CLASS, not a fact fetched from the venue, so no credential can
+          # change it. A venue serving anything else can have real, authenticated market
+          # hours (Schwab does) or, like Webull, publish nothing this package can reach
+          # at all: Webull's OpenAPI documents 85 endpoints and none of them is a
+          # market-status or trading-calendar call (`docs/reference/webull/` in that
+          # package); the one trading-calendar endpoint Webull publishes anywhere,
+          # `/broker/master-data/trading-calendars/list`, belongs to its separate Broker
+          # API product on a different host (`broker-api.webull.com`) needing its own
+          # broker-tier credential this contract's `credentials()` does not model — out
+          # of reach regardless of what any caller supplies.
+          #
+          # `market_status_crypto_exempt?/2` (`credential_gate_helpers/0`) is that
+          # narrower exemption, skipped only when `@venue.asset_classes() == [:crypto]`.
+          # Webull serves five asset classes and does not qualify — its `market_status/1`
+          # is checked like any other endpoint, and it satisfies the check by declaring
+          # itself `:unsupported` (`{:error, :not_supported}`), the honest answer for a
+          # venue this package cannot reach a usable endpoint on. Robinhood is
+          # crypto-only and does qualify, so its `{:ok, :open}` with no credential is
+          # exempt on that ground alone — argued in its own package's review rather than
+          # assumed silently, and recorded here for the same reason the two-name
+          # exemption above is recorded here rather than in a venue's own test file. See
+          # `usage-rules/adapter.md` for the consumer-facing version of this argument.
           caps = @venue.capabilities()
 
           if caps.credential_benefit == :required do
@@ -965,6 +994,7 @@ defmodule DpExchange.Core.AdapterContract do
             for {name, arity} <- Venue.behaviour_info(:callbacks),
                 answerable?({name, arity}),
                 credential_gated?(name),
+                not market_status_crypto_exempt?(name, @venue),
                 Capabilities.active?(caps, {name, arity}) do
               args = stripped_credential_args(name, arity)
 
@@ -1111,6 +1141,21 @@ defmodule DpExchange.Core.AdapterContract do
       @credential_gate_exempt ~w(test_connection get_rate_limit_status)a
 
       defp credential_gated?(name), do: name not in @credential_gate_exempt
+
+      # `market_status/1`'s own doc makes an unconditional claim for exactly one class of
+      # venue — "crypto venues answer `:open`" — because crypto has no exchange-mandated
+      # trading session for a credential to gate. That is a different claim from
+      # `test_connection/2`/`get_rate_limit_status/2`'s `credentials() | nil` typing, so
+      # it is not folded into `@credential_gate_exempt` above: `dp_exchange_schwab`'s
+      # real `market_status/1` is itself authenticated, and a name-based exemption would
+      # silence assertion 17's protection there to accommodate venues where this callback
+      # never touches the venue at all. Scoped instead to exactly the venues the doc's
+      # claim is actually about — see "17. credential gate"'s own comment for the full
+      # argument.
+      defp market_status_crypto_exempt?(:market_status, venue),
+        do: venue.asset_classes() == [:crypto]
+
+      defp market_status_crypto_exempt?(_name, _venue), do: false
 
       # The same shape `endpoint_args/2` builds, with every credential position
       # emptied — positional where the venue's arg shape carries one (`@credentialed`,
