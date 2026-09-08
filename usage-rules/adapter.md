@@ -570,3 +570,59 @@ Two patterns produced most of them:
 - **A derived artefact read instead of the vendor.** A claim originating in the host
   application's own adapter, or in a third-party wrapper's README, carried forward until
   somebody read the vendor's pages.
+
+## Dependency floors are a claim exactly like a capability
+
+A `~> X.Y` requirement is a claim, in public, that your package runs against **every**
+version from `X.Y.0` up. `mix.lock` never tests that claim — it always resolves the
+newest version the requirement allows, so a floor that is actually too low compiles and
+passes every ordinary CI run. Only a consumer who resolves an older, still-permitted
+version finds out, and finds out as a crash in their application, not a failure in yours.
+
+**Four real instances, found in one week, all the same shape:**
+
+- `dp_exchange_webull` declared `{:websockex, "~> 0.4"}` while calling
+  `WebSockex.send_frame/3`, which exists only from 0.5.1. A consumer who resolved 0.4.x
+  got `:undef`.
+- `dp_exchange_webull` declared `{:dp_exchange_core, "~> 0.1.48"}` while `capabilities/0`
+  declares `no_venue_contact`, a `Capabilities` field added in Core 0.1.68.
+  `Capabilities.new/1` builds with `struct!/2`, so an older Core raised `KeyError` on
+  **every** `capabilities/0` call — not on the one path that changed, on the one every
+  consumer calls first, at boot.
+- `dp_exchange_gemini` declared `~> 0.1.48` while calling `Types.OrderBookDelta.new/1`,
+  added in Core 0.1.53.
+- **The first fix for the webull/websockex instance was itself wrong.** It raised the
+  floor to `~> 0.5`, reasoning that the third `send_frame` argument "only exists from
+  0.5". `~> 0.5` still permits `0.5.0`, and `send_frame/3` is new in `0.5.1` — one patch
+  later. The corrected floor was reasoned about, not resolved, and reasoning about a
+  floor is exactly the failure mode this whole section is about. It was only caught
+  because `script/check_dependency_floor.sh` (below) resolved it for real the same day.
+
+**A per-API pinning test — `function_exported?/3` after `Code.ensure_loaded!/1`, or a
+struct-field check — guards a floor against being lowered later. It cannot catch a floor
+that was wrong when it was written**, because a test like that has no way to know what
+"new" means; it only knows what the author already thought to check. Every instance above
+shipped with its code passing whatever tests already existed.
+
+**The fix is to resolve the floor, not read it.** `script/check_dependency_floor.sh`
+rewrites a scratch copy's `mix.exs`, pinning every dependency declared *without* `only:`
+(the ones a consumer actually resolves — never `credo`, `ex_doc`, or anything else that
+ships only to `:dev`/`:test`) to `==` the exact floor version its own requirement string
+names, then runs `mix compile --warnings-as-errors` plus the package's own
+`AdapterContract` conformance test against that pinned set. Compiling catches an
+undefined remote call (the websockex shape); the conformance test — which calls
+`capabilities/0` under a fully offline `Fake` — catches a struct or module the floor does
+not ship yet (the other two shapes). It runs weekly and on demand, deliberately not on
+every push: it freshly resolves the *transitive* dependencies of whatever it pins (Core's
+own `req`, for instance), which float to whatever is newest today and are not this
+package's claim to keep correct, so an unrelated package's release can turn this red for
+a reason that has nothing to do with your floor. See the script's own header for the full
+reasoning, including why a full `mix test` is deliberately not what it runs.
+
+**Raising `mix.lock` is never a substitute for raising the floor in `mix.exs`.** Every
+instance above passed CI because CI always resolves the newest allowed version — the bug
+was invisible from inside this repository by construction. If a change starts calling a
+Core function, uses a new `Types.*` module, or relies on any behaviour a dependency added
+after its floor's release, the floor in `mix.exs` goes up in the same commit, stated as a
+version and the reason, the way every floor comment in every venue's `mix.exs` already
+does. Do not wait for the weekly check to say so.

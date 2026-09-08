@@ -23,6 +23,36 @@ an acceptable changelog line.
 
 ### Added
 
+- **`usage-rules/adapter.md` gains a "Dependency floors are a claim exactly like a
+  capability" section, and every venue package gains
+  `script/check_dependency_floor.sh` plus a weekly `floor-check.yml` workflow.** Four
+  real instances of the same defect shipped in one week: a `mix.exs` `~>` requirement
+  that compiles and passes CI (which always resolves the *newest* allowed version) while
+  permitting an older, still-allowed version the code does not actually run against —
+  `dp_exchange_webull`/`websockex` (twice — the first correction, `~> 0.4` → `~> 0.5`,
+  was itself still wrong; `send_frame/3` needs `0.5.1`, not `0.5.0`),
+  `dp_exchange_webull`/`dp_exchange_core` (`no_venue_contact`, needs 0.1.68), and
+  `dp_exchange_gemini`/`dp_exchange_core` (`Types.OrderBookDelta`, needs 0.1.53). A
+  per-API pinning test guards a floor against being lowered again; it cannot catch a
+  floor that was wrong when written, because it only knows what its author already
+  thought to check. The script resolves every dependency a venue declares *without*
+  `only:` down to the exact floor its own requirement names, then runs
+  `mix compile --warnings-as-errors` plus the package's own `AdapterContract`
+  conformance test against that pinned set — deliberately not the full `mix test`
+  (`dp_exchange_coinbase`'s `feed_test.exs` was found, in the course of this work, to
+  depend on the real live venue — a separate, pre-existing issue, filed, not fixed, here)
+  and deliberately not extended to dev/test-only tooling (`credo` at its own declared
+  floor, `1.7.0`, does not compile under Elixir 1.18 at all — a bug in a years-old
+  release unrelated to this family, which would make the check permanently red for a
+  reason that has nothing to do with any package's floor). Runs weekly plus
+  `workflow_dispatch`, never on `push`/`pull_request` and never in `ci.yml`'s `publish`
+  job's `needs:` chain, because a fresh resolve floats each pinned dependency's own
+  *transitive* tree to whatever is newest on Hex today — a red run can be caused by an
+  unrelated package's release, not by this repository, and this family has already
+  relearned once that a check people learn to ignore is worse than none. Full writeup,
+  evidence and the decisions not taken (a frozen lockfile; a full test run) in
+  `docs/design/closed/2026-09-08_dependency-floor-check.md`.
+
 - **`AdapterContract` gains assertion 19, "credential redaction" — a struct defined in a
   package's own `lib/` holding a secret-named field must redact it under `inspect/1`.**
   Found live in four of five venue packages on 2026-09-07: `Feed`/`Socket` held
