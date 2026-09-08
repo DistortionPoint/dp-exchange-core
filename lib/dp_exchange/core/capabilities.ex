@@ -253,7 +253,8 @@ defmodule DpExchange.Core.Capabilities do
             # on-chain staking, where the venue hands back an unsigned transaction for the
             # caller to sign and broadcast. Those are different capabilities and one venue
             # publishes both, so a flag that meant "stakes, somehow" would be useless
-            # exactly where it matters.
+            # exactly where it matters. Must agree with the six staking endpoints — see
+            # `validate_staking!/1`.
             has_staking: false,
             # Which trading sessions an order may name. `[]` for a venue that trades
             # continuously — every crypto venue — and non-empty only where the market
@@ -280,6 +281,13 @@ defmodule DpExchange.Core.Capabilities do
             public_ceiling: nil,
             authenticated_ceiling: nil,
             max_candles_per_request: nil,
+            # Whether market-data payloads (candles, quotes) carry a real venue-reported
+            # volume figure. **Not** a claim about `{:get_trade_volume, 2}` — that
+            # endpoint is the CREDENTIAL's own aggregated volume, an unrelated question a
+            # venue can answer independently of whether its candles carry one. Confused
+            # for the other during a 2026-09-08 audit before being read correctly from
+            # `dp_exchange_webull`'s own moduledoc; recorded here so the next reader does
+            # not have to re-derive the distinction from a venue's source.
             reports_trade_volume: false,
             catalog_size: :unknown,
             # How the catalogue can be reached. `:enumerable` — `get_symbols/1` returns
@@ -445,6 +453,7 @@ defmodule DpExchange.Core.Capabilities do
     validate_margin!(declaration)
     validate_orders!(declaration)
     validate_catalog!(declaration)
+    validate_staking!(declaration)
 
     declaration
   end
@@ -654,6 +663,65 @@ defmodule DpExchange.Core.Capabilities do
 
     :ok
   end
+
+  # The six callbacks `has_staking`'s own moduledoc comment ties it to — custodial
+  # staking, the venue holding the asset and paying a rate. Not exported: this exists
+  # only so `validate_staking!/1` below can check it once, the same way `validate_orders!`
+  # above checks three fields against `place_order/3` rather than every venue
+  # reimplementing the cross-check by hand.
+  @staking_endpoints [
+    {:get_staking_rates, 1},
+    {:get_staking_balances, 1},
+    {:get_staking_rewards, 1},
+    {:get_staking_history, 1},
+    {:stake, 3},
+    {:unstake, 3}
+  ]
+
+  # `has_staking` is redundant with the six endpoints above BY CONSTRUCTION — it exists so
+  # a consumer can ask one boolean instead of six endpoint maturities — and a summary field
+  # that disagrees with what it summarises is worse than no field at all, because a caller
+  # reading only the summary acts on the wrong one.
+  #
+  # Found live on `dp_exchange_coinbase` during this audit: `has_staking` was never
+  # declared (defaulting to `false`) while `stake/3` and `unstake/3` are real, active
+  # calls against Coinbase Prime — a caller branching on `has_staking` alone would
+  # conclude the venue does not stake at all, the exact "under-declaring hides working
+  # functionality" failure `AdapterContract`'s assertion 12 exists to catch for every
+  # OTHER field this struct carries.
+  #
+  # Keyed on an EXPLICIT declaration in `endpoints`, the same way `validate_history!`
+  # below reads `claims_history?` — never through `active?/2`'s undeclared-is-experimental
+  # default. A staking endpoint simply absent from `endpoints` (as it is in most fixtures
+  # and tests that have nothing to do with staking) is silence, not a claim, and must not
+  # force every unrelated declaration in this family to enumerate six endpoints it has
+  # never touched.
+  defp validate_staking!(declaration) do
+    explicitly_active =
+      Enum.filter(@staking_endpoints, fn endpoint ->
+        Map.get(declaration.endpoints, endpoint) in [:proven, :experimental]
+      end)
+
+    cond do
+      explicitly_active != [] and not declaration.has_staking ->
+        raise ArgumentError,
+              "has_staking is false but #{inspect(explicitly_active)} #{plural(explicitly_active)} " <>
+                "declared active — a caller branching on has_staking alone would conclude " <>
+                "this venue does not stake at all"
+
+      declaration.has_staking and explicitly_active == [] ->
+        raise ArgumentError,
+              "has_staking is true but none of #{inspect(@staking_endpoints)} is declared " <>
+                "active — a caller believing it can query or move a staked position will " <>
+                "find every one of them refuses"
+
+      true ->
+        :ok
+    end
+  end
+
+  defp plural([_one]), do: "is"
+  defp plural(_many), do: "are"
 
   defp validate_history!(declaration) do
     # Keyed on an EXPLICIT declaration, not on `active?/2`. Undeclared endpoints default

@@ -472,6 +472,75 @@ defmodule DpExchange.Core.CapabilitiesTest do
     end
   end
 
+  describe "staking — has_staking must agree with the six staking endpoints" do
+    test "the default (no staking declared anywhere) is consistent" do
+      assert caps([]).has_staking == false
+    end
+
+    test "an explicitly active staking endpoint with has_staking: false is refused" do
+      # The exact shape found live on dp_exchange_coinbase during this audit: stake/3 and
+      # unstake/3 are real, active calls against Coinbase Prime, and has_staking was never
+      # declared — defaulting to false, and silently telling a caller the venue does not
+      # stake at all.
+      assert_raise ArgumentError, ~r/has_staking is false but.*declared active/, fn ->
+        caps(endpoints: %{{:stake, 3} => :experimental, {:unstake, 3} => :experimental})
+      end
+    end
+
+    test "the message is singular for exactly one active staking endpoint" do
+      assert_raise ArgumentError,
+                   ~r/has_staking is false but \[stake: 3\] is declared active/,
+                   fn ->
+                     caps(endpoints: %{{:stake, 3} => :proven})
+                   end
+    end
+
+    test "has_staking: true with no staking endpoint declared active is refused" do
+      assert_raise ArgumentError, ~r/has_staking is true but none of/, fn ->
+        caps(has_staking: true)
+      end
+    end
+
+    test "has_staking: true agrees when at least one staking endpoint is active" do
+      declaration =
+        caps(
+          has_staking: true,
+          endpoints: %{{:get_staking_rates, 1} => :proven}
+        )
+
+      assert declaration.has_staking
+    end
+
+    test "an endpoint absent from `endpoints` is silence, not a claim — unrelated " <>
+           "declarations are unaffected" do
+      # `caps([])` leaves every staking endpoint undeclared, which defaults to
+      # :experimental ("active") under Capabilities.active?/2 — and this validation must
+      # NOT read that default as a claim, or every fixture and test in this family that
+      # has nothing to do with staking would have to enumerate six endpoints it never
+      # touches.
+      declaration = caps(endpoints: %{{:get_price, 2} => :proven})
+
+      refute declaration.has_staking
+      assert Capabilities.active?(declaration, {:stake, 3})
+    end
+
+    test "declaring every staking endpoint :unsupported with has_staking: false agrees" do
+      declaration =
+        caps(
+          endpoints: %{
+            {:get_staking_rates, 1} => :unsupported,
+            {:get_staking_balances, 1} => :unsupported,
+            {:get_staking_rewards, 1} => :unsupported,
+            {:get_staking_history, 1} => :unsupported,
+            {:stake, 3} => :unsupported,
+            {:unstake, 3} => :unsupported
+          }
+        )
+
+      refute declaration.has_staking
+    end
+  end
+
   describe "provenance — declare what you measured" do
     test "a declaration can say when it was measured and against what" do
       # A capability declaration is a claim about a real venue. An unlabelled number is

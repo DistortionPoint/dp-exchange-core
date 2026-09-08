@@ -173,6 +173,9 @@ synthetic data. Every value stays plausible and only the meaning is wrong, which
 does not surface as a failure.
 
 If asked for a timeframe you do not serve, return an error. Do not serve the nearest width.
+`AdapterContract`'s assertion 21 checks this against your Fake: it picks a width from
+`Timeframe.nameable/0` your `capabilities().historical_timeframes` does not name and asks
+`get_historical_prices/4` for it, which must not answer `{:ok, _}`.
 
 ## Timestamps are the venue's own
 
@@ -528,6 +531,40 @@ whether assertion 19 currently has an opinion about your field names.
 If this fails, add `@derive {Inspect, except: [...]}` (or an equivalent hand-written
 `defimpl Inspect`) naming every secret field your struct holds, following the four
 commits above as the reference for the mechanism.
+
+## Assertion 20 — `subscribe/2` must push a `Core.Types.*` struct, tagged with `runtime_id/0`
+
+`c:DpExchange.Core.Venue.subscribe/2`'s own doc makes an unconditional claim: events arrive
+"tagged so a process subscribed to several venues can tell them apart," and "the payload is
+a `DpExchange.Core.Types.*` struct — the same value the pull endpoints return." Nothing
+checked either half before this assertion existed. Assertion 16 (internal wiring) catches a
+decoder with no caller, but a decoder that **is** wired and simply never gets called before
+the raw response reaches the sink passes every other assertion — the function that forwards
+it has a caller, and `subscribe/2` still answers `:ok`.
+
+Assertion 20 calls your Fake's `subscribe/2` with `@sample_pairs` and `to: self()`, and
+checks the first message that arrives: it must be `{:dp_exchange, runtime_id, payload}`
+where `runtime_id == your_venue.runtime_id()` and `payload` is a struct under
+`DpExchange.Core.Types`. Fake-only, like assertion 17 — every fake in this family pushes
+synchronously inside the call that returns `:ok`, so nothing here ever dials out.
+
+If this fails, make sure your `subscribe/2` builds the same `Types.*` struct your pull
+endpoint for the same data returns — never the venue's raw decoded JSON — and tags every
+send with `runtime_id()`, not a literal atom.
+
+## Assertion 21 — a timeframe outside `historical_timeframes` must be refused
+
+The behavioural half of "Fail closed; never substitute" above, run against your Fake.
+Assertion 21 picks a width from `Timeframe.nameable/0` that your own
+`capabilities().historical_timeframes` does not name, and calls `get_historical_prices/4`
+with it. The answer must not be `{:ok, _}` — your fake either errors on the unrecognised
+width or (if you gate on credentials first) refuses for that reason instead, either of
+which proves the width was never silently served at the nearest one you do have.
+
+A venue that declares the *entire* `Timeframe.nameable/0` vocabulary has nothing left for
+this assertion to pick, and the check is a no-op for it — it is not a way to avoid the
+check by declaring narrowly, since narrowing what you declare only gives the assertion more
+widths to try.
 
 ## Asset classes are a statement about today
 

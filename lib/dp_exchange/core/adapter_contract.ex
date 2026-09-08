@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Nineteen groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Twenty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -92,7 +92,13 @@ defmodule DpExchange.Core.AdapterContract do
       {19,
        "credential redaction — a struct holding a secret-named field redacts it under " <>
          "inspect/1, so a crash report or a failed function clause's stacktrace never " <>
-         "prints it in cleartext"}
+         "prints it in cleartext"},
+      {20,
+       "subscribed push shape — subscribe/2's fake delivers a DpExchange.Core.Types.* " <>
+         "struct tagged with runtime_id/0, never raw venue data"},
+      {21,
+       "historical timeframe discipline — a width outside historical_timeframes is " <>
+         "refused, never served at the nearest one"}
     ]
   end
 
@@ -113,6 +119,8 @@ defmodule DpExchange.Core.AdapterContract do
       link_safety(),
       credential_gate(),
       credential_redaction(),
+      subscribed_push_shape(),
+      historical_timeframe_discipline(),
       helpers(),
       arg_helpers(),
       credential_gate_helpers(),
@@ -1080,6 +1088,104 @@ defmodule DpExchange.Core.AdapterContract do
                    "inspect/1 — a crash report or a failed function clause's stacktrace " <>
                    "would print it too:\n" <>
                    DpExchange.Core.CredentialRedactionCheck.format(violations)
+        end
+      end
+    end
+  end
+
+  defp subscribed_push_shape do
+    quote location: :keep do
+      # --- 20. subscribed push shape -----------------------------------------
+
+      describe "20. subscribed push shape" do
+        test "subscribe/2 delivers a Core.Types.* struct, tagged with runtime_id/0" do
+          # `c:DpExchange.Core.Venue.subscribe/2`'s own doc makes an unconditional claim,
+          # never checked before this: "Events arrive as messages... tagged so a process
+          # subscribed to several venues can tell them apart" and "The payload is a
+          # DpExchange.Core.Types.* struct — the same value the pull endpoints return."
+          #
+          # Assertion 16 (internal wiring) catches a decoder with no caller, but a decoder
+          # that IS wired and hands the raw response straight to the sink — never building
+          # the struct the doc promises — passes every existing assertion: the function
+          # that forwards it has a caller, and `subscribe/2` answers `:ok` either way.
+          # This is that gap: a raw, undecoded payload forwarded to subscribers is a
+          # plausible value with the wrong shape, which is this family's own named
+          # recurring failure mode, applied to the one endpoint the pull-side checks never
+          # reach.
+          #
+          # Fake-only, like assertion 17: every fake in this family pushes synchronously,
+          # inside the call that returns `:ok`, so there is nothing to wait on and no
+          # network is ever dialled.
+          caps = @venue.capabilities()
+
+          if @fake && @sample_pairs != [] && Capabilities.active?(caps, {:subscribe, 2}) do
+            assert :ok = @fake.subscribe(@sample_pairs, to: self())
+
+            assert_receive {:dp_exchange, runtime_id, payload},
+                           500,
+                           "subscribe/2 returned :ok for #{inspect(@sample_pairs)} but " <>
+                             "delivered nothing — a caller has no way to tell that from " <>
+                             "a quiet market"
+
+            assert runtime_id == @venue.runtime_id(),
+                   "subscribe/2 tagged its message #{inspect(runtime_id)}, not " <>
+                     "#{inspect(@venue.runtime_id())} — a caller subscribed to several " <>
+                     "venues cannot tell them apart"
+
+            assert is_struct(payload) and
+                     payload.__struct__ |> Module.split() |> Enum.take(3) ==
+                       ~w(DpExchange Core Types),
+                   "subscribe/2 pushed #{inspect(payload)} — the facade's own contract " <>
+                     "is that the payload is a DpExchange.Core.Types.* struct, the same " <>
+                     "value the pull endpoints return, never raw venue data"
+          end
+        end
+      end
+    end
+  end
+
+  defp historical_timeframe_discipline do
+    quote location: :keep do
+      # --- 21. historical timeframe discipline --------------------------------
+
+      describe "21. historical timeframe discipline" do
+        test "a timeframe outside historical_timeframes is refused, never served at the " <>
+               "nearest width" do
+          # This family's own named recurring failure, verbatim from this package's
+          # CLAUDE.md: "a missing granularity becoming the closest one" — every value
+          # stays plausible and only the meaning is wrong, which is why it does not
+          # surface as a failure on its own. `get_historical_prices/4`'s own doc makes the
+          # identical claim ("The venue rejects a timeframe it does not serve rather than
+          # substituting the nearest one"), and nothing checked it before this.
+          #
+          # Fake-only: picks a width from the shared vocabulary the venue's OWN
+          # declaration does not name, and asks the fake for it. `Timeframe.nameable/0` is
+          # Core's vocabulary, not a per-venue list this assertion has to keep in sync.
+          caps = @venue.capabilities()
+
+          if @fake && Capabilities.active?(caps, {:get_historical_prices, 4}) do
+            case Timeframe.nameable() -- caps.historical_timeframes do
+              [] ->
+                # This venue declares the entire nameable vocabulary — there is no width
+                # left that would prove it refuses one.
+                :ok
+
+              [unserved | _rest] ->
+                refute match?(
+                         {:ok, _},
+                         call_on(@fake, {:get_historical_prices, 4}, [
+                           sample_symbol(),
+                           unserved,
+                           [],
+                           [credentials: @credentials]
+                         ])
+                       ),
+                       "get_historical_prices/4 answered {:ok, _} for #{inspect(unserved)}, " <>
+                         "a width capabilities().historical_timeframes does not name — a " <>
+                         "missing granularity becoming the closest one mislabels every " <>
+                         "candle it touches"
+            end
+          end
         end
       end
     end

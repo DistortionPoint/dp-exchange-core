@@ -23,6 +23,62 @@ an acceptable changelog line.
 
 ### Added
 
+- **A conformance-coverage audit — mapping every `Core.Venue` callback, `Capabilities`
+  field and `Notice` kind against the 19 existing assertion groups — closes three real
+  gaps: `Capabilities.new/1` gains a `has_staking`/staking-endpoint agreement check, and
+  `AdapterContract` gains assertion 20 ("subscribed push shape") and assertion 21
+  ("historical timeframe discipline"). The full inventory — covered, partial,
+  deliberately declined — lives in `docs/reference/core/assertion-coverage.md`.**
+
+  **`has_staking` must now agree with the six staking endpoints it summarises**
+  (`get_staking_rates/1`, `get_staking_balances/1`, `get_staking_rewards/1`,
+  `get_staking_history/1`, `stake/3`, `unstake/3`), the same "Kind 2 redundant field
+  must agree with the endpoints it summarises" rule `validate_orders!/1` already applies
+  to `supports_order_preview`/`supports_order_replace`/`supports_multi_leg_orders`.
+  **Found live on `dp_exchange_coinbase` during this audit**: `has_staking` was never
+  declared in its `capabilities/0` (defaulting to `false`) while `stake/3` and
+  `unstake/3` are real, active calls against Coinbase Prime — a caller branching on
+  `has_staking` alone would conclude the venue does not stake at all. Confirmed by
+  pointing that package's `mix.exs` at this Core with a `path:` dependency and running
+  its own contract test: 23 of 42 tests fail, all from this one raise inside
+  `capabilities/0`. Reported for that package's own review; not fixed here, and no
+  `path:` dependency was committed — `mix.exs` was reverted immediately after. Keyed on
+  an EXPLICIT `:proven`/`:experimental`
+  entry in `endpoints`, never on `active?/2`'s undeclared-is-experimental default, so a
+  declaration that has nothing to do with staking (the overwhelming majority of fixtures
+  and tests in this family) is unaffected. **Downstream: every venue package's own test
+  suite re-runs this the moment it depends on this version**, since assertion 2 already
+  rebuilds every venue's declaration through `Capabilities.new/1`.
+
+  **Assertion 20, "subscribed push shape"**: `subscribe/2`'s own doc makes an
+  unconditional claim — the payload is a `DpExchange.Core.Types.*` struct, tagged with
+  `runtime_id/0` — that nothing checked before now. Assertion 16 (internal wiring)
+  catches a decoder with no caller, but a decoder that IS wired and simply never gets
+  called before the raw response reaches the sink passes every other assertion. Fake-only,
+  so it never dials out.
+
+  **Assertion 21, "historical timeframe discipline"**: `get_historical_prices/4`'s own
+  doc states this family's own named recurring failure mode verbatim ("The venue rejects
+  a timeframe it does not serve rather than substituting the nearest one") and nothing
+  checked it before now. Picks a width from `Timeframe.nameable/0` the venue's own
+  `historical_timeframes` does not name and asks the fake for it; the answer must not be
+  `{:ok, _}` (`dp_exchange_robinhood` declares the endpoint `:unsupported` entirely and
+  the check is a no-op there). Fake-only.
+
+  Both 20 and 21 pass on all five real venue packages — verified the same way as the
+  `has_staking` finding above, a `path:` dependency run and reverted per venue — with
+  `dp_exchange_coinbase`'s 23 failures being entirely the `has_staking` finding, not
+  these two. See `docs/reference/core/assertion-coverage.md`'s "Five-venue verification"
+  section for the full table, including an incidental, pre-existing, out-of-scope finding
+  from the same runs: two OLDER assertions (14 and part of 12) call the real venue
+  module directly for `get_top_of_book/2` and `get_symbols/1`, so an ordinary `mix test`
+  on Gemini, Robinhood and Webull today makes real calls to each venue's public API
+  despite `test_helper.exs` excluding `:tier2` specifically to prevent that.
+
+  `usage-rules/testing.md` and `docs/guides/building-an-exchange-package.md`'s assertion
+  counts move from 19 to 21; `usage-rules/adapter.md` gains sections for both new
+  assertions next to assertion 19's.
+
 - **`usage-rules/adapter.md` gains a "Dependency floors are a claim exactly like a
   capability" section, and every venue package gains
   `script/check_dependency_floor.sh` plus a weekly `floor-check.yml` workflow.** Four

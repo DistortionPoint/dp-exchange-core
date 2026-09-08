@@ -294,6 +294,107 @@ defmodule Broken.CredentialGate.UndeclaredNoVenueContactFees do
   def get_fees(_credentials, _opts), do: {:ok, %{crypto_spread_pct: Decimal.new("1.00")}}
 end
 
+defmodule Broken.Subscribe.RawPayload do
+  @moduledoc false
+  # `subscribe/2` pushes the venue's raw response map instead of building the
+  # `Types.Quote` the doc promises — the shape of "raw undecoded JSON forwarded to
+  # subscribers": a decoder with a real caller (so assertion 16's wiring check has
+  # nothing to flag) that simply never gets called before the sink does.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:subscribe, 2} => :proven},
+      supported_quotes: ~w(USD)
+    )
+  end
+
+  @spec runtime_id() :: atom()
+  def runtime_id, do: :broken_raw_payload
+
+  @spec subscribe([String.t()], keyword()) :: :ok
+  def subscribe(symbols, opts) do
+    target = Keyword.get(opts, :to, self())
+
+    for symbol <- symbols do
+      send(target, {:dp_exchange, runtime_id(), %{"symbol" => symbol, "price" => "42000.50"}})
+    end
+
+    :ok
+  end
+end
+
+defmodule Broken.Subscribe.WrongTag do
+  @moduledoc false
+  # Tags the pushed message with a hardcoded atom rather than runtime_id/0 — a caller
+  # subscribed to several venues cannot tell this one apart from another.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:subscribe, 2} => :proven},
+      supported_quotes: ~w(USD)
+    )
+  end
+
+  @spec runtime_id() :: atom()
+  def runtime_id, do: :broken_wrong_tag
+
+  @spec subscribe([String.t()], keyword()) :: :ok
+  def subscribe(symbols, opts) do
+    target = Keyword.get(opts, :to, self())
+
+    for symbol <- symbols do
+      send(
+        target,
+        {:dp_exchange, :some_other_venue,
+         %DpExchange.Core.Types.Quote{
+           symbol: symbol,
+           price: Decimal.new("42000.50"),
+           volume: Decimal.new("1"),
+           timestamp: DateTime.utc_now(),
+           provider: runtime_id()
+         }}
+      )
+    end
+
+    :ok
+  end
+end
+
+defmodule Broken.HistoricalPrices.Substitutes do
+  @moduledoc false
+  # Serves ANY timeframe at the nearest width it actually has, rather than refusing one
+  # `historical_timeframes` does not name — the family's own named recurring failure
+  # mode, applied to candles: every value stays plausible and only the meaning (the
+  # width) is wrong.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{{:get_historical_prices, 4} => :proven},
+      supported_quotes: ~w(USD),
+      historical_timeframes: ~w(1h)
+    )
+  end
+
+  @spec get_historical_prices(String.t(), String.t(), keyword(), keyword()) :: term()
+  def get_historical_prices(symbol, _timeframe, _range, _opts) do
+    # Silently substitutes "1h" for whatever was actually asked for.
+    {:ok,
+     [
+       %DpExchange.Core.Types.Candle{
+         symbol: symbol,
+         timeframe: "1h",
+         opened_at: DateTime.utc_now(),
+         open: Decimal.new("1"),
+         high: Decimal.new("1"),
+         low: Decimal.new("1"),
+         close: Decimal.new("1"),
+         volume: Decimal.new("1"),
+         provider: :broken_substitutes
+       }
+     ]}
+  end
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -701,6 +802,76 @@ defmodule DpExchange.Core.ContractTeethTest do
                "no_venue_contact declaration this is exactly the 2026-09-06 " <>
                "dp_exchange_webull defect, and a real fake shaped this way must still " <>
                "be rejected"
+    end
+  end
+
+  describe "assertion 20 catches a subscribe/2 push that is not a Core.Types.* struct" do
+    # Replicates the exact computation `AdapterContract`'s "20. subscribed push shape"
+    # group runs, against these fixtures directly — the same pattern used above for
+    # assertions 1, 4, 12, 15, 16 and 17.
+    test "a raw, undecoded payload is caught" do
+      assert :ok = Broken.Subscribe.RawPayload.subscribe(~w(BTC-USD), to: self())
+
+      assert_receive {:dp_exchange, _runtime_id, payload}, 500
+
+      refute is_struct(payload),
+             "this fixture pushes a bare map on purpose — the exact 'raw JSON forwarded " <>
+               "to subscribers' shape the assertion exists to catch — and the suite " <>
+               "must reject it"
+    end
+
+    test "a message tagged with something other than runtime_id/0 is caught" do
+      venue = Broken.Subscribe.WrongTag
+      assert :ok = venue.subscribe(~w(BTC-USD), to: self())
+
+      assert_receive {:dp_exchange, runtime_id, %DpExchange.Core.Types.Quote{}}, 500
+
+      refute runtime_id == venue.runtime_id(),
+             "this fixture tags its message with a hardcoded atom on purpose — a caller " <>
+               "subscribed to several venues could not tell them apart, and the suite " <>
+               "must reject it"
+    end
+
+    test "the reference venue satisfies both halves" do
+      assert :ok = DpExchange.Core.ReferenceVenue.subscribe(~w(BTC-USD), to: self())
+
+      assert_receive {:dp_exchange, runtime_id, payload}, 500
+
+      assert runtime_id == DpExchange.Core.ReferenceVenue.runtime_id()
+      assert %DpExchange.Core.Types.Quote{} = payload
+    end
+  end
+
+  describe "assertion 21 catches a historical timeframe silently served at the " <>
+             "nearest width" do
+    test "a fake that substitutes rather than refuses is caught" do
+      venue = Broken.HistoricalPrices.Substitutes
+      caps = venue.capabilities()
+
+      undeclared = DpExchange.Core.Timeframe.nameable() -- caps.historical_timeframes
+      assert "1d" in undeclared, "1d must be outside this fixture's declared 1h-only vocabulary"
+
+      assert match?(
+               {:ok, _},
+               venue.get_historical_prices("BTC-USD", "1d", [], [])
+             ),
+             "this fixture silently substitutes its one declared width for whatever was " <>
+               "asked on purpose — a missing granularity becoming the closest one — and " <>
+               "the suite must reject it"
+    end
+
+    test "the reference venue refuses a width it does not declare" do
+      caps = DpExchange.Core.ReferenceVenue.capabilities()
+      undeclared = DpExchange.Core.Timeframe.nameable() -- caps.historical_timeframes
+
+      assert undeclared != []
+
+      [unserved | _rest] = undeclared
+
+      refute match?(
+               {:ok, _},
+               DpExchange.Core.ReferenceVenue.get_historical_prices("BTC-USD", unserved, [], [])
+             )
     end
   end
 end
