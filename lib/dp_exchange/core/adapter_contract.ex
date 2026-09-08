@@ -138,8 +138,10 @@ defmodule DpExchange.Core.AdapterContract do
       alias DpExchange.Core.{Capabilities, SymbolNormalizer, Timeframe, Venue}
 
       @venue Keyword.fetch!(opts, :venue)
-      # The venue's in-process fake. Assertion 12's active-endpoint direction runs
-      # against this and never against the real venue.
+      # The venue's in-process fake. Every assertion that calls an ACTIVE endpoint
+      # (assertions 12, 14, 17, 20, 21) runs against this and never against the real
+      # venue — calling an active endpoint for real is a live network request, and a
+      # tier-1 run that reaches a third party's API is tier 1 in name only.
       @fake Keyword.get(opts, :fake)
       @symbol_format Keyword.get(opts, :symbol_format)
       @sample_pairs Keyword.get(opts, :sample_pairs, [])
@@ -335,6 +337,18 @@ defmodule DpExchange.Core.AdapterContract do
           # path that cannot run, and a venue serving one without declaring it is invisible
           # — which on `replace_order/4` costs risk, since the alternative is a window with
           # no order live.
+          #
+          # Driven against the venue's FAKE, never the real venue: `preview_order/3` and
+          # `replace_order/4` are active, signed write-shaped endpoints on several venues
+          # in this family, and calling either for real would make every ordinary `mix
+          # test` run dial the live API — exactly the tier-2 violation D7 forbids on a
+          # schedule.
+          assert @fake,
+                 "pass `fake:` to run this assertion. Calling preview_order/3 and " <>
+                   "replace_order/4 on the real venue would make every CI run hit the " <>
+                   "live API, which D7 reserves for tier 2 and for a human choosing to " <>
+                   "run it."
+
           caps = @venue.capabilities()
           credentials = @credentials
 
@@ -343,7 +357,7 @@ defmodule DpExchange.Core.AdapterContract do
                 {:supports_order_replace, {:replace_order, 4}, [credentials, "id", %{}, []]}
               ] do
             declared = Map.fetch!(caps, field)
-            answers? = apply(@venue, name, args) != {:error, :not_supported}
+            answers? = apply(@fake, name, args) != {:error, :not_supported}
 
             assert declared == answers?,
                    "#{field} is #{inspect(declared)} but #{name}/#{arity} " <>
@@ -355,10 +369,20 @@ defmodule DpExchange.Core.AdapterContract do
           # `:query_only` is only true if the venue actually demands a term. A venue
           # declaring it and then returning a list has declared a restriction it does not
           # have, which is as misleading as the reverse.
+          #
+          # Driven against the venue's FAKE, never the real venue: `get_symbols/1` is an
+          # active, uncredentialed endpoint on several venues in this family, so calling
+          # it for real would make every ordinary `mix test` run dial the live API —
+          # reproduced live against `api.gemini.com/v1/symbols` before this was fixed.
           caps = @venue.capabilities()
 
           if Capabilities.active?(caps, {:get_symbols, 1}) do
-            result = @venue.get_symbols(credentials: @credentials)
+            assert @fake,
+                   "pass `fake:` to run this assertion. Calling get_symbols/1 on the " <>
+                     "real venue would make every CI run hit the live API, which D7 " <>
+                     "reserves for tier 2 and for a human choosing to run it."
+
+            result = @fake.get_symbols(credentials: @credentials)
 
             case caps.catalog_access do
               :query_only ->
@@ -639,10 +663,20 @@ defmodule DpExchange.Core.AdapterContract do
         end
 
         test "get_top_of_book/2 returns a TopOfBook that records when it was observed" do
+          # Driven against the venue's FAKE, never the real venue: `get_top_of_book/2` is
+          # an active, uncredentialed endpoint on several venues in this family, so
+          # calling it for real would make every ordinary `mix test` run dial the live
+          # API — reproduced live against `api.gemini.com/v1/pubticker/btcusd` before
+          # this was fixed.
           caps = @venue.capabilities()
 
           if Capabilities.active?(caps, {:get_top_of_book, 2}) and @sample_pairs != [] do
-            case @venue.get_top_of_book(hd(@sample_pairs), []) do
+            assert @fake,
+                   "pass `fake:` to run this assertion. Calling get_top_of_book/2 on " <>
+                     "the real venue would make every CI run hit the live API, which " <>
+                     "D7 reserves for tier 2 and for a human choosing to run it."
+
+            case @fake.get_top_of_book(hd(@sample_pairs), []) do
               {:ok, top} ->
                 assert %DpExchange.Core.Types.TopOfBook{} = top,
                        "a BBO carries resting orders; a Quote carries a traded price, and " <>

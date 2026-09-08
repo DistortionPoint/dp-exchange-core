@@ -21,6 +21,42 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`AdapterContract` no longer dials a live venue on an ordinary `mix test` run.**
+  Assertion 14's `get_top_of_book/2` check and two of assertion 12's checks —
+  "catalog_access matches how get_symbols/1 behaves without a query" and "the
+  order-shape claims match what the facade actually answers" (`preview_order/3`,
+  `replace_order/4`) — called `@venue` directly instead of `@fake`, contradicting the
+  `@fake` attribute's own comment ("Assertion 12's active-endpoint direction runs
+  against this and never against the real venue") and this family's tier-2 rule ("never
+  on a schedule"). Flagged as an "incidental, pre-existing, out-of-scope finding" in the
+  assertion-20/21 entry below; this is that fix.
+
+  All four now assert `@fake` is present (failing loudly, matching assertion 17's own
+  pattern, rather than skipping silently — every one of the five venue packages already
+  supplies `fake:`) and call the fake instead of the real venue. The order-shape check
+  was a second defect beyond the two originally reported: it called `preview_order/3`
+  and `replace_order/4` unconditionally, with no active/inactive guard at all, so any
+  venue implementing either for real (`dp_exchange_coinbase`, `dp_exchange_schwab`,
+  `dp_exchange_webull`) dialed a signed, order-shaped write endpoint on every run.
+
+  **Reproduced and verified against all five venue packages** with a `path:` dependency
+  on this Core, `mix test --trace` (forces synchronous execution so `Core.HttpClient`'s
+  `Logger.debug("HTTP Request: ...")` line lines up with the test that triggered it),
+  reverted after each: before this fix, `dp_exchange_gemini` dialed
+  `api.gemini.com/v1/symbols` and `.../v1/pubticker/btcusd`; `dp_exchange_robinhood`
+  dialed `trading.robinhood.com/api/v2/crypto/trading/trading_pairs/`;
+  `dp_exchange_webull` dialed `api.webull.com/trading/instruments/crypto/profiles/list`;
+  `dp_exchange_coinbase` dialed `api.coinbase.com/api/v3/brokerage/products`. After the
+  fix, zero live requests on all four, 0 test failures on all four (Gemini 775,
+  Robinhood 240, Webull 743, Coinbase 682 tests). `dp_exchange_schwab` made no live
+  request either before or after — it escapes only because `preview_order/3` and
+  `get_symbols/1` both refuse locally (missing `account_hash`, missing credentials)
+  before building a request under the specific arguments this suite passes, not because
+  the old code was safe; it is one implementation change away from the same defect the
+  other four had.
+
 ### Added
 
 - **A conformance-coverage audit — mapping every `Core.Venue` callback, `Capabilities`
