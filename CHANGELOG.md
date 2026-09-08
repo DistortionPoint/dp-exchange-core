@@ -247,6 +247,106 @@ an acceptable changelog line.
   them today and only bites if one of them adopts `:required` without also gating its
   fake.
 
+### Changed
+
+- **Assertion 17's gate widened from a fixed list of eleven callback names to every
+  active endpoint on a `credential_benefit: :required` venue, minus a two-name
+  exemption.** The assertion count does not change — this widens 17, it does not add a
+  new one.
+
+  The narrow gate (`@credentialed`, unchanged as a name — it still governs argument
+  SHAPE for every assertion that builds call args, positional vs. `opts`) could only ever
+  see a callback that takes credentials as its own first positional argument. A callback
+  that reads a credential out of `opts` instead — `get_option_chain/2`, `get_news/1`,
+  `get_corporate_events/1` and `quantization/1` are the ones a venue that signs every
+  request actually uses this shape for — was invisible to it no matter how its fake
+  answered with no credential. `dp_exchange_webull` and `dp_exchange_schwab` each found
+  and hand-fixed exactly this defect in their own fakes on 2026-09-07, the same day
+  assertion 17 first shipped, and both said the durable fix belonged here — this closes
+  that blind spot rather than leaving it as a documented limitation.
+
+  **The rule now enforced**: `:required` means every active endpoint needs a credential,
+  so the assertion checks all of them — `Venue.behaviour_info(:callbacks)` minus
+  `child_spec/1` and `start_link/1` (excluded via the same `answerable?/1` this suite
+  already uses elsewhere; calling `start_link` on even a fake risks starting a real
+  process, which no assertion here should ever do) minus `@credential_gate_exempt`,
+  which names exactly two: `test_connection/2` and `get_rate_limit_status/2`. Both are
+  exempt for the same, unchanged reason — their own callback doc types the credential
+  `credentials() | nil`, a statement from the CONTRACT itself, not a venue's
+  implementation choice, that a missing credential is expected there, because both mean
+  "can I reach the venue at all" rather than "give me this venue's data". Every callback
+  that can answer `{:ok, _}` at all is now checked; a callback whose return type can
+  never match that pattern (`capabilities/0`, `coverage/1`, `subscribe/2` and the rest of
+  the streaming surface, which return a bare map or `:ok`/`{:error, _}` rather than a
+  `result()` tuple) passes trivially by construction, which costs nothing and needed no
+  separate exclusion.
+
+  **Stripping now actually strips `opts`, not only the positional argument.** The
+  previous version sent `[]` for every `:opts` position, credentialed shape or not — the
+  same `[]` `endpoint_args/2` already sends for an ordinary call, so an opts-carried
+  credential was never exercised at all, stripped or not, and a check built on it would
+  have proven nothing. `stripped_arg_value(:opts)` now sends `[credentials: %{}]`, an
+  EXPLICIT empty credential, so a venue whose facade reads
+  `Keyword.get(opts, :credentials, %{})` is actually exercised with a value it has to
+  branch on rather than a key its own code may never have read at all.
+
+  **Verified against all five real venues**, each pointed at this Core checkout with a
+  temporary `path:` dependency, `mix test` run, then reverted before anything was
+  committed. Only the three venues declaring `credential_benefit: :required` can
+  exercise this assertion at all:
+
+    * `dp_exchange_schwab` (495 tests) — **0 failures.** Every newly-included endpoint,
+      including `market_status/1` (which this venue's fake correctly gates on a
+      credential, since the real venue's market-hours endpoint is itself authenticated),
+      already refuses without one.
+    * `dp_exchange_webull` (736 tests) — **1 new failure**: `{:market_status, 1}`
+      answers `{:ok, :open}` unconditionally, because this venue is crypto-only and the
+      real facade never calls out for it at all — `market_status/1`'s own contract doc
+      says crypto venues answer `:open` always, so nothing about *this* endpoint reads
+      `opts` or dials the venue, credentialed or not.
+    * `dp_exchange_robinhood` (236 tests) — **1 new failure**, the identical shape:
+      `{:market_status, 1}` answers `{:ok, :open}` unconditionally for the same
+      crypto-only reason.
+
+  `dp_exchange_coinbase` (`:higher_ceiling`) and `dp_exchange_gemini` (`:no_difference`)
+  do not declare `:required`, so assertion 17 does not run for either and both pass
+  unchanged (679 and 772 tests respectively, 0 failures) — confirming the widening
+  touches only the `:required` path and nothing else in either package.
+
+  **`market_status/1` on the two crypto venues is reported here as a finding, not fixed
+  in this change.** Whether it belongs on a per-venue exemption list, or whether Webull's
+  and Robinhood's `credential_benefit: :required` overstates a venue where at least one
+  endpoint is genuinely credential-free by design, is a call for each venue's own
+  maintainers — this package does not fix venue repos from inside a Core change, and an
+  argued, NAMED exception belongs in that venue's own review, not folded silently into
+  this assertion's exempt list on Core's say-so alone.
+
+  **Breaking for `dp_exchange_webull` and `dp_exchange_robinhood` on their next Core
+  bump**, until each resolves the `market_status/1` finding above. Not breaking for
+  `dp_exchange_schwab`, `dp_exchange_coinbase` or `dp_exchange_gemini` — all three pass
+  today exactly as they did before this change.
+
+  `usage-rules/adapter.md`'s assertion 17 section rewritten to describe the widened rule
+  and both exemptions by name.
+
+- **`PollingFeed`'s own test suite no longer sleeps a guessed duration to synchronise on
+  a timer-driven poll cycle.** Ten `Process.sleep/1` calls used purely as a wait-then-
+  assert device are replaced with `assert_receive` on a message the module already sends
+  (`on_notice`, which `delivering_nothing?/2` fires on the very first failed tick for
+  every single-symbol fixture these tests use, or `on_refusal`) or a synchronous
+  `PollingFeed.status/1` / `coverage/1` call issued right after the event under test —
+  a `GenServer.call` cannot reply until every message queued ahead of it has been
+  handled, so a reply is itself deterministic proof the feed processed the prior event
+  (and did not crash doing it) rather than a bet that a fixed number of milliseconds was
+  enough. Three `Process.sleep/1` calls are unchanged and were never a synchronisation
+  device: two `Process.sleep(:infinity)` calls and one `Process.sleep(20)` are the
+  simulated venue latency and hang under test, inside the `fetch` functions passed
+  *into* `PollingFeed`, not a wait on its output. Verified with no new flakes across
+  eight consecutive runs plus three additional seeds. No `wait_until`-style bounded-retry
+  helper was needed in the end — every case had a real message or a synchronous call to
+  wait on instead, which this suite's own preference (a real observable over polling for
+  one) already ranks above a retry loop.
+
 ### Fixed
 
 - **`Timeframe.nameable/0` was missing `1y`, the same way it was once missing `1w` and

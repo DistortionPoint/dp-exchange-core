@@ -85,19 +85,29 @@ defmodule DpExchange.Core.PollingFeedTest do
         )
 
       assert_receive {:refused, "DOGE-USD", "not listed"}, 500
-      Process.sleep(50)
-      assert Process.alive?(pid)
+
+      # `status/1` is a `GenServer.call` — it cannot reply until every message already
+      # queued ahead of it (here, nothing further after the refusal above) has been
+      # handled, so a reply is itself the proof the feed is still standing. Waiting a
+      # guessed duration and then checking `Process.alive?/1` proved the same thing only
+      # as long as the guess was long enough; this proves it regardless of timing.
+      refute PollingFeed.status(pid).delivering
     end
 
     test "a batch refusing every symbol still reports and does not crash" do
+      test = self()
+
       pid =
         start_feed(
           fetch_all: fn _symbols -> {:refused, [{"A-USD", :nope}, {"B-USD", :nope}]} end,
-          symbols: ~w(A-USD B-USD)
+          symbols: ~w(A-USD B-USD),
+          on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
         )
 
-      Process.sleep(50)
-      assert Process.alive?(pid)
+      assert_receive {:refused, "A-USD", :nope}, 500
+      assert_receive {:refused, "B-USD", :nope}, 500
+      # A `GenServer.call` reply is proof of no crash by construction — it cannot answer
+      # from a dead process.
       assert PollingFeed.coverage(pid) == %{}
     end
 
@@ -108,9 +118,22 @@ defmodule DpExchange.Core.PollingFeedTest do
       # bulk response went through `record_success(state, false)`, a silent no-op that
       # never reached `delivering_nothing?` — so a bulk venue stuck returning `{:ok, []}`
       # every cycle would never trip the escalation this module's moduledoc promises.
-      pid = start_feed(fetch_all: fn _symbols -> {:ok, []} end, symbols: ~w(BTC-USD))
+      test = self()
 
-      Process.sleep(120)
+      pid =
+        start_feed(
+          fetch_all: fn _symbols -> {:ok, []} end,
+          symbols: ~w(BTC-USD),
+          # Real observable, not a guessed duration: with one symbol, a bulk venue's
+          # sweep is one call, so `record_failure/3` crosses into "delivering nothing"
+          # on the very first tick and fires `on_notice` right then — see
+          # `delivering_nothing?/2`. Waiting for that message is waiting for the exact
+          # state transition the assertions below check, not for a fixed amount of time
+          # to have probably been enough.
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, _notice}, 500
       status = PollingFeed.status(pid)
 
       refute status.delivering
@@ -141,10 +164,22 @@ defmodule DpExchange.Core.PollingFeedTest do
 
     test "a refusal defaults to a no-op rather than crashing the feed" do
       # A caller that does not care about refusals gets a working feed, not a crash.
-      pid = start_feed(fetch: fn _symbol -> {:refused, :nope} end, symbols: ~w(DOGE-USD))
+      # `on_refusal` is deliberately left unset — the default no-op is what is under
+      # test — so `on_notice` (unrelated to `on_refusal`, and fired on the very same
+      # first-tick transition per `delivering_nothing?/2`) is the synchronisation
+      # signal instead, rather than a callback that would replace the default path
+      # this test exists to exercise.
+      test = self()
 
-      Process.sleep(120)
-      assert Process.alive?(pid)
+      pid =
+        start_feed(
+          fetch: fn _symbol -> {:refused, :nope} end,
+          symbols: ~w(DOGE-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, _notice}, 500
+      assert PollingFeed.status(pid).failures_since_ok >= 1
     end
   end
 
@@ -181,19 +216,32 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
 
     test "a raising fetch is contained" do
-      pid = start_feed(fetch: fn _symbol -> raise "venue exploded" end, symbols: ~w(BTC-USD))
+      test = self()
 
-      Process.sleep(120)
-      assert Process.alive?(pid)
+      pid =
+        start_feed(
+          fetch: fn _symbol -> raise "venue exploded" end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, _notice}, 500
       assert PollingFeed.coverage(pid) == %{}
     end
   end
 
   describe "status/1 makes 'delivering nothing' visible" do
     test "a feed that has never succeeded reports it" do
-      pid = start_feed(fetch: fn _symbol -> {:error, :down} end, symbols: ~w(BTC-USD))
+      test = self()
 
-      Process.sleep(120)
+      pid =
+        start_feed(
+          fetch: fn _symbol -> {:error, :down} end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, _notice}, 500
       status = PollingFeed.status(pid)
 
       refute status.delivering
@@ -243,10 +291,17 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       assert_receive {:published, _event}, 500
       PollingFeed.update_symbols(pid, ~w(BTC-USD))
-      Process.sleep(100)
 
+      # `update_symbols/2` is a cast; `status/1` right after it is a call, and a
+      # GenServer answers a call only once every message queued ahead of it —
+      # including this cast — has been handled. That makes the reply itself proof the
+      # cast was processed (with no reschedule: `interval_ms: 10_000` means nothing
+      # would have naturally re-ticked in this test's runtime regardless, so this is a
+      # deterministic replacement, not a shorter guess at the same wait).
+      status = PollingFeed.status(pid)
+
+      assert status.symbols == 1
       assert :counters.get(counter, 1) == 1
-      assert Process.alive?(pid)
     end
   end
 
@@ -313,25 +368,32 @@ defmodule DpExchange.Core.PollingFeedTest do
         )
 
       assert_receive {:published, _event}, 500
-      # The reschedule inside handle_info is where the crash happened — give it a beat
-      # past the first publish and confirm the feed is still standing.
-      Process.sleep(100)
-      assert Process.alive?(pid)
+      # The reschedule inside `handle_info` is where the crash happened, immediately
+      # after the publish — a synchronous call right after the publish forces that
+      # same `handle_info` to have fully returned (a GenServer cannot answer a call
+      # until the message ahead of it is done being handled), which is what "still
+      # standing" actually needs to mean here rather than "alive after a guessed gap".
+      assert PollingFeed.status(pid).delivering
     end
 
     test "an explicit nil on_refusal falls back to a no-op instead of crashing the feed" do
       # Before this fix: `state.on_refusal.(symbol, reason)` with `on_refusal: nil` raises
       # `BadFunctionError`, because `Keyword.get/3`'s default never applied to a
-      # present-and-nil key.
+      # present-and-nil key. `on_refusal` is explicitly `nil` here — the fallback under
+      # test — so, as in the analogous default-path test above, `on_notice` (unrelated,
+      # and fired on this same first-tick transition) is the synchronisation signal.
+      test = self()
+
       pid =
         start_feed(
           fetch: fn _symbol -> {:refused, :nope} end,
           symbols: ~w(DOGE-USD),
-          on_refusal: nil
+          on_refusal: nil,
+          on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      Process.sleep(120)
-      assert Process.alive?(pid)
+      assert_receive {:notice, _notice}, 500
+      assert PollingFeed.status(pid).failures_since_ok >= 1
     end
 
     test "an explicit nil symbols falls back to an empty set instead of crashing init" do
@@ -536,9 +598,12 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       GenServer.cast(pid, :nonsense)
       send(pid, :nonsense)
-      Process.sleep(50)
 
-      assert Process.alive?(pid)
+      # Sent by this same process, to the same mailbox, ahead of the call below —
+      # Erlang's per-sender-per-receiver FIFO ordering means the GenServer must handle
+      # both unknown messages before it can even dequeue this `status` call, so a
+      # reply here already proves both were ignored without crashing.
+      assert PollingFeed.status(pid).symbols == 1
     end
   end
 end

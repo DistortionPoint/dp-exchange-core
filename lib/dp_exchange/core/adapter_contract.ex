@@ -83,8 +83,8 @@ defmodule DpExchange.Core.AdapterContract do
        "internal wiring — every internal export has a caller inside this package's own " <>
          "lib/, so a mechanism cannot ship built, documented and never reached"},
       {17,
-       "credential gate — on a venue requiring credentials, no active credentialed " <>
-         "endpoint's fake succeeds when called with credentials stripped"},
+       "credential gate — on a venue requiring credentials, no active endpoint's fake " <>
+         "succeeds when called with credentials stripped"},
       {18,
        "link safety — a process behaviour that starts a linked child traps exits, so " <>
          "that child's abnormal death cannot propagate untrapped into the process " <>
@@ -885,7 +885,7 @@ defmodule DpExchange.Core.AdapterContract do
       # --- 17. credential gate ----------------------------------------------
 
       describe "17. credential gate" do
-        test "on a venue requiring credentials, no active credentialed endpoint's fake " <>
+        test "on a venue requiring credentials, no active endpoint's fake " <>
                "succeeds when called with credentials stripped" do
           # Found independently in two venue packages the same week this assertion was
           # written: six credentialed functions on a venue where **every request is
@@ -911,21 +911,49 @@ defmodule DpExchange.Core.AdapterContract do
           # conformance assertion that can make a live network call under some future
           # venue's implementation is a worse failure mode than the gap it would close.
           #
-          # What this cannot see: `credential_gated?/1` only knows `@credentialed`, a
-          # fixed list of eleven names written when the contract had a small, stable
-          # credentialed surface. A callback outside that list — one that takes no
-          # dedicated `credentials` argument and instead reads a credential out of
-          # `opts`, which is how every one of `get_option_chain/2`, `list_watchlists/1`,
-          # `get_financials/3`, `get_news/1` and `get_screener/2` do it — is invisible to
-          # this loop no matter how it answers with no credential. Found independently in
+          # ## Widened from a fixed list to every active endpoint (2026-09-07)
+          #
+          # This used to gate on `@credentialed`, a hand-maintained list of eleven names
+          # written when the contract had a small, stable credentialed surface. A
+          # callback outside that list — one that takes no dedicated `credentials`
+          # argument and instead reads a credential out of `opts`, which is how every one
+          # of `get_option_chain/2`, `get_news/1`, `get_corporate_events/1` and
+          # `quantization/1` do it on a venue that signs every request — was invisible to
+          # the loop no matter how it answered with no credential. Found independently in
           # `dp_exchange_webull` and `dp_exchange_schwab` on 2026-09-07, both auditing
-          # their own widened surface by hand because this assertion could not: each
-          # fake had the identical defect (`{:ok, _}` with credentials stripped) on
-          # exactly the callbacks this list does not name, and each said the durable fix
-          # belongs here. It has not been built — `@credentialed` still names the same
-          # eleven — because closing it needs a way to know, per callback, whether a
-          # credential belongs in `opts` at all, which the contract does not declare
-          # anywhere today. Recorded in `docs/design/ideas/`.
+          # their own widened surface by hand because this assertion could not: each fake
+          # had the identical defect (`{:ok, _}` with credentials stripped) on exactly
+          # the callbacks the fixed list did not name.
+          #
+          # The rule this widens to: on a venue declaring `credential_benefit: :required`,
+          # `:required` means every active endpoint needs a credential, so this checks
+          # them all — `Venue.behaviour_info(:callbacks)` minus a small, NAMED exemption,
+          # never a list of what to check. A hand-maintained list of what to check is the
+          # same class of thing as the hand-maintained list this replaces: it rots, and
+          # the rot is invisible.
+          #
+          # `answerable?/1` drops `child_spec/1` and `start_link/1` — calling `start_link`
+          # on even a FAKE could start a real process, which no assertion in this suite
+          # should ever risk. `@credential_gate_exempt` (`credential_gate_helpers/0`)
+          # drops exactly two more: `test_connection/2` and `get_rate_limit_status/2`,
+          # because their OWN callback doc types the credential `credentials() | nil` —
+          # the contract itself, not a venue's choice, says a missing credential is
+          # expected there, since both mean "can I reach the venue at all" rather than
+          # "give me this venue's data". Every other callback in the behaviour is
+          # checked, including ones that return a bare `:ok`/map/list rather than a
+          # `result()` tuple — those can never match `{:ok, _}` below and pass this
+          # assertion trivially, so including them costs nothing and excluding them by
+          # hand would only be one more list to keep in sync.
+          #
+          # This does NOT special-case a callback that happens to make no venue call at
+          # all on some venue — Webull's and Robinhood's `market_status/1` answers
+          # `{:ok, :open}` unconditionally for a crypto-only venue and will fail this
+          # widened check. That is a real finding, not a bug in the assertion: it is
+          # true today that those two fakes answer without a credential on a `:required`
+          # venue, and whether that is "genuinely public" (a documented per-asset-class
+          # fact, never fetched from the venue) or a `credential_benefit` that should
+          # exempt it explicitly is a per-venue call this suite does not make for you —
+          # see `usage-rules/adapter.md`.
           caps = @venue.capabilities()
 
           if caps.credential_benefit == :required do
@@ -935,6 +963,7 @@ defmodule DpExchange.Core.AdapterContract do
                      "call against."
 
             for {name, arity} <- Venue.behaviour_info(:callbacks),
+                answerable?({name, arity}),
                 credential_gated?(name),
                 Capabilities.active?(caps, {name, arity}) do
               args = stripped_credential_args(name, arity)
@@ -1071,21 +1100,23 @@ defmodule DpExchange.Core.AdapterContract do
   # cyclomatic complexity instead of line count.
   defp credential_gate_helpers do
     quote location: :keep do
-      # `test_connection/2` and `get_rate_limit_status/2` are the two `@credentialed`
-      # entries whose own callback doc explicitly allows `credentials() | nil` —
-      # `test_connection/2`'s whole point is answering "the credential, IF GIVEN, is
-      # accepted", so both are expected to succeed on plain reachability with no
-      # credential at all, even on a venue whose DATA endpoints require one. Assertion 17
-      # gates on `@credentialed` minus these two, not on `@credentialed` itself.
-      @credential_gated @credentialed -- [:test_connection, :get_rate_limit_status]
+      # `test_connection/2` and `get_rate_limit_status/2` are the only two exemptions,
+      # and both for the same reason: their own callback doc explicitly types the
+      # credential `credentials() | nil` — the CONTRACT itself, not a venue's
+      # implementation choice, says a missing credential is an expected input, because
+      # both mean "can I reach the venue at all" rather than "give me this venue's
+      # data". Nothing else in the behaviour has that property in its type. This is a
+      # denylist of two, not an allowlist of what to check — see "17. credential gate"'s
+      # own comment for why that direction is the one that does not rot.
+      @credential_gate_exempt ~w(test_connection get_rate_limit_status)a
 
-      defp credential_gated?(name), do: name in @credential_gated
+      defp credential_gated?(name), do: name not in @credential_gate_exempt
 
-      # The same shape `endpoint_args/2` builds, with the credentials position replaced
-      # by an empty map — assertion 17's whole question is "what happens with no
-      # credentials", and `%{}` is the same "nothing given" shape
-      # `Broken.OverDeclares.get_transfers(%{}, [])` already uses elsewhere in this
-      # family's own test fixtures.
+      # The same shape `endpoint_args/2` builds, with every credential position
+      # emptied — positional where the venue's arg shape carries one (`@credentialed`,
+      # unchanged, still governs SHAPE only: whether credentials arrive as an argument
+      # or through `opts`), and in `opts` for every endpoint, public-shaped ones
+      # included.
       defp stripped_credential_args(name, arity) do
         kind = if credentialed?(name), do: :credentialed, else: :public
 
@@ -1095,6 +1126,15 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp stripped_arg_value(:credentials), do: %{}
+
+      # `[credentials: %{}]`, never `[]`. `endpoint_args/2` already sends `[]` for every
+      # `:opts` position, credentialed or not, so an opts list that started at `[]` and
+      # stayed `[]` here would prove nothing had been stripped — it never carried a
+      # credential to begin with, on any venue, credentialed or not. Sending
+      # `[credentials: %{}]` exercises a venue whose facade reads
+      # `Keyword.get(opts, :credentials, %{})` with an EXPLICIT empty credential rather
+      # than an absent key its own code may never have read at all.
+      defp stripped_arg_value(:opts), do: [credentials: %{}]
       defp stripped_arg_value(other), do: arg_value(other)
     end
   end

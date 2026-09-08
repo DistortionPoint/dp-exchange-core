@@ -329,9 +329,24 @@ succeeds where the real venue would refuse silently certifies consumer code that
 to supply credentials.
 
 If your `capabilities/0` declares `credential_benefit: :required`, assertion 17 calls
-every active credentialed endpoint on your `fake:` with the credentials argument
-replaced by `%{}` and refuses `{:ok, _}` back. It is Fake-only — it never dials the real
-venue — so it carries none of the risk a live-network assertion would.
+**every active endpoint** on your `fake:` with every credential-bearing argument
+stripped and refuses `{:ok, _}` back. It is Fake-only — it never dials the real venue —
+so it carries none of the risk a live-network assertion would.
+
+**"Every active endpoint", not "every endpoint that takes a `credentials()` argument".**
+`:required` means every active endpoint on your venue needs a credential — that is what
+declaring it says — so this checks them all: `Venue.behaviour_info(:callbacks)` minus
+`child_spec/1`/`start_link/1` (never called here; starting a real process from inside
+this suite is a risk no assertion should take) minus exactly two exemptions, named
+below. It used to check only a fixed list of eleven callback names that take credentials
+as their own first positional argument — a callback that reads a credential out of
+`opts` instead (`get_option_chain/2`, `get_news/1`, `get_corporate_events/1` and
+`quantization/1` are the shape a venue that signs every request actually uses this for)
+was invisible to that list no matter how it answered with no credential. If your venue
+declares `:required` and any active endpoint takes its credential through `opts` rather
+than as an argument, this now reaches it: `stripped_credential_args/2` passes
+`[credentials: %{}]` for every `opts` position, not merely an opts list that never
+carried the key at all.
 
 Two things it deliberately does **not** do:
 
@@ -339,18 +354,30 @@ Two things it deliberately does **not** do:
   `:no_difference` or `:higher_ceiling` may legitimately serve some of these endpoints
   without one, and this assertion would otherwise be inventing a rule your venue never
   claimed.
-- It excludes `test_connection/2` and `get_rate_limit_status/2` from the gate even on a
-  `:required` venue. Both callbacks document `credentials() | nil` on purpose —
-  `test_connection/2`'s whole job is answering "the credential, IF GIVEN, is accepted",
-  so both are expected to answer plain reachability with none at all.
+- It excludes exactly two callbacks from the gate, by name, even on a `:required`
+  venue: `test_connection/2` and `get_rate_limit_status/2`. Both document
+  `credentials() | nil` on purpose — `test_connection/2`'s whole job is answering "the
+  credential, IF GIVEN, is accepted" — so both are expected to answer plain reachability
+  with none at all. **This is a two-name exemption list stated in the assertion's own
+  code, not a judgement call your venue's test file makes** — if your fake has another
+  endpoint that is genuinely credential-free by design (a purely local computation that
+  never calls the venue at all, for instance), this assertion will fail on it, and that
+  failure is the finding: either your `credential_benefit: :required` declaration
+  overstates your venue, or that endpoint's exemption belongs argued in your own
+  package's review, not assumed silently. `dp_exchange_webull` and
+  `dp_exchange_robinhood`'s `market_status/1` are exactly this case as of the widening
+  above — both answer `{:ok, :open}` unconditionally because each is a crypto-only venue
+  whose facade never calls out for a market-hours fact at all — and neither has been
+  resolved in Core; it is an open finding in each venue's own repo.
 - It does **not** assert that your fake's refusal has the same *shape* as your real
   venue's (`{:error, {:missing_credentials, :your_venue}}` vs whatever your fake
   returns) — only that it is not `{:ok, _}`. Matching shapes would need to call the real
   venue with stripped credentials too, and that is a live network call this suite will
   not make on your behalf.
 
-If this fails, the fix is in your fake: make it check credentials the way your real
-`Rest`/`Auth` module does, not in this package.
+If this fails, the fix is in your fake: make it check credentials — wherever your real
+facade actually reads them, positional argument or `opts[:credentials]` — the way your
+real `Rest`/`Auth` module does, not in this package.
 
 ## Assertion 18 — a process that links a child it starts must trap exits
 
