@@ -59,6 +59,18 @@ defmodule DpExchange.PurityTest do
       called =
         "_build/#{Mix.env()}/lib/dp_exchange_core/ebin/*.beam"
         |> Path.wildcard()
+        # Only modules whose SOURCE is under `lib/`. In `:test` this project's
+        # `elixirc_paths/1` also compiles `test/support`, and its output lands in this very
+        # same `ebin` directory — so without this filter the check named "nothing in lib/"
+        # was quietly also policing test scaffolding. Found when `test/support`'s reference
+        # venue grew an `@derive {Inspect, ...}` (assertion 22's own fix) and this test
+        # failed reporting `Inspect.Any` "in lib/", where no such reference exists.
+        #
+        # Filtering is the right repair rather than widening `allowed_prefixes`: the
+        # allow-list is what gives this test its teeth for the code that actually ships,
+        # and adding an entry to satisfy a module that never ships would blunt it for the
+        # one that does.
+        |> Enum.filter(&compiled_from_lib?/1)
         |> Enum.flat_map(fn beam ->
           {:ok, {_module, [imports: imports]}} =
             :beam_lib.chunks(String.to_charlist(beam), [:imports])
@@ -129,6 +141,24 @@ defmodule DpExchange.PurityTest do
 
       application = Mix.Project.config()[:application] || []
       refute Keyword.has_key?(application, :mod)
+    end
+  end
+
+  # A beam's own `:compile_info` carries the absolute path of the source it was built
+  # from, which is the only reliable way to tell a `lib/` module from a `test/support`
+  # one once both are sitting in the same `ebin`.
+  defp compiled_from_lib?(beam) do
+    case :beam_lib.chunks(String.to_charlist(beam), [:compile_info]) do
+      {:ok, {_module, [compile_info: info]}} ->
+        info
+        |> Keyword.get(:source, ~c"")
+        |> to_string()
+        |> String.contains?("/lib/")
+
+      _no_compile_info ->
+        # Cannot prove it came from `test/support`, so keep checking it. Failing open
+        # here would let a real `lib/` module skip the check by losing a chunk.
+        true
     end
   end
 end

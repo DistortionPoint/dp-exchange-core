@@ -98,7 +98,10 @@ defmodule DpExchange.Core.AdapterContract do
          "struct tagged with runtime_id/0, never raw venue data"},
       {21,
        "historical timeframe discipline — a width outside historical_timeframes is " <>
-         "refused, never served at the nearest one"}
+         "refused, never served at the nearest one"},
+      {22,
+       "credential redaction in child_spec/1 — a secret passed in :credentials is not " <>
+         "rendered in the args a supervisor stores and OTP prints on every child crash"}
     ]
   end
 
@@ -1220,6 +1223,61 @@ defmodule DpExchange.Core.AdapterContract do
                          "candle it touches"
             end
           end
+        end
+      end
+
+      # --- 22. credentials never reach a supervisor's stored child spec -------
+
+      describe "22. credential redaction in child_spec/1" do
+        test "child_spec/1 renders no secret the consumer passed in :credentials" do
+          # dp-exchange-core issue #29. A supervisor stores the `{module, :start_link,
+          # [opts]}` MFA its child spec names, and OTP writes that argument list through
+          # `inspect/1` into the `Start Call:` line of the report it logs on ANY child
+          # termination. A raw `%{api_key: ..., private_key: ...}` map therefore prints its
+          # values, in full, into ordinary application logs — the artifact most likely to
+          # be shipped to an aggregator, attached to a bug report or quoted in a ticket. A
+          # consumer found live keys exactly this way and nearly pasted them into a GitHub
+          # issue while reporting an unrelated bug.
+          #
+          # **This is the assertion that assertion 19 says it cannot make.**
+          # `Core.CredentialRedactionCheck` proves every STRUCT a package defines redacts
+          # on inspect, and its own moduledoc records that it would not have caught the
+          # defect as it actually shipped, where the value never became a struct at all.
+          # This asks the only question a consumer cares about: having handed the venue a
+          # secret the documented way, is that secret visible in what the supervisor will
+          # store and the logger will print?
+          #
+          # Every secret key name any venue in this family uses is passed at once, so this
+          # needs no per-venue list to keep in sync. `Kernel.struct/2` DROPS keys a given
+          # venue's own credentials struct does not declare, so an unrecognised key cannot
+          # leak either — it is gone, not merely unprinted.
+          canary = "dpx-credential-canary-#{System.unique_integer([:positive])}"
+
+          secrets = %{
+            api_key: canary,
+            api_secret: canary,
+            private_key: canary,
+            app_key: canary,
+            app_secret: canary,
+            access_token: canary,
+            refresh_token: canary,
+            client_id: canary,
+            client_secret: canary,
+            passphrase: canary,
+            secret: canary,
+            token: canary
+          }
+
+          rendered = inspect(@venue.child_spec(credentials: secrets), limit: :infinity)
+
+          refute rendered =~ canary,
+                 "#{inspect(@venue)}.child_spec/1 renders a secret passed in :credentials " <>
+                   "in cleartext. A supervisor stores those args and OTP prints them on " <>
+                   "every child crash, so this is a live credential written to the log by " <>
+                   "any crash at all. Wrap the :credentials value in a struct with a " <>
+                   "redacting Inspect IN child_spec/1 — doing it in start_link/1 or " <>
+                   "init/1 is too late, because the supervisor above has already captured " <>
+                   "the raw list. Rendered: #{rendered}"
         end
       end
     end

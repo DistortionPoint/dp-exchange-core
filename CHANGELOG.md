@@ -21,6 +21,79 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A read-only `coverage/1` could kill a venue's feed — issue #28.** `Core.PollingFeed`
+  ran its fetch inside a task and then **blocked on that task** inside `handle_info`. The
+  task bounded a hang; it did nothing at all for the mailbox. With `@min_fetch_timeout_ms`
+  at 30 seconds against `GenServer.call/2`'s 5-second default, a `coverage/1` or `status/1`
+  arriving during an ordinary in-flight fetch was not unlucky — it was a **guaranteed**
+  timeout. In `dp_exchange_robinhood` that exit propagated out of the venue `Feed`'s own
+  `handle_call/3` and killed it; the feed restarted from the static opts its supervisor
+  holds, which never carry a consumer's later `subscribe/3`, and coverage went **61 pairs
+  to 0 and stayed there** — with the process alive, idle and passing every liveness probe.
+  Asking whether the venue was healthy is what made it unhealthy.
+
+  The fetch result now arrives as a **message**: `handle_info` starts the task and returns
+  immediately, so `coverage/1` and `status/1` answer from state at any point during a
+  fetch. **Concurrency is deliberately still one** — a tick arriving while a fetch is in
+  flight is queued rather than started, which is exactly what the mailbox did when the
+  fetch was synchronous. Letting ticks overlap would have quietly multiplied a venue's
+  request rate the moment a fetch grew slower than its interval, and an unexamined
+  multiplier on request volume is a defect class this family has already paid for.
+  Rescheduling still happens only after a job finishes, so there is at most one pending job
+  per symbol and the queue cannot grow without bound.
+
+  Reported against `dp_exchange_robinhood 0.2.21` / `dp_exchange_core 0.1.72` by a consumer
+  running the venue live, with the `Neighbours` block of the crash report showing the
+  called process inside `bounded_fetch/2` at the moment the call arrived.
+
+- **The test that should have caught it was the reason nobody did.** The existing hang test
+  used a 100 ms `:fetch_timeout_ms`, so `status/1` returned as soon as the fetch was
+  abandoned and the test read the recorded failure — while the call was still *blocking*
+  for the whole timeout. It is rewritten to use a timeout **longer** than
+  `GenServer.call/2`'s own default, so a regression cannot return a value at all: it exits,
+  and the test fails instead of passing for the wrong reason. A second test covers
+  `coverage/1`, which is the call a consumer's health check actually makes.
+
+### Added
+
+- **Assertion 22 — credential redaction in `child_spec/1`** (issue #29). A supervisor
+  stores the `{module, :start_link, [opts]}` MFA its child spec names, and OTP writes that
+  argument list through `inspect/1` into the `Start Call:` line of the report it logs on
+  **any** child termination. A raw `%{api_key: ..., private_key: ...}` map therefore prints
+  its values in full into ordinary application logs — the artifact most likely to be
+  shipped to an aggregator, attached to a bug report or quoted in a ticket. A consumer
+  found live keys exactly this way and nearly pasted them into a GitHub issue while
+  reporting an unrelated bug.
+
+  **This is the assertion that assertion 19 says it cannot make.**
+  `Core.CredentialRedactionCheck` proves every *struct* a package defines redacts on
+  inspect, and its own moduledoc already recorded that it would not have caught the defect
+  as it actually shipped — where the value never became a struct at all. Assertion 22 asks
+  the only question a consumer cares about: having handed the venue a secret the documented
+  way, is that secret visible in what the supervisor stores? It passes every secret key
+  name in the family at once, so it needs no per-venue list, and `Kernel.struct/2` drops
+  keys a venue's own struct does not declare — an unrecognised key is gone, not merely
+  unprinted.
+
+  It caught `Core.ReferenceVenue` — this repository's own example of what a venue looks
+  like — on its first run, which is now fixed and carries the redacting struct as the
+  reference shape.
+
+### Changed
+
+- **The purity check (2.10) was policing more than it claimed.** It scans
+  `_build/#{Mix.env()}/lib/dp_exchange_core/ebin/*.beam`, and in `:test` this project's own
+  `elixirc_paths/1` also compiles `test/support` into that same directory — so a check
+  named "nothing in `lib/` reaches for the host application" was quietly also checking test
+  scaffolding. Surfaced when the reference venue grew an `@derive {Inspect, ...}` and the
+  test failed reporting `Inspect.Any` "in lib/", where no such reference exists. It now
+  filters by each beam's own `:compile_info` source path. Filtering is the repair rather
+  than widening `allowed_prefixes`: the allow-list is what gives this check teeth for code
+  that actually ships, and adding an entry to satisfy a module that never ships would blunt
+  it for the ones that do.
+
 ### Documentation
 
 - **`docs/design/ideas/detecting-vendor-api-change.md` is implemented and closed**, as

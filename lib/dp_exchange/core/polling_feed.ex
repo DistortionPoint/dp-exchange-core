@@ -68,24 +68,42 @@ defmodule DpExchange.Core.PollingFeed do
   so a caller that does not wire it up gets a working feed, not a crash — the
   same contract `on_refusal` already keeps.
 
-  ## A fetch that never returns fails just as loudly
+  ## A fetch that never returns fails just as loudly — and never blocks a health check
 
-  `fetch` and `fetch_all` run synchronously inside `handle_info`, and nothing in this
-  module's own code can time one out — that has to be a boundary this module imposes.
-  Without one, a single hung fetch (a socket that never closes, an HTTP client with no
-  timeout of its own) blocks this GenServer's mailbox indefinitely: every other symbol
-  stops ticking, and `status/1` and `coverage/1` — the calls a health check makes to find
-  out whether this feed is the one delivering nothing — never answer either. That is a
-  worse failure than the one the escalating warning above exists to catch, because it
-  disables the very mechanism meant to report it.
+  Two hazards live here. They look like one and needed two separate fixes.
 
-  So every fetch runs inside a bounded, disposable task (see `bounded_fetch/2`) and a hang
-  past `:fetch_timeout_ms` becomes an ordinary fetch failure — retried next tick, counted
-  toward `failures_since_ok`, escalated the same way a real error would be. The default
-  timeout is derived from the poll interval and clamped between `@min_fetch_timeout_ms` and
-  `@max_fetch_timeout_ms`, so this module never trades an unbounded hang for a merely very
-  long one, and never turns a fast interval into an accidental timeout on an ordinary,
-  slower-than-a-tick HTTP round trip.
+  **The hang.** Nothing in this module's own code can time out a caller's `fetch`, so that
+  has to be a boundary this module imposes. Without one, a single hung fetch (a socket that
+  never closes, an HTTP client with no timeout of its own) blocks this GenServer forever.
+  So every fetch runs inside a disposable task and a hang past `:fetch_timeout_ms` becomes
+  an ordinary fetch failure — retried next tick, counted toward `failures_since_ok`,
+  escalated the same way a real error would be. The default is derived from the poll
+  interval and clamped between `@min_fetch_timeout_ms` and `@max_fetch_timeout_ms`, so this
+  module never trades an unbounded hang for a merely very long one, and never turns a fast
+  interval into an accidental timeout on an ordinary, slower-than-a-tick HTTP round trip.
+
+  **Waiting on that task was the second hazard, and it is the one that bit.** This module
+  used to run the fetch in a task and then BLOCK on it inside `handle_info`. The task
+  bounded the hang; it did nothing at all for the mailbox. With `@min_fetch_timeout_ms` at
+  30 seconds and `GenServer.call/2`'s default timeout at five, a `coverage/1` or `status/1`
+  arriving during an ordinary in-flight fetch was not unlucky — it was a **guaranteed**
+  timeout. In `dp_exchange_robinhood` that exit propagated out of the venue `Feed`'s own
+  `handle_call` and killed it (dp-exchange-core issue #28): a read-only health check
+  terminated the thing it was checking, the feed restarted without the subscription state
+  its static start opts never carried, and coverage went 61 pairs to 0 and stayed there —
+  while the process sat alive and idle, so every liveness probe kept passing.
+
+  So the fetch result now arrives as a **message**. `handle_info` starts the task and
+  returns immediately, and `coverage/1` and `status/1` answer from state at any point
+  during a fetch. A health check can no longer be what breaks the thing it observes.
+
+  **Concurrency is deliberately still one.** A tick arriving while a fetch is in flight is
+  queued, not started — which is exactly what the mailbox did when the fetch was
+  synchronous. Letting ticks overlap would quietly multiply a venue's request rate the
+  moment a fetch grew slower than its interval, and an unexamined multiplier on request
+  volume is a defect class this family has paid for more than once. Rescheduling still
+  happens only after a job finishes, so there is at most one pending job per symbol and the
+  queue cannot grow without bound.
   """
 
   use GenServer
@@ -282,7 +300,14 @@ defmodule DpExchange.Core.PollingFeed do
       # `on_notice` exactly once per transition — never once per failed tick, and never
       # once per sweep while an outage continues (unlike the "delivered NOTHING" log line,
       # which repeats every sweep by design; see `delivering_nothing?/2`).
-      notice_state: :ok
+      notice_state: :ok,
+      # The single in-flight fetch, or `nil`. See the moduledoc: the task exists to bound a
+      # hang, and NOT waiting on it is what keeps `coverage/1` and `status/1` answerable
+      # while a fetch is running.
+      in_flight: nil,
+      # Ticks that arrived while a fetch was in flight, oldest first. This is the mailbox
+      # queue the synchronous version had, made explicit — concurrency stays at one.
+      queue: []
     }
 
     if is_nil(state.fetch) and is_nil(state.fetch_all) do
@@ -339,17 +364,11 @@ defmodule DpExchange.Core.PollingFeed do
   def handle_cast(_other, state), do: {:noreply, state}
 
   @impl true
-  def handle_info(:poll_all, state) do
-    state = fetch_all_and_publish(state)
-    Process.send_after(self(), :poll_all, state.interval_ms)
-    {:noreply, state}
-  end
+  def handle_info(:poll_all, state), do: {:noreply, enqueue(state, :all)}
 
   def handle_info({:poll, symbol}, state) do
     if MapSet.member?(state.symbols, symbol) do
-      state = fetch_one_and_publish(symbol, state)
-      Process.send_after(self(), {:poll, symbol}, state.interval_ms)
-      {:noreply, state}
+      {:noreply, enqueue(state, {:one, symbol})}
     else
       # Dropped from scope while a tick was in flight. Not rescheduling is what
       # removes it.
@@ -357,13 +376,99 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
+  # The in-flight fetch outlived `:fetch_timeout_ms`. Ordered ABOVE the `{ref, result}`
+  # clause below deliberately: that pattern is a bare two-tuple and would be tried against
+  # this message first, and while the `in_flight` guard would reject it, relying on a
+  # rejection to route a message is the kind of ordering nobody re-derives correctly later.
+  def handle_info({:fetch_timeout, ref}, %{in_flight: %{ref: ref, task: task, job: job}} = state) do
+    # `Task.shutdown/2` unlinks before it kills, so killing the task cannot take this
+    # process with it. Its return value is used rather than discarded: a task that finished
+    # in the instant between the timer firing and this clause running produced a real
+    # result, and throwing that away to record a timeout would be a lie about the venue.
+    # This is exactly what the old synchronous `Task.yield(...) || Task.shutdown(...)` did.
+    result =
+      case Task.shutdown(task, :brutal_kill) do
+        {:ok, late_result} -> late_result
+        {:exit, reason} -> {:error, {:fetch_crashed, reason}}
+        nil -> {:error, :fetch_timeout}
+      end
+
+    {:noreply, finish(state, job, result)}
+  end
+
+  # The task died without answering. `safely/1` converts a raise, a throw and an `exit`
+  # inside the fetch into `{:error, reason}` before they can get here, so this is reachable
+  # only by something killing the task from outside — which is a fetch failure like any
+  # other to a caller of this module, not a new failure path.
+  def handle_info(
+        {:DOWN, ref, :process, _pid, reason},
+        %{in_flight: %{ref: ref, job: job, timer: timer}} = state
+      ) do
+    Process.cancel_timer(timer)
+    {:noreply, finish(state, job, {:error, {:fetch_crashed, reason}})}
+  end
+
+  # The fetch answered. This is the path that used to be a blocking `Task.yield/2` inside
+  # `handle_info` — see the moduledoc for what that cost.
+  def handle_info({ref, result}, %{in_flight: %{ref: ref, job: job, timer: timer}} = state) do
+    Process.demonitor(ref, [:flush])
+    Process.cancel_timer(timer)
+    {:noreply, finish(state, job, result)}
+  end
+
   def handle_info(_other, state), do: {:noreply, state}
 
-  defp fetch_all_and_publish(%{symbols: symbols} = state) do
-    case bounded_fetch(
-           fn -> state.fetch_all.(MapSet.to_list(symbols)) end,
-           state.fetch_timeout_ms
-         ) do
+  # One completion, whatever produced it: record the outcome, put this job's next tick back
+  # on the clock, then start whatever queued up while it ran. Rescheduling happens HERE and
+  # nowhere else, which is what bounds the queue — a symbol cannot have a second tick
+  # pending until its first has finished.
+  defp finish(state, job, result) do
+    state
+    |> Map.put(:in_flight, nil)
+    |> apply_result(job, result)
+    |> reschedule(job)
+    |> start_next()
+  end
+
+  defp enqueue(state, job), do: start_next(%{state | queue: state.queue ++ [job]})
+
+  # Concurrency is one, by construction. See the moduledoc: this is the mailbox queue the
+  # synchronous version had, made explicit, and NOT an invitation to raise the limit — a
+  # venue's request rate is the thing on the other side of it.
+  #
+  # Both conditions are in the head rather than in a guard: a fetch starts only when
+  # nothing is in flight AND something is waiting. Anything else — a fetch already running,
+  # an empty queue, or both — falls through to the catch-all and leaves the state alone.
+  defp start_next(%{in_flight: nil, queue: [job | rest]} = state) do
+    task = Task.async(fn -> safely(fetch_fun(state, job)) end)
+    timer = Process.send_after(self(), {:fetch_timeout, task.ref}, state.fetch_timeout_ms)
+
+    %{state | queue: rest, in_flight: %{ref: task.ref, task: task, job: job, timer: timer}}
+  end
+
+  defp start_next(state), do: state
+
+  # Built from the two values the fetch needs rather than by closing over `state`, so the
+  # symbol list and `last_ok` map are not copied into every task.
+  defp fetch_fun(%{fetch_all: fetch_all, symbols: symbols}, :all) do
+    wanted = MapSet.to_list(symbols)
+    fn -> fetch_all.(wanted) end
+  end
+
+  defp fetch_fun(%{fetch: fetch}, {:one, symbol}), do: fn -> fetch.(symbol) end
+
+  defp reschedule(state, :all) do
+    Process.send_after(self(), :poll_all, state.interval_ms)
+    state
+  end
+
+  defp reschedule(state, {:one, symbol}) do
+    Process.send_after(self(), {:poll, symbol}, state.interval_ms)
+    state
+  end
+
+  defp apply_result(state, :all, result) do
+    case result do
       {:ok, []} ->
         # A bulk endpoint that answers successfully with zero events delivers exactly
         # nothing, same as an outright failure would — a bad credential filtered down to
@@ -389,21 +494,8 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
-  defp publish_and_record(state, events) do
-    now = System.monotonic_time(:millisecond)
-
-    # Coverage is recorded from what came BACK, not what was asked for. A
-    # symbol missing from the response is one the venue did not answer for,
-    # and marking it covered would be the feed asserting a delivery that
-    # never happened.
-    Enum.each(events, state.sink)
-
-    seen = Map.new(events, fn event -> {event.symbol, now} end)
-    record_success(%{state | last_ok: Map.merge(state.last_ok, seen)})
-  end
-
-  defp fetch_one_and_publish(symbol, state) do
-    case bounded_fetch(fn -> state.fetch.(symbol) end, state.fetch_timeout_ms) do
+  defp apply_result(state, {:one, symbol}, result) do
+    case result do
       {:ok, event} ->
         %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
         |> tap(fn _state -> state.sink.(event) end)
@@ -424,6 +516,19 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
+  defp publish_and_record(state, events) do
+    now = System.monotonic_time(:millisecond)
+
+    # Coverage is recorded from what came BACK, not what was asked for. A
+    # symbol missing from the response is one the venue did not answer for,
+    # and marking it covered would be the feed asserting a delivery that
+    # never happened.
+    Enum.each(events, state.sink)
+
+    seen = Map.new(events, fn event -> {event.symbol, now} end)
+    record_success(%{state | last_ok: Map.merge(state.last_ok, seen)})
+  end
+
   # A fetch calls into HTTP and the venue's own parsing, and an exception there
   # must not take the feed down for every other symbol. One symbol raising
   # killed the whole of Robinhood's 87, and the supervisor restarted it straight
@@ -431,6 +536,9 @@ defmodule DpExchange.Core.PollingFeed do
   #
   # Not a swallow: the exception becomes the same failure the error path already
   # counts, so a feed broken this way still reports it is delivering nothing.
+  #
+  # Runs INSIDE the task, so the conversion happens before the result is ever sent back —
+  # which is why the `:DOWN` clause above is unreachable by ordinary fetch failure.
   defp safely(fetch) do
     fetch.()
 
@@ -439,33 +547,6 @@ defmodule DpExchange.Core.PollingFeed do
     exception -> {:error, Exception.message(exception)}
   catch
     :exit, reason -> {:error, {:exit, reason}}
-  end
-
-  # `safely/1` is a boundary for a raise or an `exit`, and only that — it still calls
-  # `fetch.()` inline, so a fetch that never returns (a blocked socket, an HTTP client with
-  # no timeout of its own) still blocks `handle_info` and, with it, every other symbol's
-  # tick and every `status/1` or `coverage/1` call waiting on this GenServer's mailbox.
-  # Verified: a fetcher doing `Process.sleep(:infinity)` left the whole feed unanswerable.
-  #
-  # `bounded_fetch/2` closes that gap by running the (already exception-safe) fetch inside
-  # its own process and waiting only up to `timeout_ms` for it. `Task.async/1` links the
-  # task to this process, but nothing here can turn that link into a crash: `fetch` is
-  # wrapped in `safely/1` before it ever reaches the task, so an ordinary raise or exit is
-  # already converted to `{:error, reason}` inside the task and never becomes an abnormal
-  # exit; the one abnormal exit this function itself can cause — killing the task after a
-  # timeout — is handled by `Task.shutdown/2`, which unlinks before it kills. A hang past
-  # `timeout_ms` becomes `{:error, :fetch_timeout}`, which the two callers already treat as
-  # an ordinary fetch failure: retried next tick, counted toward `failures_since_ok`, and
-  # escalated by the existing "delivered NOTHING" warning if it keeps happening — no new
-  # failure path, because a hang is not a new kind of failure to a caller of this module.
-  defp bounded_fetch(fetch, timeout_ms) do
-    task = Task.async(fn -> safely(fetch) end)
-
-    case Task.yield(task, timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, result} -> result
-      {:exit, reason} -> {:error, {:fetch_crashed, reason}}
-      nil -> {:error, :fetch_timeout}
-    end
   end
 
   # Recovery: this feed was latched `:dead` (see `notice_state` in `init/1`) and just

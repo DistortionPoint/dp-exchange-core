@@ -102,8 +102,38 @@ defmodule DpExchange.Core.ReferenceVenue do
   # --- lifecycle ---------------------------------------------------------
 
   @impl true
+  # The reference implementation of assertion 22, and it is here because the assertion
+  # caught THIS module first (dp-exchange-core issue #29). A supervisor stores the
+  # `{module, :start_link, [opts]}` MFA a child spec names, and OTP writes that argument
+  # list through `inspect/1` into the `Start Call:` line of the report it logs on any child
+  # termination — so a raw credentials map is a live secret in the application log after any
+  # crash. Wrapping has to happen HERE: by the time `start_link/1` or `init/1` runs, the
+  # supervisor above has already captured the raw list.
   def child_spec(opts) do
+    opts =
+      case Keyword.fetch(opts, :credentials) do
+        {:ok, credentials} when is_map(credentials) ->
+          Keyword.put(opts, :credentials, struct(__MODULE__.Credentials, credentials))
+
+        _absent_or_not_a_map ->
+          opts
+      end
+
     %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
+  end
+
+  defmodule Credentials do
+    @moduledoc """
+    A redacting credentials wrapper — the shape every venue package is expected to have.
+
+    `except:`, never `only:`: `only:` prints any field added later by default, which is the
+    wrong direction for a struct whose entire purpose is not printing things.
+
+    `Kernel.struct/2` drops keys this struct does not declare, so a key it has never heard
+    of cannot leak through either — it is gone, not merely unprinted.
+    """
+    @derive {Inspect, except: [:api_key, :api_secret, :private_key, :access_token]}
+    defstruct [:api_key, :api_secret, :private_key, :access_token]
   end
 
   @impl true

@@ -1,6 +1,6 @@
 # What the conformance suite does — and does not — check
 
-**Audited 2026-09-08.** `Core.AdapterContract`'s 19 assertion groups (now 21 — see
+**Audited 2026-09-08.** `Core.AdapterContract`'s 19 assertion groups (now 22 — see
 "Gaps closed" below) have each caught real, shipped defects within minutes of existing.
 Nobody had asked the inverse question: which parts of `Core.Venue`, `Core.Capabilities`,
 `Core.Notice` and `Core.PollingFeed` have **no** assertion touching them at all. This is

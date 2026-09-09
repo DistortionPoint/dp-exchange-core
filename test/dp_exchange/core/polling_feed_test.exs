@@ -414,12 +414,27 @@ defmodule DpExchange.Core.PollingFeedTest do
   end
 
   describe "a hung fetch does not wedge the whole feed, silently (C2)" do
-    test "status/1 stays answerable while a fetch hangs, bounded by :fetch_timeout_ms" do
-      # Verified against the unfixed code: a fetcher doing `Process.sleep(:infinity)` left
-      # `PollingFeed.status/1` unanswerable — `handle_info` ran the fetch inline with no
-      # timeout boundary, wedging this GenServer's mailbox, every other symbol's tick, and
-      # the exact health-check calls this module's own moduledoc says exist to catch a
-      # silently-broken feed.
+    test "status/1 answers DURING a hang that outlasts GenServer.call's own timeout" do
+      # Two fixes are layered here, and this test has been rewritten once — for the second
+      # one, which it was actively hiding.
+      #
+      # Originally: a fetcher doing `Process.sleep(:infinity)` left `status/1` unanswerable
+      # forever, because `handle_info` ran the fetch inline with no boundary at all. Fixed
+      # by running every fetch inside a task bounded by `:fetch_timeout_ms`.
+      #
+      # That was not enough, and the SHAPE OF THIS TEST is why nobody noticed: it used a
+      # 100 ms timeout, so `status/1` returned as soon as the fetch was abandoned and the
+      # test happily read the recorded failure. The call was still BLOCKING for the whole
+      # timeout. The real default floor is `@min_fetch_timeout_ms` — 30 seconds — against
+      # `GenServer.call/2`'s 5-second default, so a health check landing during an ordinary
+      # in-flight fetch was not unlucky, it was a guaranteed timeout. In
+      # `dp_exchange_robinhood` that exit propagated out of the venue `Feed`'s own
+      # `handle_call` and killed it: dp-exchange-core issue #28, where a read-only coverage
+      # check took a live venue to zero pairs and left it there.
+      #
+      # The timeout below is therefore deliberately LONGER than `GenServer.call/2`'s
+      # default. If this call ever blocks on the fetch again it cannot return, it exits,
+      # and this test fails instead of quietly passing for the wrong reason.
       test = self()
 
       pid =
@@ -429,22 +444,57 @@ defmodule DpExchange.Core.PollingFeedTest do
             Process.sleep(:infinity)
           end,
           symbols: ~w(BTC-USD),
-          fetch_timeout_ms: 100,
+          fetch_timeout_ms: 30_000,
           interval_ms: 500
         )
 
-      # Deterministic ordering: wait for the hang to actually be in flight inside
-      # `handle_info` before calling `status/1`, so this test cannot race the timer that
-      # schedules the first `:poll` message.
+      # Deterministic ordering: wait for the hang to actually be in flight before calling
+      # `status/1`, so this test cannot race the timer that schedules the first `:poll`.
       assert_receive :fetch_started, 500
 
-      # GenServer.call's default 5s timeout is the proof: before this fix this call did
-      # not return at all, because the hang was unbounded, not merely slow.
+      # Answered while the fetch is still hanging, and answered HONESTLY: nothing has been
+      # delivered, and nothing has failed either, because the fetch has not finished. A
+      # feed that reported a failure here would be inventing one.
       status = PollingFeed.status(pid)
 
       refute status.delivering
-      assert status.failures_since_ok >= 1
-      assert status.last_error == :fetch_timeout
+      assert status.failures_since_ok == 0
+      assert status.last_error == nil
+
+      # Still alive and still hanging — asking the question did not disturb the subject,
+      # which is the whole point of #28.
+      assert Process.alive?(pid)
+    end
+
+    test "coverage/1 answers during a hang too, and reports what actually arrived" do
+      # `coverage/1` is the call the consumer's health check actually makes, and it is the
+      # one that killed the feed in #28. One symbol delivers, a second hangs; coverage must
+      # come back promptly and name only the symbol that really arrived.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn
+            "BTC-USD" ->
+              {:ok, event("BTC-USD")}
+
+            "ETH-USD" ->
+              send(test, :hang_started)
+              Process.sleep(:infinity)
+          end,
+          symbols: ~w(BTC-USD ETH-USD),
+          fetch_timeout_ms: 30_000,
+          interval_ms: 500
+        )
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive :hang_started, 500
+
+      coverage = PollingFeed.coverage(pid)
+
+      assert coverage["BTC-USD"] == :internal_poll
+      refute Map.has_key?(coverage, "ETH-USD")
+      assert Process.alive?(pid)
     end
 
     test "the hung symbol is retried like any other failure, not dropped" do
