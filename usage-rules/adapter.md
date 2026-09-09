@@ -663,3 +663,59 @@ Core function, uses a new `Types.*` module, or relies on any behaviour a depende
 after its floor's release, the floor in `mix.exs` goes up in the same commit, stated as a
 version and the reason, the way every floor comment in every venue's `mix.exs` already
 does. Do not wait for the weekly check to say so.
+
+## Never do blocking work in a process that owes a reply
+
+This is the failure this family has paid for most often, and every instance looked
+different until they were lined up:
+
+- **#16, #23** — work on the reply path inside a venue's own feed.
+- **#28** — `Core.PollingFeed` ran its fetch in a task and then *blocked on that task*
+  inside `handle_info`. The task bounded a hang; it did nothing for the mailbox. A
+  read-only `coverage/1` timed out, the exit propagated out of the venue `Feed`'s
+  `handle_call/3`, and the feed died. It restarted without its subscription state, and a
+  live venue went from 61 pairs to 0 and stayed there — alive, idle, passing every
+  liveness probe.
+
+A sweep for the class then found three more, none of which had failed in production yet:
+a Streamer bootstrap (a signed HTTP round trip **plus** a WebSocket connect) inline in
+`handle_call/3`; a whole-catalogue HTTP fetch inline in `handle_info/2`; and a socket
+connect inline in `handle_call/3`.
+
+### The rule
+
+**If a callback can block for longer than a caller's timeout, it must not block the
+process.** Run the slow part in a task, let the result arrive as a message, and defer the
+reply with `{:noreply, state}` + `GenServer.reply/2`. `dp_exchange_webull`'s
+`spawn_reconcile/3` is the reference shape; do not invent a second one.
+
+Three things that are easy to get wrong:
+
+- **A task that bounds a hang does not unblock a mailbox.** Wrapping work in
+  `Task.async/1` and then calling `Task.yield/2` is still blocking — it only bounds *how
+  long*. That is precisely what #28 was.
+- **`start_link` links to its caller.** A socket opened inside a task dies when the task
+  exits, moments later. Fetch in the task; connect in the GenServer. Only the fetch is
+  slow enough to matter.
+- **Convert exceptions inside the task.** `Task.async/1` links, so an unconverted raise
+  arrives as an `{:EXIT, …}` the GenServer has no clause for — and anything parked waiting
+  on that task is never answered at all.
+
+### Reads must carry an explicit timeout too
+
+`coverage/1` and `status/1` are what a consumer's health check calls. Left on
+`GenServer.call/2`'s implicit **five seconds** while writes name a generous one, any
+moment the feed is legitimately busy turns a health check into an **exit** — and into a
+dead consumer process, when the read happens inside the consumer's own `handle_call/3`.
+
+Every venue in this family now passes `@call_timeout` on reads as well as writes. It is
+the second line of defence, never the fix: **a read that has to queue behind something
+should wait for it, not die of it.**
+
+### And the answer must not lie
+
+Where a read cannot reach what it is reporting on, say the least that is true. An empty
+coverage map plus a `:link_down` notice is honest; a remembered coverage map asserts
+arrivals nobody confirmed, which is the "nearby substitute where an error belongs" failure
+this family keeps finding. "We could not ask" is not "nothing arrived", and only the notice
+tells a consumer which one they are looking at.

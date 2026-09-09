@@ -23,6 +23,35 @@ an acceptable changelog line.
 
 ### Documentation
 
+- **`usage-rules/adapter.md` gains "Never do blocking work in a process that owes a
+  reply".** This is the failure this family has paid for most often, and every instance
+  looked different until they were lined up: #16 and #23 (work on the reply path in a
+  venue's feed), then #28, where `Core.PollingFeed` ran its fetch in a task and then
+  *blocked on that task* — the task bounded a hang and did nothing for the mailbox, so a
+  read-only `coverage/1` timed out, the exit propagated out of the venue `Feed`'s
+  `handle_call/3`, and a live venue went from 61 pairs to 0 and stayed there.
+
+  Writing the rule down came with sweeping the family for it, and the sweep found **three
+  more instances that had not failed in production yet** — a Streamer bootstrap (signed
+  HTTP *plus* a WebSocket connect) inline in `handle_call/3`, a whole-catalogue HTTP fetch
+  inline in `handle_info/2`, and a socket connect inline in `handle_call/3`. All three are
+  fixed in their own packages.
+
+  The section carries the three mistakes that are easy to make while fixing it: a task that
+  bounds a hang does **not** unblock a mailbox (that *was* #28); `start_link` links to its
+  caller, so a socket opened inside a task dies with the task — fetch in the task, connect
+  in the GenServer; and exceptions must be converted **inside** the task, because
+  `Task.async/1` links and an unconverted raise arrives as an `{:EXIT, …}` with no clause
+  for it, leaving anything parked on that task unanswered forever.
+
+  It also records the read-side rule the same sweep produced — every venue now passes
+  `@call_timeout` on `coverage/1`/`status/1`, not just on writes, because a health check
+  left on `GenServer.call/2`'s implicit five seconds turns any legitimately busy moment
+  into an exit and a dead consumer process — and the honesty rule for what a degraded read
+  may claim: an empty coverage map plus a `:link_down` notice, never a remembered one.
+
+### Documentation
+
 - **`usage-rules/auth.md` gains "Credentials are redacted in `child_spec/1` — bypass it and
   they are not".** The consumer who verified the issue #29 fix went looking for their
   canary in their own supervisor's state afterwards and found it: their supervision code
