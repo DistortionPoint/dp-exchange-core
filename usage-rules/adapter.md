@@ -719,3 +719,50 @@ coverage map plus a `:link_down` notice is honest; a remembered coverage map ass
 arrivals nobody confirmed, which is the "nearby substitute where an error belongs" failure
 this family keeps finding. "We could not ask" is not "nothing arrived", and only the notice
 tells a consumer which one they are looking at.
+
+## If your vendor publishes an index, diff it
+
+Across five vendors, a **changelog** diff caught nothing and an **index** diff was the only
+mechanism that ever fired. Three instances now, all real:
+
+- A rate-limit table on `developer.webull.com` that had been published for weeks while this
+  family declared a ceiling five times too permissive, on a venue whose documented penalty
+  is a temporary IP block.
+- A WebSocket channel on `developer.gemini.com` withdrawn with no changelog entry — the same
+  venue that once withdrew an entire market-data API the same way.
+- Coinbase's rate-limit pages, previously recorded as "could not be located", sitting in the
+  vendor's own `sitemap.xml` the whole time.
+
+So every venue package carries `script/check_endpoint_inventory.sh`, weekly and
+non-blocking, comparing what the vendor says it serves against a committed record. What it
+compares depends on what the vendor offers, in this order of preference:
+
+1. **A machine-readable specification** — OpenAPI, AsyncAPI. Diff the operation and channel
+   lists. This is the strongest form; only Gemini publishes one today.
+2. **A sitemap whose pages are one-per-endpoint** — diff the set of those paths. Coinbase
+   and Webull are this shape.
+3. **Nothing fetchable** — Schwab answers `403` to an anonymous reader. There is no
+   automated form; its specification is committed to the repository and re-capture is a
+   human signing in. That is a distinct class, not a degraded one.
+
+Two rules that make the difference between a check and a rubber stamp:
+
+- **Fix the claim before you update the record.** A difference means a claim this package
+  makes may now be false. Updating the committed inventory first, so the check goes green,
+  destroys the only evidence that anything changed.
+- **Diff the specification, never the rendered page.** An operation list is structured and
+  every entry means something. The pages around it carry build hashes and rotating banners,
+  and a content diff on those is red every week for reasons that are never the reason you
+  care about.
+
+### Absent from the documentation is not absent from the venue
+
+When something vanishes, what you have established is that the vendor stopped *publishing*
+it — not that the venue stopped *serving* it. Gemini has diverged from its own
+documentation in both directions: a socket URL it still published and no longer served, and
+candle widths it served before it documented them.
+
+So a withdrawal is a reason to **label** a claim, not automatically to delete it. Deleting
+asserts a new negative ("this venue does not have X"), and an unverified negative is a
+substitution exactly like an invented value. Where the thing is private and probing it needs
+a credential the repository must never hold, labelled is the most honest state available.

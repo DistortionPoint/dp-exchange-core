@@ -23,6 +23,34 @@ an acceptable changelog line.
 
 ### Documentation
 
+- **`usage-rules/adapter.md` gains "If your vendor publishes an index, diff it".** The
+  vendor-change design doc concluded that across five vendors a *changelog* diff caught
+  nothing and an **index diff** was the only mechanism that ever fired. That conclusion has
+  now produced three real findings — a rate-limit table on `developer.webull.com` published
+  for weeks behind a five-times-too-permissive ceiling; a WebSocket channel withdrawn from
+  `developer.gemini.com` with no changelog entry; and Coinbase's rate-limit pages, recorded
+  as "could not be located", sitting in the vendor's own `sitemap.xml` the whole time.
+
+  Every venue package now carries `script/check_endpoint_inventory.sh`, weekly and
+  non-blocking. The section records what to compare, in order of preference: a
+  machine-readable specification where the vendor publishes one (Gemini alone today), a
+  sitemap whose pages are one-per-endpoint otherwise (Coinbase, Webull), and — for a vendor
+  that answers `403` to an anonymous reader (Schwab) — nothing, which is a distinct class
+  rather than a degraded one.
+
+  It also records the two rules that separate a check from a rubber stamp: **fix the claim
+  before updating the record**, because updating the inventory first destroys the only
+  evidence anything changed; and **diff the specification, never the rendered page**.
+
+- **And the rule the Gemini finding forced: absent from the documentation is not absent from
+  the venue.** When something vanishes, what has been established is that the vendor stopped
+  *publishing* it, not that the venue stopped *serving* it — Gemini has diverged from its own
+  documentation in both directions. So a withdrawal is a reason to **label** a claim, not
+  automatically to delete it: deleting asserts a new negative, and an unverified negative is
+  a substitution exactly like an invented value.
+
+### Documentation
+
 - **`usage-rules/adapter.md` gains "Never do blocking work in a process that owes a
   reply".** This is the failure this family has paid for most often, and every instance
   looked different until they were lined up: #16 and #23 (work on the reply path in a
