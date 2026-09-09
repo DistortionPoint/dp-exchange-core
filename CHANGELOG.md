@@ -21,6 +21,33 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`usage-rules/auth.md` gains "Credentials are redacted in `child_spec/1` — bypass it and
+  they are not".** The consumer who verified the issue #29 fix went looking for their
+  canary in their own supervisor's state afterwards and found it: their supervision code
+  builds the child spec itself, for a legitimate reason (a `Core.PollingFeed`-shaped facade
+  defaults `subscriber` to `self()`, which resolves to the *supervisor* when `start_link/1`
+  runs inside `init/1`, so a different delivery target can only be set at `start_link`
+  time). On that path `child_spec/1` never runs, their supervisor stores the raw map, and
+  OTP renders the live key on the next crash. **Upgrading does not fix it, because nothing
+  from any package is on that path.**
+
+  No code change was needed or made — `wrap/1` and `wrap_opt/1` were already public, which
+  is all that path required. What was missing was anyone saying so. Assertion 22 asks
+  whether `child_spec/1`'s own rendering leaks, answers correctly, and is structurally
+  unable to see a spec a consumer built; the section says that explicitly, and tells a
+  consumer on that path to write the consumer-side version of the assertion — including
+  the control case, since a canary test with no proof that an unwrapped map *does* leak
+  proves nothing.
+
+  It also records the case that actually bit them, which is a step further out than the
+  original bug: a host **reshaping** a credential (mapping its own `api_key`/`api_secret`
+  into a venue's `app_key`/`app_secret`) and returning a bare map re-introduces the leak in
+  its own code, downstream of anything a package can reach. Their own canary test caught
+  that on its first run — on Webull, the venue whose keys had actually leaked, which was
+  still leaking after the upgrade through their code rather than ours.
+
 ### Fixed
 
 - **A read-only `coverage/1` could kill a venue's feed — issue #28.** `Core.PollingFeed`

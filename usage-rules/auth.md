@@ -157,3 +157,58 @@ producing a signature the venue rejects with nothing to explain it.
 
 Pass them per call, or to `child_spec/1` for a supervised feed. Nothing is read from the
 environment, and nothing is cached across calls.
+
+## Credentials are redacted in `child_spec/1` — bypass it and they are not
+
+Every venue package wraps the `:credentials` you pass into a struct with a redacting
+`Inspect` implementation, so a secret never reaches a log. **The wrap happens in
+`child_spec/1`**, which means it happens when you write the supported form:
+
+```elixir
+children = [{DpExchange.Robinhood, credentials: creds, symbols: ["BTC-USD"]}]
+```
+
+Why there and not somewhere later: a supervisor stores the `{module, :start_link, [opts]}`
+MFA its child spec names, and OTP writes that argument list through `inspect/1` into the
+`Start Call:` line of the report it logs on **any** child termination. By the time
+`start_link/1` or `init/1` runs, the supervisor above has already captured the list —
+wrapping there is too late for the report, which is the whole reason this lives in
+`child_spec/1`.
+
+**The consequence is the part worth reading twice.** If you build the child spec yourself
+rather than letting the package build it —
+
+```elixir
+%{id: {:feed, provider}, start: {__MODULE__, :start_feed, [module, [credentials: creds], pairs]}}
+```
+
+— then `child_spec/1` never runs, your supervisor stores the raw map, and OTP renders your
+live key on the next crash exactly as it would have before any of this existed. Upgrading
+the package does not fix this path, because there is nothing in the package on it.
+**"Upgraded, therefore redacted" is false here.**
+
+There is a legitimate reason to be on that path: a `Core.PollingFeed`-shaped facade
+defaults `subscriber` to `self()`, which resolves to the *supervisor* when `start_link/1`
+is invoked from `init/1`, so a caller needing a different delivery target may have to reach
+`start_link/1` directly. If you do, call the wrap yourself before the spec is built:
+
+```elixir
+opts = DpExchange.Robinhood.Credentials.wrap_opt(credentials: creds, symbols: pairs)
+```
+
+`wrap_opt/1` is public on every venue's `Credentials` module for exactly this, and
+`wrap/1` takes a bare map if you are reshaping the credential anyway. Reshaping is where
+this bites hardest: a host that maps its own `api_key`/`api_secret` into a venue's
+`app_key`/`app_secret` and returns a plain map has re-introduced the leak in its own code,
+downstream of everything the package can reach.
+
+The conformance suite's assertion 22 proves `child_spec/1` does not leak. It cannot prove
+anything about a spec you built, so if you are on that path, test it: hand each venue a
+canary secret through your own adapter and fail if it survives `inspect/1`. Assert the
+control case too — that an unwrapped map *does* leak — or a passing run proves nothing.
+
+## What the redaction does not cover
+
+`:sensitive` is deliberately not set on any of these processes. It would suppress the whole
+crash report, including the stack trace, and this family has already needed one of those to
+diagnose an unrelated bug. The secret is removed; the report is kept.
