@@ -1,7 +1,7 @@
 # Detecting and absorbing vendor API change
 
 **Date:** 2026-08-27
-**Status:** Idea (placeholder — the material comes from doing the work)
+**Status:** Implemented 2026-09-09 — retrospective appended at the end.
 **Related:**
   - `docs/design/closed/2026-08-26_exchange-adapter-package-family.md` — D7 tier 2, D13, D14
     notices, §5.0 capabilities. Several pieces of a change-detector exist there for other
@@ -81,7 +81,11 @@ Phase 8.3 at close both ask what was learned, and anything about noticing vendor
 lands here rather than in the plan. Six extractions against six vendors' documentation is
 a good sample, and it is being gathered anyway.
 
-Delete this file when the work lands.
+~~Delete this file when the work lands.~~ Superseded: the work landed 2026-09-09 and this
+file is kept, with a retrospective appended, per the convention that a closed design
+document records what was found. The evidence gathered above is the reason the instrument
+is the shape it is, and deleting it would have thrown away the argument while keeping the
+conclusion.
 
 ---
 
@@ -278,3 +282,99 @@ the socket's callbacks directly and never asked what a consumer receives. Not a 
 change, and not a documentation error — a declared capability with no facade path to it,
 caught by asking a new question (Phase 14's O4 assertions) rather than by watching for
 change in anything external.
+
+---
+
+# Implemented, 2026-09-09 — retrospective
+
+**What was built**: `script/check_doc_sources.sh` plus a committed
+`docs/reference/<venue>/doc-sources.tsv` in all five venue packages, run weekly and
+non-blocking by `.github/workflows/doc-sources-check.yml`.
+
+This document spent five phases gathering evidence about which detector is worth building.
+The evidence chose, and it chose the cheapest instrument in the list.
+
+## What the evidence decided
+
+The table earlier in this document scored three candidate mechanisms across the sample.
+**A changelog diff caught nothing, across five venues and four years of one vendor's dated
+revision history.** An index diff was the only mechanism that ever fired. So the thing
+built is neither a changelog watcher nor a content differ; it is the smallest signal that
+is never noise:
+
+- **Status and redirect destination, recorded per URL, on the day a person read it.**
+  Deviation from that record is the report.
+- **Redirects are not followed.** That is the whole point. Gemini's replacement of the
+  WebSocket market-data API this family's price feed ran on was announced by a `301` and by
+  nothing else — invisible to a browser, to `curl -L`, and to a reader, because it looks
+  like a rename.
+- **Content is not diffed.** Rendered docs sites carry build hashes and rotating banners
+  and would be red every week for reasons that are never the reason we care about.
+
+## The `manual` class, which is not a degraded `auto`
+
+Schwab forced this and it is the design's second half. `developer.schwab.com` answers `403`
+to an anonymous reader; no link check, index diff or changelog diff reaches it. Those rows
+are checked for *stability* — a `403` that stops being a `403` is itself news — and then
+reported with their age, going STALE past 180 days.
+
+That closes a gap this document named and could not close before: capability claims have
+carried `measured_at` since Phase 5, and **nothing ever read that age.** Now something does.
+
+## It found a real defect on its first run, which was not the plan
+
+The plan was to record a baseline. Instead the first run reported a `404`:
+`dp_exchange_webull` cited `.../docs/reference/option-market-data/`; the page is
+`options-market-data`, plural.
+
+Pulling that thread found, in order:
+
+1. **A rate ceiling five times too permissive.** Webull's `public_ceiling` was `5 req/s`,
+   derived the day before from the Market Data FAQ's "300 requests per 60 seconds" — a real
+   page that still says exactly that, and that the venue's *own per-endpoint table*
+   contradicts, capping every market-data endpoint at `60/60s`. On a venue whose documented
+   penalty is `429` and then "temporary IP-level blocking".
+2. **A page that had existed since 2026-08-14, listed in `sitemap.xml` the whole time.**
+   Not a vendor change anyone failed to notice in time — an index diff would have surfaced
+   it the week it appeared. Third instance supporting this document's central conclusion,
+   and the first found by an instrument rather than by a person.
+3. **Three per-endpoint figures attributed to pages containing no rate-limit text at all.**
+   Every reference page on that vendor's site was fetched and searched to establish it.
+   Unsourced numbers wearing a citation — worse than missing ones, because the citation
+   buys the confidence without supplying the evidence.
+4. **A belief that blocked verification.** Those pages were recorded as "JS-rendered" and
+   uncapturable. Half true, and the wrong half was load-bearing: descriptions and
+   rate-limit blocks live in `<meta>` content and were always fetchable. The belief formed
+   partly because every `docs/` URL without a trailing slash answers `301`, and the
+   189-byte redirect stub reads exactly like a JS shell if you do not check the status code.
+
+Finding (4) is the one worth carrying. **This document has been treating "vendor changed"
+and "we were wrong" as separate problems. They share a mechanism: a claim nobody re-read.**
+A checker that forces someone to re-read the page is the same instrument for both, which is
+why the `manual` class matters as much as the automated one.
+
+## What this does not do, deliberately
+
+- **It is not a substitute for measurement.** Gemini's candle page was *wrong when written*
+  and stayed wrong; the documentation never changed and a package built from it would have
+  been broken from day one. Where a documented claim is directly measurable, the
+  measurement is the source — D13 stands unamended.
+- **It never touches a venue API.** Every URL is a documentation site. Tier-2 tests hit
+  live venue endpoints and must never run on a schedule.
+- **It does not propagate.** The question this document raised about a consumer three
+  versions behind having no way to know their `Capabilities` declaration stopped matching
+  reality is still open, and is still the half nobody has thought about. It moves to
+  `external-experimental-feedback.md`, which is the other side of it.
+- **`dp_exchange_core` gets no manifest**, because it cites no vendor documentation page —
+  it talks to no exchange. A no-op weekly job would be noise.
+
+## Two bugs in the checker itself, both fixed before it shipped
+
+Recorded because both are the kind that make a checker worse than none:
+
+- **A tab is IFS whitespace.** With `IFS=$'\t'`, bash collapses a run of tabs into one
+  delimiter, so an empty `expect_location` column shifted every later field left and the
+  first run reported all seven rows as changed. Fixed with an explicit `-` sentinel. **A
+  checker that cries wolf on its first run trains people to ignore it**, which is the same
+  failure the weekly-not-per-push scheduling exists to avoid.
+- **`[ … ] && …` under `set -e`** is a footgun; both instances are now explicit `if`.

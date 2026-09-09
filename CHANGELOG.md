@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`docs/design/ideas/detecting-vendor-api-change.md` is implemented and closed**, as
+  `docs/design/closed/2026-09-09_detecting-vendor-api-change.md` with a retrospective. The
+  document spent five phases gathering evidence about which change-detector is worth
+  building; the evidence chose, and what shipped into all five venue packages is
+  `script/check_doc_sources.sh` plus a committed `doc-sources.tsv` — status and redirect
+  destination per cited vendor documentation URL, recorded on the day a person read it,
+  checked weekly and non-blocking. No changelog watcher and no content differ: across the
+  whole sample a changelog diff caught **nothing**, and an index diff was the only
+  mechanism that ever fired.
+
+  `dp_exchange_core` itself gets no manifest and no job — it cites no vendor documentation
+  page, because it talks to no exchange. A no-op weekly run would be noise.
+
+  The instrument found a real defect on its first run rather than the baseline it was meant
+  to record: a `404` on a page `dp_exchange_webull` cited, which led to a rate ceiling five
+  times too permissive against that venue's own per-endpoint table, on a venue whose
+  documented penalty is `429` and then IP-level blocking. The retrospective carries the
+  full chain, including the finding that matters most here — **"the vendor changed" and "we
+  were wrong" share a mechanism, a claim nobody re-read**, which is why the check has a
+  `manual` class for venues no machine can verify (Schwab answers `403` to anonymous
+  readers) and why those rows go STALE past 180 days. That closes a gap this repository
+  named at Phase 5 and could not close: `Capabilities` has carried `measured_at` all along
+  and nothing ever read that age.
+
+- **`docs/design/ideas/credential-gate-fixed-callback-list.md` moved to
+  `docs/design/closed/2026-09-07_credential-gate-fixed-callback-list.md`.** It had been
+  marked resolved on 2026-09-07 and left sitting in `ideas/` — a file whose whole purpose
+  is to record state, recording the wrong one. Content unchanged beyond the status line and
+  a note recording the two-day gap.
+
 ### Fixed
 
 - **`AdapterContract` no longer dials a live venue on an ordinary `mix test` run.**

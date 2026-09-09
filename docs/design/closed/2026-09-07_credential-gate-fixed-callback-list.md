@@ -1,7 +1,12 @@
 # Assertion 17's `@credentialed` list cannot see opts-based credentials
 
 **Date:** 2026-09-07
-**Status:** Resolved 2026-09-07 — see "What changed" below.
+**Status:** Implemented 2026-09-07 — see "What changed" below.
+
+Moved out of `docs/design/ideas/` on 2026-09-09. It had carried a resolved status inside
+the ideas directory for two days, which is the same stale-status defect this family keeps
+fixing elsewhere: a file whose whole purpose is to record state, recording the wrong one.
+
 **Related:**
   - `lib/dp_exchange/core/adapter_contract.ex`, `credential_gate/0` (assertion 17)
   - `dp_exchange_webull` `9f43e4d` — "Gate the widened Fake surface on credentials, as the
