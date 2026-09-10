@@ -23,6 +23,26 @@ an acceptable changelog line.
 
 ### Documentation
 
+- **The venue-time design document moved `Draft` → `In Review`, and the consumer has been
+  told.** `docs/design/2026-09-09_venue-time-and-observed-time.md` records that `Quote` and
+  `OrderBook` carry a single `:timestamp` and so cannot say "the venue did not date this",
+  which two packages currently resolve by putting a read time in a field the contract
+  documents as the venue's own.
+
+  Filed as issue #31 with the blast radius measured (19 `lib/` files, 27 test files, 69
+  construction sites across six repositories) and the three options costed. The one question
+  that decides between them is put to the consumer directly: **does anything measure
+  staleness from `Quote.timestamp`, or is it carried and stored?** If nothing does, the
+  cheapest honest option becomes viable; if something does, the field is actively misleading
+  them today and the fix is worth its cost.
+
+  Nothing lands until they have had a chance to answer, and when it does it is a **minor
+  bump across the family in one batch**, not a patch — so a consumer pinning three-part, as
+  `usage-rules.md` instructs, receives it only when they choose it. Both type moduledocs and
+  both offending call sites are already labelled in the meantime.
+
+### Documentation
+
 - **`Core.Types.Quote` and `Core.Types.OrderBook` now record where their own rule is not
   kept.** `Quote`'s doc says `:timestamp` is "the venue's own… never invented: a quote whose
   freshness we cannot state is a quote we must not return." Two venue packages break it, and

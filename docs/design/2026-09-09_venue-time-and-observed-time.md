@@ -1,7 +1,9 @@
 # Venue time and observed time: `Quote` and `OrderBook` cannot tell them apart
 
 **Date:** 2026-09-09
-**Status:** Draft
+**Status:** In Review — announced to the consumer as issue #31 on 2026-09-10, with OQ1
+put to them directly. Nothing lands until they have had a chance to answer; when it does it
+is a minor bump across the family in one batch, not a patch.
 **Related:**
   - `lib/dp_exchange/core/types/quote.ex` — "`:timestamp` is the venue's own"
   - `lib/dp_exchange/core/types/order_book.ex` — same claim
