@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-09-10
+
 ### Documentation
 
 - **`streamable`, `authenticated_streamable` and `historical_timeframes` had no stated
