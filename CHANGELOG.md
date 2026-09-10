@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-09-10
+
 ### Added
 
 - **`DpExchange.Core.Fanout` — back-pressure, which the contract had promised since it was
