@@ -25,6 +25,34 @@ an acceptable changelog line.
 
 ### Documentation
 
+- **`coverage/1` now says what it means across a transport reconnect, because all four
+  streaming venues had it wrong in the same way at once.** Every streaming socket in the
+  family returns `{:reconnect, state}` from `handle_disconnect/2`, so the socket *process*
+  survives a transport drop — no `EXIT` fires, and every delivery-record reset path in
+  every venue was keyed on a process death. Between a drop and a successful resubscribe,
+  `coverage/1` answered `:stream` for symbols arriving from nowhere; where the reconnect
+  restored the socket but the venue silently failed to restore some symbols — the
+  325-subscribed/174-delivering shape this callback was written for — those symbols
+  answered `:stream` indefinitely, on frames observed before the disconnect.
+
+  The `@doc` now states that observation is **scoped to the current transport session**: on
+  `:link_down` a venue narrows coverage by the symbols that link carried, the same way it
+  already narrows on the socket's process death and on `unsubscribe/2`. A consumer sees a
+  brief, truthful dip bracketed by the `:link_down`/`:link_up` pair that exists for it.
+
+  It also separates the two routes, which had silently diverged: `Core.PollingFeed` applies
+  a staleness window and is right to, because a poll that missed its own interval is
+  genuinely not delivering; **a stream deliberately does not**, because an illiquid pair may
+  honestly not print for hours and on `dp_exchange_schwab` overnight silence is correct
+  rather than a fault. On a stream, coverage means *observed at least once since this
+  connection came up* — never "recently".
+
+  Documentation only in this package; the venue-side behaviour ships in each venue's own
+  release. Design: `docs/design/2026-09-10_coverage-across-a-reconnect.md`, which also
+  records why this rule **cannot** be carried by a `Core.AdapterContract` assertion — the
+  suite is fake-driven, a fake has no socket to drop, and driving a venue's real tree is the
+  dead end assertion 18 already documented.
+
 - **`streamable`, `authenticated_streamable` and `historical_timeframes` had no stated
   meaning for a venue serving more than one asset class.** They are flat lists with no class
   dimension, and two opposite readings were available — "every path serves this" or "some

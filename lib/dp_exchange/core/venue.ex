@@ -886,6 +886,42 @@ defmodule DpExchange.Core.Venue do
   reporting success it cannot see.
 
   Symbols absent from the map are `:not_covered`.
+
+  ## Observation is scoped to the current transport session
+
+  Evidence from a connection that has since dropped is **not** evidence about now. On
+  `:link_down`, a venue narrows `coverage/1` by the symbols that link was carrying, exactly
+  the way it already narrows on the same socket's process death and on `unsubscribe/2`.
+  They come back as frames arrive after the resubscribe.
+
+  This was not always so, and the reason it is written here is that all four streaming
+  venues got it wrong in the same way at once. Every one of their sockets returns
+  `{:reconnect, state}` from `handle_disconnect/2` — the socket *process* survives a
+  transport drop, so no `EXIT` fires, so none of the crash-keyed reset paths ran. Between a
+  drop and a successful resubscribe, `coverage/1` answered `:stream` for symbols arriving
+  from nowhere; and where the reconnect restored the socket but the venue silently failed
+  to restore some symbols — the 325-subscribed/174-delivering shape exactly — those symbols
+  answered `:stream` indefinitely, on the strength of frames seen before the disconnect.
+  Stale evidence standing in for current evidence is the same substitution this callback
+  exists to prevent, one level down.
+
+  A consumer therefore sees a brief, truthful dip across a reconnect, bracketed by the
+  `:link_down` / `:link_up` notice pair that exists for exactly that. Under-reporting for a
+  few seconds is the direction the paragraph above already asks for; over-reporting
+  indefinitely is the failure it was written against.
+
+  ## A route may narrow further, and must say which
+
+  `Core.PollingFeed` applies a staleness window — a symbol whose last successful poll is
+  older than `interval_ms * @coverage_grace` drops out — because a poll that did not answer
+  within its own interval is genuinely not delivering, and that is a bounded statement a
+  polling route can make.
+
+  **A streaming route deliberately does not.** An illiquid pair may honestly not print for
+  hours, and on `dp_exchange_schwab` silence overnight and all weekend is the *correct*
+  state, not a fault. A window there would report `:not_covered` for a healthy quiet market,
+  which is a false alarm and its own harm. So on a stream, coverage means *observed at least
+  once since this connection came up* — never "recently", and never "how stale".
   """
   @callback coverage(keyword()) :: %{symbol() => route()}
 
