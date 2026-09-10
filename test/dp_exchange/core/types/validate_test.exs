@@ -392,15 +392,15 @@ defmodule DpExchange.Core.Types.ValidateTest do
   end
 
   describe "OrderBook.new/1" do
-    @valid [symbol: "BTC-USD", bids: [], asks: [], timestamp: @ts, provider: :reference]
+    @valid [symbol: "BTC-USD", bids: [], asks: [], observed_at: @ts, provider: :reference]
 
     test "builds with valid attrs" do
       assert %OrderBook{symbol: "BTC-USD"} = OrderBook.new(@valid)
     end
 
-    test "rejects a nil timestamp" do
-      assert_raise ArgumentError, ~r/timestamp/, fn ->
-        OrderBook.new(Keyword.put(@valid, :timestamp, nil))
+    test "rejects a nil observed_at" do
+      assert_raise ArgumentError, ~r/observed_at/, fn ->
+        OrderBook.new(Keyword.put(@valid, :observed_at, nil))
       end
     end
   end
@@ -467,7 +467,7 @@ defmodule DpExchange.Core.Types.ValidateTest do
   end
 
   describe "Quote.new/1" do
-    @valid [symbol: "BTC-USD", price: Decimal.new("100"), timestamp: @ts, provider: :reference]
+    @valid [symbol: "BTC-USD", price: Decimal.new("100"), observed_at: @ts, provider: :reference]
 
     test "builds with valid attrs" do
       assert %Quote{symbol: "BTC-USD"} = Quote.new(@valid)

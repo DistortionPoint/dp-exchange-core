@@ -12,31 +12,28 @@ defmodule DpExchange.Core.Types.OrderBook do
   venue package that returns venue-order without re-sorting has broken the contract even
   though every value in it is true.
 
-  `:timestamp` is the venue's own, used as-is. `:sequence` is the venue's book sequence
-  number where it publishes one, for callers reconciling snapshots against a delta
-  stream, and `nil` where it does not.
+  `:venue_time` is the venue's own, used as-is, and **`nil` where the venue publishes none**
+  — a `nil` there says the venue did not date this book, which is information rather than an
+  omission. `:observed_at` is when this package read it, and is always present.
 
-  ## Known divergence, 2026-09-09
+  These replaced a single `:timestamp` in 0.2.0. See `DpExchange.Core.Types.Quote`'s own
+  moduledoc for the full reasoning, and `docs/design/2026-09-09_venue-time-and-observed-time.md`
+  for the decision: the short version is that a venue publishing no time for a frame — which
+  Gemini's partial-depth snapshot genuinely does not — had to either lie in a field
+  documented as the venue's or drop real data, and one field could not tell a consumer which
+  had happened.
 
-  `dp_exchange_gemini`'s `WsDecode.to_order_book/3` sets `:timestamp` to the time the frame
-  was **read**, not the venue's, on partial-depth snapshots. This is not a decoding mistake:
-  the vendor's own AsyncAPI schema requires only `[lastUpdateId, bids, asks]` for
-  `OrderBookSnapshot`, where `BookTicker` requires an `E` event time. The venue publishes no
-  time for that frame, and this struct has no way to say so — `TopOfBook` can, because it
-  carries `:venue_time` and `:observed_at` separately.
+  `dp_exchange_schwab`'s Streamer book is the model for `:venue_time`: it reads the venue's
+  `snapshot_time` and fails closed when absent, rather than substituting.
 
-  `dp_exchange_schwab`'s Streamer book is the counter-example and shows the rule is
-  keepable where the venue cooperates: it reads the venue's `snapshot_time` and fails closed
-  when it is absent, rather than substituting.
-
-  See `docs/design/2026-09-09_venue-time-and-observed-time.md`. Closing this means changing
-  a published type, so it is a design decision rather than an edit.
+  `:sequence` is the venue's book sequence number where it publishes one, for callers
+  reconciling snapshots against a delta stream, and `nil` where it does not.
   """
 
   alias DpExchange.Core.Types.Validate
 
-  @enforce_keys [:symbol, :bids, :asks, :timestamp, :provider]
-  defstruct [:symbol, :bids, :asks, :timestamp, :sequence, :provider]
+  @enforce_keys [:symbol, :bids, :asks, :observed_at, :provider]
+  defstruct [:symbol, :bids, :asks, :venue_time, :observed_at, :sequence, :provider]
 
   @type level :: {Decimal.t(), Decimal.t()}
 
@@ -44,7 +41,8 @@ defmodule DpExchange.Core.Types.OrderBook do
           symbol: String.t(),
           bids: [level()],
           asks: [level()],
-          timestamp: DateTime.t(),
+          venue_time: DateTime.t() | nil,
+          observed_at: DateTime.t(),
           sequence: integer() | nil,
           provider: atom() | String.t()
         }

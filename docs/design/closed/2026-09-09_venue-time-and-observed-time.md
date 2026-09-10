@@ -1,9 +1,9 @@
 # Venue time and observed time: `Quote` and `OrderBook` cannot tell them apart
 
 **Date:** 2026-09-09
-**Status:** In Review — announced to the consumer as issue #31 on 2026-09-10, with OQ1
-put to them directly. Nothing lands until they have had a chance to answer; when it does it
-is a minor bump across the family in one batch, not a patch.
+**Status:** Implemented 2026-09-10 — option B, with the consumer's requested shape. Announced
+as issue #31, answered by the consumer the same day, landed as `0.2.0` across the family.
+Retrospective appended.
 **Related:**
   - `lib/dp_exchange/core/types/quote.ex` — "`:timestamp` is the venue's own"
   - `lib/dp_exchange/core/types/order_book.ex` — same claim
@@ -117,3 +117,73 @@ and believes something the implementations do not do.
   local by definition. Fakes use a fixed literal, which is what a fake should do. So the
   substitution is confined to the two sites named above rather than being a family-wide
   habit — which also means option A's data loss is narrow, and B's migration is bounded.
+
+---
+
+# Implemented, 2026-09-10 — retrospective
+
+**Option B, with one change the consumer asked for and was right about.**
+
+## The consumer's answer changed the argument, not the conclusion
+
+They answered OQ1 with evidence rather than an impression: **nothing on their side measures
+staleness from `Quote.timestamp`.** Every liveness judgement runs off their own receipt
+clock — `TickFreshness.record/3` does not even accept a timestamp argument. So the
+silent-half-dead-feed hazard this document led with **cannot reach their monitoring through
+this field**, and I had weighted it too heavily.
+
+What they found instead is worse and was not in this document: `Quote.timestamp` becomes the
+**InfluxDB point time**, and candle aggregation buckets off that column, which feeds
+indicators, which feed strategy evaluation. It is not carried and ignored — it is *the time
+axis the analytical side is computed on*. A venue lagging by minutes with a read time
+substituted places ticks in the wrong candle, and nothing flags it, because their freshness
+checks are deliberately looking somewhere else.
+
+**Monitoring hazard: absent. Bucketing hazard: present.** Same fix, different reason, and a
+better one than the one this document argued.
+
+## Their argument for B, which is stronger than this document's
+
+Not elegance. **They could not make the fallback decision, because they could not see it.**
+With one `:timestamp` there was no way to know whether what they had just stored as a point
+time was the venue's word or someone's local clock — so no policy was expressible. With the
+split they store `:venue_time` where the venue dated the frame, and where it did not they
+store `:observed_at` *and record that they did*, so a mis-bucketed candle is attributable
+rather than invisible.
+
+They also noted that neither offending path reaches them today: they take no Schwab
+dependency at all, and since `dp_exchange_coinbase` 0.2.34 gave them `:channels`, Gemini
+receives `[:quotes, :top_of_book]` and never `:order_book`. They said so **to weight their
+own vote down**, which is worth recording.
+
+## The shape change they requested
+
+**`:observed_at` is non-nullable on both types**, as `TopOfBook` already had it. This is the
+property that makes a strictly-honest nullable `:venue_time` affordable: a consumer always
+has a usable time, so `nil` can mean "the venue did not date this" without forcing anyone to
+invent a fallback. Drop the guarantee and every caller needs one — which is the substitution
+this whole change removes, relocated into consumer code.
+
+## What was decided against, and why it stays decided
+
+- **A (refuse undated data)** is not viable as a general answer, but the consumer noted it is
+  the right answer *per field* — which is exactly what `:venue_time` now is: nullable and
+  honest, never substituted. `dp_exchange_schwab`'s Streamer book already behaved this way
+  with `snapshot_time`.
+- **C (add `:venue_time` alongside `:timestamp`)** was rejected by both sides for the same
+  reason, and the consumer put it best: *"We would be the repo that reads `:timestamp` for
+  three years and never notices `:venue_time` disagreeing with it on one venue."*
+
+## Deliberately out of scope
+
+`Trade`, `Fill`, `Balance` and `OrderBookDelta` keep a single `:timestamp`. A 2026-09-09
+sweep confirmed every `Candle` and `Trade` construction in all five venues derives its time
+from a venue field, and `OrderBookDelta`'s decoders fail closed without the venue's `E`.
+There is no divergence to fix there, and widening a breaking change past the defect it
+exists for is how a migration becomes unaffordable.
+
+## Cost, measured rather than estimated
+
+19 construction sites across four venue packages — `dp_exchange_robinhood` has none, since it
+produces only `TopOfBook`, which already had this shape. The consumer reported their own as
+8 `lib/` files and 5 test files.

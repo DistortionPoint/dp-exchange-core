@@ -17,40 +17,48 @@ defmodule DpExchange.Core.Types.Quote do
   are. **Nothing in this struct can stand in for a book, and nothing in a book can stand in
   for a price.**
 
-  ## `:timestamp` is the venue's own
+  ## `:venue_time` is the venue's own; `:observed_at` is when we read it — BREAKING in 0.2.0
 
-  Whatever it gave us, used as-is. Not normalised, not substituted, and never invented: a
-  quote whose freshness we cannot state is a quote we must not return.
+  These replace a single `:timestamp`, and the reason is the whole point of the split.
 
-  This guarantee is why `TopOfBook` has a separate `:observed_at`. A best bid/ask is real
-  time and many venues publish no timestamp with it, so the honest stamp is when the package
-  read it — a different fact, in a differently named field, rather than a call time written
-  into a field documented as the venue's.
+  `:timestamp` was documented as "the venue's own, never invented". Two venues could not
+  keep that promise, because the frames they decode carry **no venue time at all**:
+  `dp_exchange_schwab`'s `LEVELONE_*` quotes, and `dp_exchange_gemini`'s partial-depth
+  books (the vendor's own AsyncAPI requires only `[lastUpdateId, bids, asks]` there, where
+  `BookTicker` requires `E`). With one field their only options were to lie or to drop real
+  data, and they lied — a read time in a field a consumer was told was the venue's.
 
+  So:
 
-  ## Known divergence, 2026-09-09 — two venues currently break the rule above
+  * **`:venue_time`** — whatever the venue gave us, used as-is. Not normalised, not
+    substituted, and **`nil` where the venue published none**. A `nil` here is information,
+    not an omission: it says the venue did not date this.
+  * **`:observed_at`** — when this package read it. Always present, never `nil`.
 
-  Recorded here rather than only in a design document, because a reader of this contract
-  deserves to know where it is not being kept:
+  `TopOfBook` has had exactly this shape from the start, and its own doc already explained
+  why. This is that decision finishing its journey to the other two payload types.
 
-  - `dp_exchange_schwab`'s `StreamerDecode.to_quote/3` puts the **frame's arrival time** in
-    `:timestamp`. `LEVELONE_*` frames carry no venue time in the fields it reads, and its
-    own moduledoc states the substitution plainly rather than hiding it.
-  - `dp_exchange_gemini`'s `WsDecode.to_order_book/3` does the same for
-    `Core.Types.OrderBook`, on partial-depth snapshots. The vendor's own AsyncAPI schema
-    confirms the frame carries no event time: `OrderBookSnapshot` requires only
-    `[lastUpdateId, bids, asks]`, where `BookTicker` requires `E`.
+  ## Why `:observed_at` is mandatory and `:venue_time` is not
 
-  Both are the failure this section names — a read time in a field documented as the
-  venue's — and neither is a decoding mistake: the venues genuinely publish no time for
-  those frames. **The gap is in this contract, not only in those packages.** `TopOfBook`
-  can say "the venue did not stamp this" because it has `:venue_time` and `:observed_at`;
-  `Quote` and `OrderBook` have one field and so cannot say it at all.
+  Requested by the consumer who decided this design (dp-exchange-core issue #31), and it is
+  the property that makes strict honesty affordable: **a consumer always has a usable time,
+  so `:venue_time` can be left `nil` without anyone being forced to invent one.** Drop the
+  guarantee and every caller needs a fallback, which is the substitution this whole change
+  exists to remove, relocated into consumer code.
 
-  Closing it means changing a published type, which is why it is a design document
-  (`docs/design/2026-09-09_venue-time-and-observed-time.md`) and not an edit: the options
-  differ in what they cost a live consumer, and the cheapest one for us is the most
-  expensive one for them.
+  What that buys, in their words: they store `:venue_time` as the point time where the venue
+  dated the frame, and where it did not they store `:observed_at` **and record that they
+  did** — so a mis-bucketed candle is attributable rather than invisible. With one field
+  they could not make that decision at all, because they could not see which kind of time
+  they had.
+
+  ## What this is not
+
+  It is **not** a licence to fill `:venue_time` from a local clock when the venue is quiet.
+  The rule that field carries is unchanged and absolute: whatever the venue gave us, or
+  `nil`. `dp_exchange_schwab`'s Streamer book is the model — it reads the venue's
+  `snapshot_time` and fails closed when it is absent rather than substituting.
+
   ## `:volume` is `nil` when the venue publishes none
 
   Never `0`. A venue that reports no volume and a venue reporting a genuinely flat period
@@ -59,14 +67,15 @@ defmodule DpExchange.Core.Types.Quote do
 
   alias DpExchange.Core.Types.Validate
 
-  @enforce_keys [:symbol, :price, :timestamp, :provider]
-  defstruct [:symbol, :price, :volume, :timestamp, :provider]
+  @enforce_keys [:symbol, :price, :observed_at, :provider]
+  defstruct [:symbol, :price, :volume, :venue_time, :observed_at, :provider]
 
   @type t :: %__MODULE__{
           symbol: String.t(),
           price: Decimal.t(),
           volume: Decimal.t() | nil,
-          timestamp: DateTime.t(),
+          venue_time: DateTime.t() | nil,
+          observed_at: DateTime.t(),
           provider: atom()
         }
 

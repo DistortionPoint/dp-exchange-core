@@ -11,7 +11,7 @@ defmodule DpExchange.Core.TypesTest do
   @ts ~U[2026-08-27 12:00:00Z]
 
   describe "every type refuses to be built without the fields the contract needs" do
-    test "Quote requires symbol, price, timestamp and provider" do
+    test "Quote requires symbol, price, observed_at and provider" do
       assert_raise ArgumentError, fn -> struct!(Quote, symbol: "BTC-USD") end
       assert_raise ArgumentError, fn -> struct!(Quote, %{symbol: "BTC-USD", price: dec(1)}) end
     end
@@ -59,17 +59,63 @@ defmodule DpExchange.Core.TypesTest do
   end
 
   describe "timestamps are the venue's own, never rewritten" do
-    test "a Quote keeps the instant it was constructed with, however old" do
+    test "a Quote keeps the venue's instant it was constructed with, however old" do
       ancient = ~U[2019-01-01 00:00:00Z]
 
       quote_struct = %Quote{
         symbol: "BTC-USD",
         price: dec(42_000),
-        timestamp: ancient,
+        venue_time: ancient,
+        observed_at: ~U[2026-09-10 00:00:00Z],
         provider: :test_venue
       }
 
-      assert quote_struct.timestamp == ancient
+      assert quote_struct.venue_time == ancient
+    end
+
+    test "a Quote the venue gave no time for keeps venue_time nil, never a substituted clock" do
+      # The whole reason `:timestamp` became two fields in 0.2.0. A venue that publishes no
+      # time for a frame — Schwab's LEVELONE_* quotes, Gemini's partial-depth books — used
+      # to leave a package choosing between lying in a field documented as the venue's and
+      # dropping real data. `nil` here is information: the venue did not date this.
+      quote_struct = %Quote{
+        symbol: "BTC-USD",
+        price: dec(42_000),
+        observed_at: ~U[2026-09-10 00:00:00Z],
+        provider: :test_venue
+      }
+
+      assert is_nil(quote_struct.venue_time)
+      assert quote_struct.observed_at == ~U[2026-09-10 00:00:00Z]
+    end
+
+    test "observed_at is mandatory on a Quote, so no consumer has to invent a time" do
+      # Requested by the consumer who decided this design (issue #31) and load-bearing: it
+      # is what makes a nullable `venue_time` safe to honour strictly. Drop the guarantee
+      # and every caller needs a fallback — the substitution this change removed, relocated
+      # into consumer code.
+      assert_raise ArgumentError, fn ->
+        Quote.new(symbol: "BTC-USD", price: dec(1), provider: :test_venue)
+      end
+    end
+
+    test "observed_at is mandatory on an OrderBook for the same reason" do
+      assert_raise ArgumentError, fn ->
+        OrderBook.new(symbol: "BTC-USD", bids: [], asks: [], provider: :test_venue)
+      end
+    end
+
+    test "an OrderBook the venue gave no time for keeps venue_time nil" do
+      book =
+        OrderBook.new(
+          symbol: "BTC-USD",
+          bids: [],
+          asks: [],
+          observed_at: ~U[2026-09-10 00:00:00Z],
+          provider: :test_venue
+        )
+
+      assert is_nil(book.venue_time)
     end
 
     test "an Order that the venue gave no times for keeps nil, not a substituted clock" do
@@ -94,7 +140,8 @@ defmodule DpExchange.Core.TypesTest do
         symbol: "BTC-USD",
         bids: [{dec(100), dec(2)}, {dec(99), dec(5)}],
         asks: [{dec(101), dec(1)}, {dec(102), dec(3)}],
-        timestamp: @ts,
+        venue_time: @ts,
+        observed_at: @ts,
         provider: :test_venue
       }
 

@@ -201,7 +201,8 @@ defmodule DpExchange.Core.ReferenceVenue do
          volume: Decimal.new("1234.5"),
          # The caller's clock is never substituted for a venue's. Here there is no venue,
          # so this is the reference's own event time — stated, not disguised.
-         timestamp: ~U[2026-08-27 12:00:00Z],
+         venue_time: ~U[2026-08-27 12:00:00Z],
+         observed_at: ~U[2026-08-27 12:00:00Z],
          provider: runtime_id()
        }}
     else
@@ -245,7 +246,8 @@ defmodule DpExchange.Core.ReferenceVenue do
            {Decimal.new("42001"), Decimal.new("1.0")},
            {Decimal.new("42002"), Decimal.new("3")}
          ],
-         timestamp: ~U[2026-08-27 12:00:00Z],
+         venue_time: ~U[2026-08-27 12:00:00Z],
+         observed_at: ~U[2026-08-27 12:00:00Z],
          provider: runtime_id()
        }}
     else

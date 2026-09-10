@@ -21,6 +21,56 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Removed — BREAKING
+
+- **`Core.Types.Quote` and `Core.Types.OrderBook` no longer have `:timestamp`.** It is
+  replaced by **`:venue_time`** (the venue's own, `nil` where the venue publishes none) and
+  **`:observed_at`** (when this package read it, always present) — the shape
+  `Core.Types.TopOfBook` has had from the start.
+
+  **Why it had to break.** `:timestamp` was documented as "the venue's own… never invented",
+  and two packages could not keep that promise, because the frames they decode carry no
+  venue time at all: `dp_exchange_schwab`'s `LEVELONE_*` quotes, and `dp_exchange_gemini`'s
+  partial-depth books (the vendor's own AsyncAPI requires only `[lastUpdateId, bids, asks]`
+  there, where `BookTicker` requires `E`). With one field their only options were to lie or
+  to drop real data, and they lied — a read time in a field a consumer was told was the
+  venue's.
+
+  **What it costs a consumer, and what it buys them.** Every call site reading `.timestamp`
+  on these two types changes. In exchange they can express a policy they previously could
+  not: store `:venue_time` as the point time where the venue dated the frame, and where it
+  did not, store `:observed_at` **and record that you did** — so a mis-bucketed value is
+  attributable rather than invisible.
+
+  That framing is the consumer's, from issue #31, and it is a better argument than the one
+  the design document made. Their monitoring never used this field (liveness runs off their
+  own receipt clock), so the staleness hazard the plan led with could not reach them. But
+  `Quote.timestamp` is their InfluxDB point time and candles bucket off it — so a lagging
+  venue with a substituted read time puts ticks in the wrong candle, feeding indicators and
+  strategy evaluation, and nothing flags it because the freshness checks are deliberately
+  looking elsewhere.
+
+  **`:observed_at` is mandatory** on both types, at the consumer's request. That is what
+  makes a strictly-honest nullable `:venue_time` affordable: everyone always has a usable
+  time, so `nil` can mean "the venue did not date this" without forcing a caller to invent a
+  fallback — which would be this same substitution, relocated into consumer code.
+
+  **Not a licence to fill `:venue_time` from a local clock.** The rule that field carries is
+  unchanged and absolute: whatever the venue gave us, or `nil`.
+  `dp_exchange_schwab`'s Streamer book is the model — it reads the venue's `snapshot_time`
+  and fails closed when absent.
+
+  `Trade`, `Fill`, `Balance` and `OrderBookDelta` are **unchanged** and keep a single
+  `:timestamp`. A sweep confirmed every `Candle` and `Trade` construction in all five venues
+  derives its time from a venue field, and `OrderBookDelta` fails closed without the venue's
+  `E`. There is no divergence to fix there, and widening a breaking change past the defect
+  it exists for is how a migration becomes unaffordable.
+
+  Design, options and retrospective:
+  `docs/design/closed/2026-09-09_venue-time-and-observed-time.md`. Announced as issue #31 and
+  answered by the consumer the same day.
+
+
 ### Documentation
 
 - **The venue-time design document moved `Draft` → `In Review`, and the consumer has been

@@ -350,7 +350,8 @@ defmodule Broken.Subscribe.WrongTag do
            symbol: symbol,
            price: Decimal.new("42000.50"),
            volume: Decimal.new("1"),
-           timestamp: DateTime.utc_now(),
+           venue_time: DateTime.utc_now(),
+           observed_at: DateTime.utc_now(),
            provider: runtime_id()
          }}
       )
