@@ -21,9 +21,57 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
-## [0.2.5] - 2026-09-10
+### Added
 
-## [0.2.4] - 2026-09-10
+- **`DpExchange.Core.Fanout` — back-pressure, which the contract had promised since it was
+  written and no package provided.** `Core.Venue`'s `subscribe/2` doc said *"a venue pushing
+  faster than its subscriber consumes drops oldest beyond a stated bound and emits a
+  `:degraded` notice saying so"*. All five venues fanned out with a bare `send/2`, in five
+  identical private `fan_out/2` functions, none of which had ever looked at a subscriber's
+  mailbox. A consumer reading the contract was told back-pressure was handled and declared;
+  neither half was true.
+
+  The exposure is not theoretical. `dp_exchange_coinbase`'s `level2` channel measured 4258
+  delta frames in the window that produced this family's coverage incident. A subscriber
+  that stalls for thirty seconds against a stream like that accumulates a mailbox in the
+  hundred-thousands and the node dies — with no notice, no log line, and `coverage/1`
+  reporting perfect health throughout, because the feed *was* delivering.
+
+  `deliver/4` checks each subscriber's `:message_queue_len` and declines to add to a queue
+  already at the bound (default 10_000, per venue via `:max_queue_len`). It reports only
+  **transitions** — `:dropping` the first time a subscriber is found over, `:resumed` the
+  first time it is found back under — because a notice per dropped message would arrive at
+  the rate of the stream the consumer already cannot keep up with. The pair is what lets a
+  consumer bracket exactly the window it must reconcile from a pull endpoint.
+
+  Notices are deliberately **not** subject to the bound: the notice announcing that a
+  subscriber is being dropped must not be the first casualty of that same subscriber being
+  dropped.
+
+### Changed
+
+- **`coverage/1`'s neighbouring back-pressure paragraph said "drops oldest", which is not
+  implementable and is part of why nothing implemented it.** A sender cannot remove a
+  message from another process's mailbox — the receiver owns its queue. What a sender can do
+  is decline to add to a queue already past its bound, and that is also the better trade for
+  this data: a quote arriving while a consumer is thirty thousand messages behind is
+  worthless by the time it would be read, and the frames it would push out are no fresher.
+  The contract now states the achievable guarantee, and records that an unimplementable
+  sentence does not stay a wording problem — it becomes the reason a real guarantee is
+  missing.
+
+- **The bound is checked on every message to every subscriber, because checking is cheaper
+  than the send it guards.** Measured before it was written: `Process.info/2` for
+  `:message_queue_len` costs 0.029 µs against `send/2`'s 0.097 µs, and is unchanged at
+  0.028 µs against a 100_000-message backlog — it reads a counter the process already
+  maintains rather than walking the queue. At 0.3x the cost of the send, sampling the check
+  or latching it for N messages would have been complexity bought for nothing.
+
+- **`resolve/1` is shared.** All five venues had written the same pid-or-registered-name
+  resolution privately. It moves here because `deliver/4` and a venue's notice path have to
+  agree on what counts as a reachable subscriber.
+
+## [0.2.5] - 2026-09-10
 
 ### Documentation
 
@@ -54,6 +102,10 @@ an acceptable changelog line.
   records why this rule **cannot** be carried by a `Core.AdapterContract` assertion — the
   suite is fake-driven, a fake has no socket to drop, and driving a venue's real tree is the
   dead end assertion 18 already documented.
+
+## [0.2.4] - 2026-09-10
+
+### Documentation
 
 - **`streamable`, `authenticated_streamable` and `historical_timeframes` had no stated
   meaning for a venue serving more than one asset class.** They are flat lists with no class

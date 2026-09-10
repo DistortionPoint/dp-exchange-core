@@ -855,9 +855,27 @@ defmodule DpExchange.Core.Venue do
 
   ## Back-pressure is a bounded mailbox, and it is declared
 
-  A venue pushing faster than its subscriber consumes drops oldest beyond a stated bound
-  and emits a `:degraded` notice saying so. Growing a mailbox silently until the node dies
-  is the failure this avoids; dropping silently is the failure the notice avoids.
+  A venue pushing faster than its subscriber consumes drops beyond a stated bound and emits
+  a `:degraded` notice saying so, and a second one when that subscriber catches up. Growing
+  a mailbox silently until the node dies is the failure this avoids; dropping silently is
+  the failure the notice avoids, and the pair of notices is what lets a consumer bracket
+  exactly the window it has to reconcile from a pull endpoint.
+
+  `DpExchange.Core.Fanout` implements this, and a venue delivers through it rather than
+  writing its own `send/2` loop.
+
+  **This paragraph used to say "drops oldest", and no package implemented any of it.** Both
+  halves are worth recording. A sender cannot drop the oldest message in another process's
+  mailbox — nothing in the BEAM lets one process remove a message another has already been
+  sent — so as written the guarantee described something no implementation could have
+  honoured. What a sender can do is decline to add to a queue already past its bound, which
+  is also the better trade here: a quote that arrives while a consumer is thirty thousand
+  messages behind is worthless by the time it would be read, and the frames it would push
+  out are no fresher. Meanwhile all five venues fanned out with a bare `send/2` and had
+  never looked at a subscriber's mailbox, so a consumer reading this section was told
+  back-pressure was handled and declared when neither was true. An unimplementable sentence
+  in a contract does not stay a wording problem; it becomes the reason a real guarantee is
+  missing.
   """
   @callback subscribe([symbol()], keyword()) :: :ok | {:error, term()}
 
