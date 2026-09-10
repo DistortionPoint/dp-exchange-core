@@ -1,7 +1,7 @@
 # `coverage/1` Across a Transport Reconnect - Design Document
 
 **Date**: 2026-09-10
-**Status**: Approved
+**Status**: Implemented
 **Version**: 1.0
 **Author(s)**: Claude, unattended sweep
 
@@ -58,7 +58,7 @@ trigger differs.
 - [x] Establish, per venue, what actually happens to delivery records on a transport drop
 - [x] State in the contract what `coverage/1` means across a reconnect, so a consumer is
       not left inferring it from four implementations that disagree
-- [ ] Make all four streaming venues honour it
+- [x] Make all four streaming venues honour it
 - [x] Establish whether the rule can be carried by a conformance assertion (it cannot — see
       Phase 1, and the reason is recorded there rather than left as an open item)
 
@@ -113,22 +113,49 @@ trigger differs.
       check that guesses is the substitution this family keeps writing rules against. The
       rule is therefore carried by the contract's `@doc` plus one behavioural test per
       venue, and this line exists so the next person does not re-derive the same dead end.
-- [ ] **CHANGELOG** entry in Core
+- [x] **CHANGELOG** entry in Core
 
 ### Phase 2: The venues
 
-- [ ] **`dp_exchange_coinbase`**: drop the link's delivery records on `:link_down`; replace
-      the `socket.ex` rationale with what was actually found
-- [ ] **`dp_exchange_gemini`**: same, on the single socket's `:link_down`
-- [ ] **`dp_exchange_webull`**: same, per shard, keyed on the `:link_down` notice's
-      `session_id` — the handler that already flips `shard.connected?`
-- [ ] **`dp_exchange_schwab`**: same
-- [ ] Each with its own test proving `coverage/1` narrows, and a CHANGELOG entry
+- [x] **`dp_exchange_coinbase`**: `Socket` now reports which link dropped — beside the
+      `:link_down` notice, not inside it, since a socket pid is package wiring and has no
+      business in a `Core.Notice` — and `Feed` narrows to that shard's symbols and that
+      shard's channel's kind, reusing the `drop_kind/3` the crash path already had. The old
+      `socket.ex` rationale is replaced with what was actually found: its load-bearing
+      clause deferred to a downstream freshness check that cannot exist.
+- [x] **`dp_exchange_gemini`**: `:link_down` resets `delivering_by_kind` the way the crash
+      path did. The empty-delivery literal moved into `empty_delivery/0` now that it has
+      three call sites — a third streamable kind added to two of three is exactly the silent
+      divergence this family writes rules against.
+- [x] **`dp_exchange_webull`**: the existing `:link_down` clause already resolved the
+      shard by `session_id` and flipped `connected?`; it now drops that shard's delivery
+      records too. Scoped per shard, and the shard keeps its entry — unlike the crash path,
+      it is reconnecting rather than dead.
+- [x] **`dp_exchange_schwab`**: whole reset, for the reason `isolate_crashed_route/2`
+      already gives — one active route at a time, so the dropped link was the only thing
+      delivering. `route`/`socket` deliberately left alone or `ensure_route/1` dials a
+      second socket. `Socket` was already clearing `logged_in?` and its `subscriptions` on
+      the same event; this was the last piece.
+- [x] Each with its own test proving `coverage/1` narrows, and a CHANGELOG entry. Webull's
+      revealed one honest wrinkle worth recording: `coverage_by_kind/1` keeps a now-empty
+      `:quotes` key after a drop rather than dropping it, which is the shape `unsubscribe/2`
+      already produced through the same helper — an empty map reads as "nothing observed"
+      where an absent key reads as "unknown", so it was asserted rather than smoothed away.
 
 ### Phase 3: Batch
 
-- [ ] All five repos gated, then pushed as one batch — a venue asserting the new rule
-      against a Core that has not shipped it would fail its own conformance run
+- [x] All five repos gated, then pushed as one batch — a venue's changelog citing a Core
+      release that had not shipped would be a claim nobody could check.
+
+## Measured
+
+| Repo | Tests | Dialyzer | Credo | Coverage |
+|---|---|---|---|---|
+| `dp_exchange_core` | 648 + 20 doctests, 0 failures | 0 errors | clean | — |
+| `dp_exchange_coinbase` | 697, 0 failures | 0 errors | clean | 92.54% |
+| `dp_exchange_gemini` | 787, 0 failures | 0 errors | clean | 90.77% |
+| `dp_exchange_webull` | 769, 0 failures | 0 errors | clean | 90.86% |
+| `dp_exchange_schwab` | 505, 0 failures | 0 errors | clean | 91.20% |
 
 ## Detailed Design
 
@@ -168,4 +195,44 @@ the callback is to make an outage visible.
 
 ## Retrospective
 
-<!-- Appended on Implemented, before this document moves to docs/design/closed/. -->
+**What was found that the plan did not predict.**
+
+*The conformance assertion was never available.* The plan opened assuming the rule would be
+carried by `Core.AdapterContract`, because that is where every other family-wide rule lives.
+It cannot be: the suite is fake-driven and a fake has no socket to drop. Assertion 18 had
+already tried the alternative — drive the venue's real tree — and rejected it in writing,
+because starting a non-fake venue tree is not reliably network-free and the only way around
+that is a venue-specific injection option the suite is forbidden from knowing. Ruling it out
+explicitly, in the checklist, was worth more than leaving the item open: an unexplained
+unchecked box reads as work someone should pick up.
+
+*Coinbase was the interesting one, and not for the reason expected.* It was the only package
+with a written argument for the old behaviour, which made it look like a deliberate trade-off
+the other three had simply not made. It was not. The argument's last clause — that a symbol's
+staleness "ages it out of whatever freshness a caller applies downstream" — deferred to a
+mechanism that does not exist, because `coverage/1` returns `%{symbol() => route()}` and
+exposes no timestamp. A comment can be entirely reasonable and still rest on something
+nobody checked; this one had been read past for as long as it had been there.
+
+*Three of the four had already written the correct reasoning, for the crash path.* Webull's
+was the plainest — *"`coverage/1` itself kept lying in the meantime"* — and it applied
+verbatim to the transport case. Nobody was wrong about the principle. What nobody noticed is
+that `{:reconnect, state}` means the socket process survives, so the crash-keyed reset never
+fires on the far more common event. The defect lived in the gap between two correct facts.
+
+*The `delivering` timestamps are dead data.* All four venues stamp a millisecond timestamp
+per symbol per kind and no consumer of any of those maps ever compares it — every reader
+discards it as `_at`. That was noticed while auditing clock sources and deliberately left
+alone: removing it is motion with no defect behind it, and the field is the obvious place a
+future staleness question would start. Recorded here so the next reader knows it was seen,
+not missed.
+
+**What would have caught this earlier.** Nothing in the suites, and that is the honest
+answer. Every venue's tests exercised a socket *crash* because that is the path each venue
+wrote a reset for; no venue had a test for the event its own socket actually produces most
+often. The four new tests are all the same shape — deliver, drop the link, assert coverage
+narrows, deliver again, assert it refills — and that shape is what a fifth venue should copy.
+
+**What this cost.** One Core doc change, four small feed changes, six tests, five changelog
+entries. The behaviour change is a few seconds of truthful under-reporting during a
+reconnect, against an indefinite over-report in exactly the failure the callback exists for.
