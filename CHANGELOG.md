@@ -21,6 +21,34 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 23 — venue time and observed time.** `Quote` and `OrderBook` gained
+  `:venue_time` and `:observed_at` in 0.2.0, and **nothing checked that `:venue_time` stays
+  honest**. Assertion 14 already made exactly this check for `TopOfBook`, which carried both
+  fields from the start; 23 extends it to the two types that just gained them, for
+  `get_price/2` and `get_order_book/2`.
+
+  This is a gap the 0.2.0 change created, found by auditing it rather than by it failing.
+
+  It is deliberately **not** the "comprehensive endpoint → expected-struct map" that
+  `docs/reference/core/assertion-coverage.md` considered and declined: two named callbacks
+  whose return type the contract already fixes, with no hand-maintained list to rot. Both
+  gate on `Capabilities.active?/2`, so a venue declaring either `:unsupported` is skipped
+  rather than failed — `dp_exchange_robinhood` declares both, and passes by exemption.
+
+  **What it catches**: a decode bug with a plausible shape — a raw epoch integer, a
+  `NaiveDateTime`, or a venue string left unparsed in `:venue_time`.
+
+  **What it cannot catch, and the coverage map now says so**: a venue putting its own local
+  clock in `:venue_time`. No assertion can — a `DateTime` from `DateTime.utc_now/0` is
+  indistinguishable from one the venue sent. That is held by the type's documentation and by
+  review, and implying otherwise would make the coverage map worse than useless.
+
+  A third test is structural: neither type may regrow a `:timestamp` field. Same reasoning as
+  `TopOfBook has no price field` — a field with no defined meaning gets filled from whichever
+  value is nearest to hand, which is the ambiguity the split removed.
+
 ### Removed — BREAKING
 
 - **`Core.Types.Quote` and `Core.Types.OrderBook` no longer have `:timestamp`.** It is

@@ -1,6 +1,6 @@
 # What the conformance suite does — and does not — check
 
-**Audited 2026-09-08.** `Core.AdapterContract`'s 19 assertion groups (now 22 — see
+**Audited 2026-09-08.** `Core.AdapterContract`'s 19 assertion groups (now 23 — see
 "Gaps closed" below) have each caught real, shipped defects within minutes of existing.
 Nobody had asked the inverse question: which parts of `Core.Venue`, `Core.Capabilities`,
 `Core.Notice` and `Core.PollingFeed` have **no** assertion touching them at all. This is
@@ -316,3 +316,32 @@ every CI run and never dials out" is not quite true today for these two pre-exis
 checks. Reported here because it was found in the course of the verification this task
 requires; not fixed here — it is a change to two existing assertions, not a gap this
 audit was scoped to close.
+
+## Gap closed 2026-09-10 — assertion 23
+
+The `Core.Types.*` row above records assertion 5 as **partial**, and deliberately declines a
+comprehensive endpoint → expected-struct map. That reasoning stands. This is the narrow case
+it does not cover, created by Core 0.2.0's own change.
+
+Splitting `Quote`/`OrderBook`'s `:timestamp` into `:venue_time` and `:observed_at` is only
+worth having if `:venue_time` stays honest — and nothing checked it. Assertion 14 already
+made exactly this check for `TopOfBook`, which carried both fields from the start; assertion
+23 extends it to the two types that just gained them.
+
+**Why this is not the declined map.** Two named callbacks whose return type the contract
+already fixes, with no hand-maintained list to rot. `get_price/2` returns a `Quote`,
+`get_order_book/2` returns an `OrderBook`, and both gate on `Capabilities.active?/2` so a
+venue declaring them `:unsupported` is skipped rather than failed.
+
+**What it catches**: a decode bug with a plausible shape — a raw epoch integer, a
+`NaiveDateTime`, or an unparsed venue string sitting in `:venue_time`.
+
+**What it cannot catch, stated rather than implied**: a venue putting its own local clock in
+`:venue_time`. No assertion can — a `DateTime` from `DateTime.utc_now/0` is indistinguishable
+from one the venue sent. That is held by the type's documentation and by review. Claiming
+otherwise would make this row worse than useless, which is the failure this whole file exists
+to prevent.
+
+A third test is structural rather than behavioural: neither type may regrow a `:timestamp`
+field. Same reasoning as `TopOfBook has no price field` — a field with no defined meaning
+gets filled from whichever value is nearest to hand, which is the ambiguity the split removed.

@@ -101,7 +101,10 @@ defmodule DpExchange.Core.AdapterContract do
          "refused, never served at the nearest one"},
       {22,
        "credential redaction in child_spec/1 — a secret passed in :credentials is not " <>
-         "rendered in the args a supervisor stores and OTP prints on every child crash"}
+         "rendered in the args a supervisor stores and OTP prints on every child crash"},
+      {23,
+       "venue time and observed time — Quote and OrderBook carry the venue's own DateTime " <>
+         "or nil in venue_time, never an unparsed stand-in, and observed_at is always there"}
     ]
   end
 
@@ -124,6 +127,7 @@ defmodule DpExchange.Core.AdapterContract do
       credential_redaction(),
       subscribed_push_shape(),
       historical_timeframe_discipline(),
+      venue_and_observed_time(),
       helpers(),
       arg_helpers(),
       credential_gate_helpers(),
@@ -1177,6 +1181,91 @@ defmodule DpExchange.Core.AdapterContract do
                      "value the pull endpoints return, never raw venue data"
           end
         end
+      end
+    end
+  end
+
+  defp venue_and_observed_time do
+    quote location: :keep do
+      # --- 23. venue time and observed time on Quote and OrderBook -------------
+
+      describe "23. venue time and observed time" do
+        # Core 0.2.0 split `Quote`/`OrderBook`'s single `:timestamp` into `:venue_time`
+        # (the venue's own, `nil` where it publishes none) and `:observed_at` (when the
+        # package read it, always present) — see
+        # `docs/design/closed/2026-09-09_venue-time-and-observed-time.md`.
+        #
+        # **The split is only worth having if `:venue_time` stays honest**, and nothing
+        # checked that. Assertion 14 already makes exactly this check for `TopOfBook`,
+        # which had the two fields from the start; these extend it to the two types that
+        # just gained them. Not the "comprehensive endpoint → struct map"
+        # `docs/reference/core/assertion-coverage.md` considered and declined: two named
+        # callbacks whose return type the contract already fixes, with no list to maintain.
+        #
+        # What this catches is a decode bug with a plausible shape — a raw epoch integer, a
+        # `NaiveDateTime`, or a venue string left unparsed in `:venue_time`. What it cannot
+        # catch is a venue putting its own local clock there; no assertion can, because a
+        # `DateTime` from `DateTime.utc_now/0` is indistinguishable from one the venue sent.
+        # That is held by the type's documentation and by review, and saying so is more
+        # useful than implying this closes it.
+        #
+        # Fake-driven for the same reason assertion 14 is: both endpoints are active and
+        # uncredentialed on several venues here, so calling the real one would make every
+        # ordinary `mix test` dial the live API.
+        test "get_price/2's Quote carries the venue's own time or nil, and always observed_at" do
+          assert_times(@venue, @fake, {:get_price, 2}, DpExchange.Core.Types.Quote)
+        end
+
+        test "get_order_book/2's OrderBook keeps the same discipline" do
+          assert_times(@venue, @fake, {:get_order_book, 2}, DpExchange.Core.Types.OrderBook)
+        end
+
+        test "neither type still carries a :timestamp field" do
+          # Structural, and asserted rather than trusted — the same reasoning as
+          # `TopOfBook has no price field`. A `:timestamp` reintroduced later would be a
+          # field with no defined meaning: callers would fill it from whichever of the two
+          # times was nearest to hand, which is the ambiguity this split removed.
+          refute Map.has_key?(
+                   struct(DpExchange.Core.Types.Quote, %{}),
+                   :timestamp
+                 ),
+                 "Quote must not regrow :timestamp — venue_time and observed_at are " <>
+                   "different facts and one field cannot say which it holds"
+
+          refute Map.has_key?(struct(DpExchange.Core.Types.OrderBook, %{}), :timestamp),
+                 "OrderBook must not regrow :timestamp"
+        end
+      end
+
+      # Assertion 23's shared body. A `defp` in the helpers quote rather than repeated in
+      # each test: two endpoints ask the identical question of two different types, and
+      # inlining it twice pushed the enclosing quote past credo's complexity ceiling — which
+      # is the tool noticing the duplication before a reader had to.
+      #
+      # Silently skips a venue that declares the endpoint `:unsupported`, and any answer
+      # that is not `{:ok, _}` — a refusal is a legitimate answer here, not a failure.
+      defp assert_times(venue, fake, {name, arity} = endpoint, expected_module) do
+        caps = venue.capabilities()
+
+        if Capabilities.active?(caps, endpoint) and @sample_pairs != [] and fake do
+          case apply(fake, name, [hd(@sample_pairs), []]) do
+            {:ok, value} -> assert_time_fields(value, expected_module, name, arity)
+            _refused_or_unsupported -> :ok
+          end
+        end
+      end
+
+      defp assert_time_fields(value, expected_module, name, arity) do
+        assert %^expected_module{} = value,
+               "#{name}/#{arity} must return a #{inspect(expected_module)}"
+
+        assert %DateTime{} = value.observed_at,
+               "observed_at is mandatory: it is what lets venue_time be nil without any " <>
+                 "caller having to invent a time"
+
+        assert is_nil(value.venue_time) or match?(%DateTime{}, value.venue_time),
+               "venue_time is the venue's own DateTime or nil — never an unparsed epoch, " <>
+                 "a NaiveDateTime, or a stand-in for a time the venue did not send"
       end
     end
   end
