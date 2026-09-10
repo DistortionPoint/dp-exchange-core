@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`streamable`, `authenticated_streamable` and `historical_timeframes` had no stated
+  meaning for a venue serving more than one asset class.** They are flat lists with no class
+  dimension, and two opposite readings were available — "every path serves this" or "some
+  path serves this". Nothing in the contract said which, so a venue author had to guess.
+
+  **The rule is now written down: a value belongs in the list if the venue serves it on any
+  path this package reaches — a union, not an intersection.** Both multi-asset venues had
+  already chosen that reading independently, which is exactly how the ambiguity stayed
+  invisible: they agreed by coincidence, not because the contract said so.
+
+  **What makes a union honest is the second half of the rule**, and it is stated with it:
+  the per-call path must **fail closed** for a combination it does not serve. Declare `1w`
+  because your equity bars serve it and then return a `1d` bar when a caller asks for `1w` on
+  crypto, and you have built the substitution this family exists to stop.
+  `dp_exchange_webull` is cited as the worked example — it declares `1w`/`1M` for the equity,
+  option and futures bars and answers `{:error, {:unsupported_timeframe, _}}` for a crypto
+  category.
+
+  The limitation is recorded rather than implied: a consumer cannot ask "which widths for
+  crypto" or "is the book streamable for options", and gets the venue-wide answer plus an
+  honest refusal. Two confirmed instances — `dp_exchange_webull`'s `1w`/`1M`/`1y`, and
+  `dp_exchange_schwab`'s inability to declare `:order_book` for options alone, which is one
+  of the two reasons `OPTIONS_BOOK` stays unwired. Closing it means an asset-class dimension
+  on a published type for a gap no consumer has reported hitting, so the instances are
+  recorded for whoever weighs that next rather than the change being made speculatively.
+
+  Also in `usage-rules/adapter.md`, since a venue author reads that before writing a
+  declaration.
+
+
 ## [0.2.3] - 2026-09-10
 
 ### Fixed

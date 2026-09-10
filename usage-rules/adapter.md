@@ -139,6 +139,31 @@ Current `supported_order_types`: `:market`, `:limit`, `:stop`, `:stop_limit`,
 Core had no word for them; declaring one says the venue accepts the type, not that Core
 can express every parameter it takes — `place_order/3`'s request map is for that.
 
+
+### A list-valued capability is a union across asset classes — and the call must fail closed
+
+If your venue serves more than one asset class, `streamable`, `authenticated_streamable` and
+`historical_timeframes` are flat lists with no class dimension, and the rule is:
+
+**A value belongs in the list if the venue serves it on any path this package reaches.**
+
+That is only honest because of the second half:
+
+**The per-call path must fail closed for a combination it does not serve.** Declare `1w`
+because your equity bars serve it, then quietly return a `1d` bar when a caller asks for
+`1w` on crypto, and you have built the exact substitution this family exists to stop.
+`dp_exchange_webull` is the worked example — it declares `1w`/`1M` for the equity, option and
+futures bars, and `get_historical_prices/5` answers
+`{:error, {:unsupported_timeframe, _}}` for a crypto category.
+
+Both multi-asset venues chose this reading independently before it was written down, which
+is why the ambiguity went unnoticed. Do not choose the other one.
+
+**The limitation it leaves**: a consumer cannot ask "which widths for crypto" or "is the
+book streamable for options" — they get the venue-wide answer and learn the per-class truth
+from a refusal. Two packages hit this today. Closing it means an asset-class dimension on a
+published type, for a gap no consumer has reported hitting; see
+`DpExchange.Core.Capabilities`' moduledoc for the two instances.
 ## Prefer `Types.*.new/1` over a struct literal in your decoder
 
 Every `Core.Types.*` module exposes a validating `new/1`, built on

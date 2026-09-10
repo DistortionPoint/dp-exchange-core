@@ -97,6 +97,44 @@ defmodule DpExchange.Core.Capabilities do
   A kind of data a subscription can deliver — normalised, so a consumer never learns a
   venue's channel vocabulary.
 
+  ## A list-valued capability is a UNION across asset classes, not an intersection
+
+  `streamable`, `authenticated_streamable` and `historical_timeframes` are flat lists with
+  no asset-class dimension, and until 2026-09-10 nothing said what that flatness *means* for
+  a venue serving more than one class. Two readings are available and they are opposites:
+  "every path serves this" or "some path serves this". A venue author had to guess.
+
+  **The rule is the union: a value belongs in the list if the venue serves it on any path
+  this package reaches.** Both multi-asset venues in the family had already chosen that
+  reading independently, which is how the ambiguity stayed invisible —
+  `dp_exchange_webull`'s `Rest.wide_timeframes/0` says so in its own doc, and
+  `dp_exchange_schwab`'s `Rest.timeframes/0` calls its list "canonical candle widths this
+  venue serves".
+
+  **What makes a union honest rather than an overstatement is the second half of the rule:
+  the per-call path must FAIL CLOSED for a combination it does not serve.**
+  `dp_exchange_webull` is the worked example — `historical_timeframes` includes `1w` and
+  `1M` because the equity, option and futures bars serve them, and
+  `get_historical_prices/5` answers `{:error, {:unsupported_timeframe, _}}` for a crypto
+  category rather than degrading to the nearest width it does serve. Declare the union and
+  substitute at the call, and you have built exactly the failure this family exists to stop.
+
+  ### The limitation this leaves, stated rather than implied
+
+  A consumer cannot ask "which widths for crypto specifically" or "is the order book
+  streamable for options". They get the venue-wide answer and discover the per-class truth
+  from an honest refusal. That is a real gap with two confirmed instances:
+
+  - `dp_exchange_webull` cannot say that `1w`/`1M`/`1y` are equity, option and futures only.
+  - `dp_exchange_schwab` cannot declare `:order_book` for options alone, which is one of two
+    reasons `OPTIONS_BOOK` stays unwired — see that package's
+    `docs/design/ideas/schwab-depth-and-account-activity-streaming.md`.
+
+  Closing it means an asset-class dimension on these fields, which is a breaking change to a
+  published type for a gap no consumer has yet reported hitting. It is recorded here so the
+  next person weighing it starts from the two instances rather than from zero — and so that
+  a venue author reading this file today knows which reading to write against.
+
   ## `:top_of_book` is not `:order_book`
 
   Venues stream these on separate channels because they are separate things: a best-bid/ask
