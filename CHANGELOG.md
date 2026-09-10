@@ -23,6 +23,44 @@ an acceptable changelog line.
 
 ### Documentation
 
+- **`Core.Types.Quote` and `Core.Types.OrderBook` now record where their own rule is not
+  kept.** `Quote`'s doc says `:timestamp` is "the venue's own… never invented: a quote whose
+  freshness we cannot state is a quote we must not return." Two venue packages break it, and
+  neither is a decoding mistake: `dp_exchange_schwab`'s `LEVELONE_*` quotes carry the
+  frame's arrival time, and `dp_exchange_gemini`'s partial-depth books carry the local clock.
+  Both venues genuinely publish no time for those frames — Gemini's own AsyncAPI proves it,
+  requiring `[lastUpdateId, bids, asks]` for `OrderBookSnapshot` where `BookTicker` requires
+  an `E`.
+
+  **The gap is in this contract, not only in those packages.** `TopOfBook` can say "the
+  venue did not stamp this" because it carries `:venue_time` and `:observed_at` separately;
+  `Quote` and `OrderBook` have one field, so a venue that publishes no time can only lie or
+  drop the data. `dp_exchange_schwab`'s Streamer *book* is the counter-example that proves
+  the rule is keepable where the venue cooperates — it reads `snapshot_time` and fails closed
+  without it.
+
+  Recorded in both moduledocs rather than only in a design document, because a reader of the
+  contract deserves to know where it is not being kept.
+
+- **New design document: `docs/design/2026-09-09_venue-time-and-observed-time.md`.** Closing
+  the gap means changing a published type that a live consumer decodes at every call site —
+  19 `lib/` files and 27 test files across six repositories, 69 construction sites, delivered
+  automatically by the release pipeline on merge. This project's rules reserve that for a
+  written plan, and this is a decision where the cheapest option for us is the most expensive
+  one for the consumer.
+
+  Three options are costed: refuse the undated data (deletes the last traded price from
+  Schwab's stream), give `Quote`/`OrderBook` what `TopOfBook` already has (breaking), or add
+  `:venue_time` alongside `:timestamp` (non-breaking but redundant, and redundancy rots). The
+  recommendation is the second, sequenced deliberately rather than landed unannounced.
+
+  One open question was closed in the same pass: **every `Candle` and `Trade` construction in
+  all five venues derives its time from a venue field.** None reaches for the local clock, so
+  the substitution is confined to the two named sites rather than being a family-wide habit —
+  which bounds both the data loss of option A and the migration of option B.
+
+### Documentation
+
 - **`usage-rules/adapter.md` gains "If your vendor publishes an index, diff it".** The
   vendor-change design doc concluded that across five vendors a *changelog* diff caught
   nothing and an **index diff** was the only mechanism that ever fired. That conclusion has

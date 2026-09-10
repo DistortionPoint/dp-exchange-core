@@ -27,6 +27,30 @@ defmodule DpExchange.Core.Types.Quote do
   read it — a different fact, in a differently named field, rather than a call time written
   into a field documented as the venue's.
 
+
+  ## Known divergence, 2026-09-09 — two venues currently break the rule above
+
+  Recorded here rather than only in a design document, because a reader of this contract
+  deserves to know where it is not being kept:
+
+  - `dp_exchange_schwab`'s `StreamerDecode.to_quote/3` puts the **frame's arrival time** in
+    `:timestamp`. `LEVELONE_*` frames carry no venue time in the fields it reads, and its
+    own moduledoc states the substitution plainly rather than hiding it.
+  - `dp_exchange_gemini`'s `WsDecode.to_order_book/3` does the same for
+    `Core.Types.OrderBook`, on partial-depth snapshots. The vendor's own AsyncAPI schema
+    confirms the frame carries no event time: `OrderBookSnapshot` requires only
+    `[lastUpdateId, bids, asks]`, where `BookTicker` requires `E`.
+
+  Both are the failure this section names — a read time in a field documented as the
+  venue's — and neither is a decoding mistake: the venues genuinely publish no time for
+  those frames. **The gap is in this contract, not only in those packages.** `TopOfBook`
+  can say "the venue did not stamp this" because it has `:venue_time` and `:observed_at`;
+  `Quote` and `OrderBook` have one field and so cannot say it at all.
+
+  Closing it means changing a published type, which is why it is a design document
+  (`docs/design/2026-09-09_venue-time-and-observed-time.md`) and not an edit: the options
+  differ in what they cost a live consumer, and the cheapest one for us is the most
+  expensive one for them.
   ## `:volume` is `nil` when the venue publishes none
 
   Never `0`. A venue that reports no volume and a venue reporting a genuinely flat period

@@ -15,6 +15,22 @@ defmodule DpExchange.Core.Types.OrderBook do
   `:timestamp` is the venue's own, used as-is. `:sequence` is the venue's book sequence
   number where it publishes one, for callers reconciling snapshots against a delta
   stream, and `nil` where it does not.
+
+  ## Known divergence, 2026-09-09
+
+  `dp_exchange_gemini`'s `WsDecode.to_order_book/3` sets `:timestamp` to the time the frame
+  was **read**, not the venue's, on partial-depth snapshots. This is not a decoding mistake:
+  the vendor's own AsyncAPI schema requires only `[lastUpdateId, bids, asks]` for
+  `OrderBookSnapshot`, where `BookTicker` requires an `E` event time. The venue publishes no
+  time for that frame, and this struct has no way to say so — `TopOfBook` can, because it
+  carries `:venue_time` and `:observed_at` separately.
+
+  `dp_exchange_schwab`'s Streamer book is the counter-example and shows the rule is
+  keepable where the venue cooperates: it reads the venue's `snapshot_time` and fails closed
+  when it is absent, rather than substituting.
+
+  See `docs/design/2026-09-09_venue-time-and-observed-time.md`. Closing this means changing
+  a published type, so it is a design decision rather than an edit.
   """
 
   alias DpExchange.Core.Types.Validate
