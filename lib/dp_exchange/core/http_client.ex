@@ -49,7 +49,7 @@ defmodule DpExchange.Core.HttpClient do
 
   require Logger
 
-  alias DpExchange.Core.{Config, DefaultRateLimiter}
+  alias DpExchange.Core.{Config, DefaultRateLimiter, Telemetry}
 
   # Suppress dialyzer warnings for functions that dialyzer incorrectly analyzes
   @dialyzer {:nowarn_function, [parse_response_body: 1, get: 3]}
@@ -457,8 +457,26 @@ defmodule DpExchange.Core.HttpClient do
   # venue package with an unusual one is not forced to reimplement this pipeline.
   defp transport_opts(opts), do: Keyword.take(opts, [:plug, :adapter, :req_adapter])
 
+  # The one place a request actually leaves this process and comes back, which is why the
+  # `[:dp_exchange, :request, :*]` events are emitted HERE and not at the public entry
+  # points. `request/5`, `get/3` and every convenience wrapper funnel through this, so one
+  # emission covers every venue's every call — and, more to the point, cannot be forgotten
+  # by the next endpoint somebody adds.
+  #
+  # `:stop` fires for every outcome, including the 4xx/5xx that become `{:error, _}` below
+  # and the 429 that `handle_rate_limit/4` turns into a retry. A latency panel built on
+  # successes alone shows a venue getting FASTER exactly as it starts failing, because the
+  # slow calls are the ones dropping out of the sample.
   defp make_http_request(method, url, headers, body, opts) do
     timeout = Config.opt(opts, :timeout, 30_000)
+
+    metadata = %{
+      provider: Config.opt(opts, :provider, "unknown"),
+      endpoint: Telemetry.endpoint(url),
+      method: method
+    }
+
+    start_time = Telemetry.request_start(metadata)
 
     request_opts =
       [
@@ -471,70 +489,121 @@ defmodule DpExchange.Core.HttpClient do
       ] ++ transport_opts(opts)
 
     try do
-      case Req.request(
-             [
-               method: method,
-               url: url,
-               headers: headers,
-               body: body
-             ] ++ request_opts
-           ) do
-        {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
-          response = %{
-            status: status,
-            headers: resp_headers,
-            body: resp_body
-          }
+      # `{result, status}`, not just `result`. The venue's HTTP status is known right here
+      # and every error branch below destroys it — `{:error, "Server error (503): …"}` keeps
+      # it only inside a message string. Recovering it by parsing that string back out would
+      # be the string-matching this function's own 4xx comment objects to, one layer further
+      # along. Carried out explicitly instead, so `:stop` reports a 503 as a 503 and a
+      # connection refusal as `nil`: without that a dashboard cannot tell a venue that is
+      # erroring from a venue that is unreachable, which are different outages needing
+      # different responses.
+      {result, status} =
+        case Req.request(
+               [
+                 method: method,
+                 url: url,
+                 headers: headers,
+                 body: body
+               ] ++ request_opts
+             ) do
+          {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
+            response = %{
+              status: status,
+              headers: resp_headers,
+              body: resp_body
+            }
 
-          case status do
-            status when status in 200..299 ->
-              {:ok, response}
+            outcome =
+              case status do
+                status when status in 200..299 ->
+                  {:ok, response}
 
-            429 ->
-              handle_rate_limit(response, method, url, opts)
+                429 ->
+                  handle_rate_limit(response, method, url, opts)
 
-            # A 4xx is where a venue says *why*, and the contract has a shape for it:
-            # `{:refused, reason}` is permanent and `{:error, reason}` may be transient,
-            # and a caller acts on the difference. Flattening the status and body into a
-            # message string destroys the only evidence that tells them apart — so a
-            # venue package that wants to produce a refusal has to string-match its way
-            # back, and `String.contains?(message, "404")` also matches a body that
-            # happens to contain "404".
-            #
-            # `raw_status: true` hands the response back intact and lets the venue decide.
-            # Opt-in rather than the default, because the string form is what every
-            # existing caller matches on and changing it silently would turn working
-            # refusal detection into a permanent error.
-            status when status in 400..499 ->
-              if Config.opt(opts, :raw_status, false) do
-                {:ok, response}
-              else
-                {:error, "Client error (#{status}): #{format_body(resp_body)}"}
+                # A 4xx is where a venue says *why*, and the contract has a shape for it:
+                # `{:refused, reason}` is permanent and `{:error, reason}` may be transient,
+                # and a caller acts on the difference. Flattening the status and body into a
+                # message string destroys the only evidence that tells them apart — so a
+                # venue package that wants to produce a refusal has to string-match its way
+                # back, and `String.contains?(message, "404")` also matches a body that
+                # happens to contain "404".
+                #
+                # `raw_status: true` hands the response back intact and lets the venue
+                # decide. Opt-in rather than the default, because the string form is what
+                # every existing caller matches on and changing it silently would turn
+                # working refusal detection into a permanent error.
+                status when status in 400..499 ->
+                  if Config.opt(opts, :raw_status, false) do
+                    {:ok, response}
+                  else
+                    {:error, "Client error (#{status}): #{format_body(resp_body)}"}
+                  end
+
+                status when status in 500..599 ->
+                  {:error, "Server error (#{status}): #{format_body(resp_body)}"}
+
+                _value ->
+                  {:error, "Unexpected status (#{status}): #{format_body(resp_body)}"}
               end
 
-            status when status in 500..599 ->
-              {:error, "Server error (#{status}): #{format_body(resp_body)}"}
+            {outcome, status}
 
-            _value ->
-              {:error, "Unexpected status (#{status}): #{format_body(resp_body)}"}
-          end
+          # No status at all — a connection refused, a DNS failure, a TLS handshake that
+          # never completed. Reported as `nil` rather than `0` or `:unknown`, because a
+          # request that never got a status must not put a value into a numeric series that
+          # means "not a status at all".
+          {:error, reason} ->
+            {{:error, "Request failed: #{inspect(reason)}"}, nil}
+        end
 
-        {:error, reason} ->
-          {:error, "Request failed: #{inspect(reason)}"}
-      end
+      Telemetry.request_stop(start_time, metadata, telemetry_outcome(result, status))
+      result
 
       # RESCUE: defensive boundary; Phase 2.5 audit — refine reason.
     rescue
       error ->
+        # `:exception`, not a `:stop` carrying an error. The distinction is the point: an
+        # error RESULT is the venue answering badly; an exception is this package failing to
+        # ask. Folding them together makes a client-side bug indistinguishable from a venue
+        # outage on every dashboard built from these events.
+        Telemetry.request_exception(start_time, metadata,
+          kind: :error,
+          reason: inspect(error),
+          result: :exception
+        )
+
         {:error, "Request exception: #{inspect(error)}"}
     end
   end
+
+  # `result` gives the coarse bucket a dashboard groups by; `status` is carried separately
+  # because every error branch above has already turned it into prose. See the comment at
+  # the `{result, status}` binding.
+  defp telemetry_outcome({:ok, _response}, status), do: [status: status, result: :ok]
+
+  defp telemetry_outcome({:error, :rate_limited, retry_after: seconds}, status),
+    do: [status: status, result: :rate_limited, retry_after_ms: seconds * 1_000]
+
+  defp telemetry_outcome({:error, _reason}, status), do: [status: status, result: :error]
 
   defp handle_rate_limit(response, method, url, opts) do
     # Parse rate limit headers to get more accurate retry timing
     retry_after = parse_retry_after_header(response.headers)
     provider = Config.opt(opts, :provider, "unknown")
-    short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
+    short_url = Telemetry.endpoint(url) |> String.slice(0, 80)
+
+    # The VENUE said to wait — distinct from this package's own limiter saying so, which
+    # `DefaultRateLimiter` reports separately. Both emit `[:dp_exchange, :rate_limit, :hit]`
+    # on purpose: a consumer's first question is "am I being throttled", and answering it
+    # from two different event names would mean every dashboard has to know both or be
+    # quietly wrong. `:provider` tells them apart when the second question comes.
+    #
+    # Converted to milliseconds here. The venue's header is in seconds and the limiter
+    # works in milliseconds; one unit across the family is the point of a shared spec, and
+    # a panel summing a mixture of the two is wrong by a factor of a thousand without ever
+    # looking wrong.
+    Telemetry.rate_limit_hit(provider, retry_after * 1_000)
 
     Logger.warning(
       "[HttpClient] 429 provider=#{provider} #{method} #{short_url} retry_after=#{retry_after}s"

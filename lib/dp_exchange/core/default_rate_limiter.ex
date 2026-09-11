@@ -61,7 +61,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   use GenServer
 
-  alias DpExchange.Core.Config
+  alias DpExchange.Core.{Config, Telemetry}
 
   @behaviour DpExchange.Core.RateLimitBehaviour
 
@@ -126,7 +126,21 @@ defmodule DpExchange.Core.DefaultRateLimiter do
     with {:ok, weight} <- validate_weight(weight),
          timeout = Config.opt(opts, :timeout, 30_000),
          {:ok, wait_ms} <- call(opts, {:acquire, provider, weight, timeout}) do
-      if wait_ms > 0, do: Process.sleep(wait_ms)
+      # Emitted BEFORE the sleep, not after. A consumer watching this event is watching for
+      # the limiter binding, and a 20-second wait that only reports itself once it is over
+      # is a signal that arrives 20 seconds after the thing worth knowing about. The event
+      # says "this many tokens were granted, after this much wait" either way.
+      Telemetry.rate_limit_acquire(provider, weight, wait_ms)
+
+      # A wait this limiter imposed is a hit as much as a venue's own 429 is — the caller
+      # is being throttled, and which side decided that is a `:provider` question, not a
+      # different-event-name question. Only a non-zero wait counts: reporting every
+      # unthrottled acquire as a hit would make the hit rate equal the request rate.
+      if wait_ms > 0 do
+        Telemetry.rate_limit_hit(provider, wait_ms)
+        Process.sleep(wait_ms)
+      end
+
       :ok
     end
   end
@@ -144,7 +158,24 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def check(provider, weight, opts \\ []) do
     with {:ok, weight} <- validate_weight(weight),
          {:ok, wait_ms} <- call(opts, {:check, provider, weight}) do
-      if wait_ms == 0, do: :ok, else: {:rate_limited, wait_ms}
+      if wait_ms == 0 do
+        :ok
+      else
+        # This path, not only `acquire/3`, is where most hits actually happen:
+        # `Core.HttpClient` uses `check/3` unless `rate_limit_blocking: true`, and that
+        # option defaults to FALSE. Emitting only from `acquire/3` would mean the default
+        # configuration of the whole family reports no rate-limit hits at all — a metric
+        # reading zero because nothing counts, which looks exactly like a metric reading
+        # zero because nothing is being throttled.
+        #
+        # The honest caveat: `check/3` is public and does not reserve anything, so a caller
+        # that polls it in a loop inflates this count. Nothing in this family does that —
+        # every caller checks once per request — and under-counting real throttling is the
+        # worse of the two errors, since it is the one that hides an outage rather than
+        # exaggerating one.
+        Telemetry.rate_limit_hit(provider, wait_ms)
+        {:rate_limited, wait_ms}
+      end
     end
   end
 

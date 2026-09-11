@@ -21,6 +21,71 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The telemetry spec had nine documented event names and nothing in the family emitted a
+  single one.** `Core.Telemetry`'s first line said these are the events "every venue package
+  emits". There was not one `:telemetry.execute/3` call anywhere — not in Core, not in any
+  of the five venues — for the whole time the spec existed.
+
+  That is worse than an error would have been. `:telemetry.attach/4` against a name nobody
+  emits **succeeds**, so a consumer wired a dashboard to `[:dp_exchange, :request, :stop]`,
+  got no error, and saw an empty panel — which reads as *a venue with no traffic*, not as *a
+  spec nothing implements*. A metric that stays plausible while only its meaning is wrong,
+  in the layer least likely to be questioned.
+
+  Found by reading the contract and grepping for anything that honoured it — the same way,
+  and in the same week, as the identical hole in `Core.Venue.subscribe/2`'s back-pressure
+  paragraph. Two for two on things Core declared and nobody built: **a guarantee written in
+  a doc and nowhere else is not a guarantee, it is a plan.**
+
+  `Core.HttpClient` now emits `[:dp_exchange, :request, :start | :stop | :exception]` from
+  `make_http_request/5` — the one place a request actually leaves the process, so a new
+  endpoint cannot forget it — and `Core.DefaultRateLimiter` emits
+  `[:dp_exchange, :rate_limit, :hit | :acquire]`. Both are shared by all five venues, so
+  this covers every REST call and every metered request in the family. The `[:dp_exchange,
+  :link, …]` events belong to a venue's own socket and ship in each venue's next release,
+  against this version.
+
+### Added
+
+- **`Core.Telemetry` gained the emitters themselves**, rather than leaving five packages to
+  name events by hand. Five chances to write `:link_up` instead of `[:dp_exchange, :link,
+  :up]`, and the drift would be invisible: the wrong name emits successfully and never
+  reaches a handler. It also keeps `:telemetry` a dependency of Core alone — a venue calling
+  `:telemetry.execute/3` directly would be using a transitive dependency it never declared.
+
+  `Telemetry.endpoint/1` strips a URL's query string for `:endpoint` metadata. A security
+  decision, not tidiness: telemetry metadata reaches logs, aggregators and third-party
+  exporters, and the query string is the one part of a URL that can carry a token. No venue
+  in this family signs in the query today, but `endpoint` is emitted on every request from
+  every venue present and future, and "none of them do that yet" is not a property a
+  consumer's log retention should depend on.
+
+### Changed
+
+- **`make_http_request/5` carries the HTTP status out alongside the result.** Every error
+  branch had already turned it into prose — `{:error, "Server error (503): …"}` keeps the
+  status only inside a message string — so `:stop` would have reported `nil` for a 503.
+  Recovering it by parsing that string back out would be the string-matching the same
+  function's own 4xx comment objects to, one layer further along. Carried explicitly
+  instead, so a 503 reports 503 and a connection refusal reports `nil`: without that a
+  dashboard cannot tell a venue that is erroring from a venue that is unreachable, which are
+  different outages needing different responses.
+
+- **A rate-limit hit is emitted from `check/3`, not only `acquire/3`.** `Core.HttpClient`
+  uses `check/3` unless `rate_limit_blocking: true`, and that option defaults to **false**.
+  Emitting only from `acquire/3` would have meant the default configuration of the whole
+  family reported no rate-limit hits at all — a metric reading zero because nothing counts,
+  which looks exactly like a metric reading zero because nothing is being throttled.
+
+  A venue's own 429 and this limiter's own wait both emit `[:dp_exchange, :rate_limit,
+  :hit]`, deliberately. A consumer's first question is "am I being throttled"; answering it
+  from two different event names would mean every dashboard has to know both or be quietly
+  wrong. `retry_after_ms` is always milliseconds, including where the venue's header is in
+  seconds — a panel summing a mixture of the two is wrong by a factor of a thousand without
+  ever looking wrong.
+
 ## [0.2.6] - 2026-09-10
 
 ### Added
