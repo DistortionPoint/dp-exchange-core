@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-09-11
+
 ### Fixed
 
 - **A malformed `:limits` crashed the rate limiter on its first request instead of failing
