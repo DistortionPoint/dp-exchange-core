@@ -21,6 +21,51 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Types.Balance` required a non-nil `:balance` that every package in the family
+  knowingly produces.** Its `new/1` checked the full `@enforce_keys`, and its typespec said
+  `balance: Decimal.t()`. `dp_exchange_coinbase` derives the total from the venue's
+  available and hold figures and carries `nil` when either is missing — deliberately, on
+  the recorded ground that "available 1, total unknown" and "total equals available" are
+  different claims — and `dp_exchange_gemini` has its own recorded decision to carry `nil`
+  rather than destroy a page over one malformed row. The type denied both.
+
+  Nothing caught the contradiction because **no venue decoder calls `new/1`**: all five
+  build the struct literally, 85 call sites between them, so the constructor's check has
+  never run in this family. A rule nothing enforces and every package violates is not a
+  rule, it is a wrong statement in the contract.
+
+  `:balance` is now `Decimal.t() | nil` and out of the non-nil check, with the moduledoc
+  saying when a `nil` is honest. `@enforce_keys` still guards its *presence*, so a decoder
+  that never sets the field is still caught — stating an absence and omitting one are
+  different mistakes.
+
+  **`:currency` stays required, and now means it.** A balance attributable to no asset
+  cannot be sized, booked or reconciled by anyone, and unlike a missing quantity there is no
+  "the venue declined to say" reading — a holdings row names its asset, so a `nil` there is
+  a decode reading the wrong key, exactly what `Types.Validate`'s moduledoc exists for. The
+  four venue packages that read this field from venue JSON now refuse such a row; see their
+  own changelogs.
+
+  Same shape of decision, and the same reason, as `Types.Order`'s already-narrowed
+  `@required_non_nil`: state what is true rather than a stricter rule the packages then
+  quietly violate.
+
+- **Three rate-limiter tests raced the bucket they were measuring.** Each ended by asserting
+  the bucket was empty, against a bucket that refills continuously: at `per_ms: 1_000` with
+  `limit: 3` a token returns every ~333ms, so the closing `check/3` was only refused if the
+  acquires ahead of it finished inside that window. They normally did. On a loaded
+  `async: true` run they sometimes did not — caught failing once in six consecutive
+  full-suite runs, passing the other five.
+
+  The same flake `dp_exchange_coinbase`'s limiter test carried and was fixed for: **any "the
+  bucket is empty now" assertion races a refilling bucket**, and no change to the code under
+  test removes it, because the race is in the assertion. Widened to `per_ms: 100_000`, which
+  puts every refill interval here past nine seconds while keeping the non-terminating
+  division (`100000/3` is 33333.333…) that each test actually exists to pin. Verified with
+  six consecutive clean full-suite runs.
+
 ## [0.3.5] - 2026-09-11
 
 ### Fixed

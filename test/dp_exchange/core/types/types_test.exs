@@ -58,6 +58,56 @@ defmodule DpExchange.Core.TypesTest do
     end
   end
 
+  describe "Balance.new/1 checks the fields a nil actually breaks" do
+    test "a nil currency is refused — a balance attributable to no asset is unusable" do
+      # There is no reading of `currency: nil` a consumer can act on: it cannot size, book
+      # or reconcile against an asset it cannot name. And unlike a missing quantity there is
+      # no "the venue declined to say" case — a holdings row names its asset, so a nil here
+      # means a decode read the wrong key, the renamed-field scenario `Types.Validate`'s
+      # moduledoc exists for.
+      assert_raise ArgumentError, ~r/:currency/, fn ->
+        Balance.new(currency: nil, balance: dec(1), timestamp: @ts, provider: :test_venue)
+      end
+    end
+
+    test "a nil balance is allowed — an unstated total is a real answer" do
+      # `dp_exchange_coinbase` derives the total from the venue's available and hold figures
+      # and carries `nil` when either is missing, because "available 1, total unknown" and
+      # "total equals available" are different claims. Refusing here would have forced that
+      # venue to discard a real `available_balance` in order to report an absence honestly.
+      balance =
+        Balance.new(
+          currency: "USD",
+          balance: nil,
+          available_balance: dec(1),
+          timestamp: @ts,
+          provider: :test_venue
+        )
+
+      assert balance.balance == nil
+      assert Decimal.equal?(balance.available_balance, dec(1))
+    end
+
+    test "an absent balance key is still refused — stating an absence is not omitting one" do
+      # The narrowing is to `nil`, not to the key. `@enforce_keys` still catches a decoder
+      # that never set the field at all, which is a different mistake from one that read the
+      # venue and found nothing there.
+      assert_raise ArgumentError, fn ->
+        Balance.new(currency: "USD", timestamp: @ts, provider: :test_venue)
+      end
+    end
+
+    test "a nil timestamp and a nil provider are both still refused" do
+      assert_raise ArgumentError, ~r/:timestamp/, fn ->
+        Balance.new(currency: "USD", balance: dec(1), timestamp: nil, provider: :test_venue)
+      end
+
+      assert_raise ArgumentError, ~r/:provider/, fn ->
+        Balance.new(currency: "USD", balance: dec(1), timestamp: @ts, provider: nil)
+      end
+    end
+  end
+
   describe "timestamps are the venue's own, never rewritten" do
     test "a Quote keeps the venue's instant it was constructed with, however old" do
       ancient = ~U[2019-01-01 00:00:00Z]

@@ -206,13 +206,30 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     end
   end
 
+  # ## Why these windows are 100 seconds and not one
+  #
+  # Every test in this block ends by asserting the bucket is empty, and this bucket refills
+  # CONTINUOUSLY. At `per_ms: 1_000` with `limit: 3` a token comes back every ~333ms, so the
+  # closing `check/3` was only refused if the three acquires ahead of it finished inside that
+  # window. They normally do; on a loaded `async: true` run with `max_cases: 20` they
+  # sometimes do not, and the test failed intermittently — observed once in six consecutive
+  # full-suite runs, passing the other five.
+  #
+  # That is the same flake `dp_exchange_coinbase`'s limiter test carried and was fixed for:
+  # ANY "the bucket is empty now" assertion races a refilling bucket, and no amount of
+  # tightening the code under test removes the race, because it is in the assertion.
+  #
+  # Widening `per_ms` to 100_000 puts the refill interval at 9 seconds or more for every
+  # limit used here, which no scheduling delay in a unit test reaches — while keeping the
+  # property each test actually exists for. `100000/3` is 33333.333…, exactly as
+  # non-terminating as `1000/3`, so the float hazard below is still exercised.
   describe "a declared ceiling grants exactly what it declares" do
     test "3 per second grants three, not two" do
       # Float arithmetic made this grant TWO: 1000/3 is 333.333…, three of those sum to
       # 1000.0000000000002, and `ceil/1` turned that fraction into a whole millisecond of
       # wait. A limiter that quietly under-grants leaves a third of the venue's budget
       # unused and nothing in the system says so.
-      opts = start_limiter(%{default: %{limit: 3, per_ms: 1_000, burst: 3}})
+      opts = start_limiter(%{default: %{limit: 3, per_ms: 100_000, burst: 3}})
 
       for i <- 1..3 do
         assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0]), "acquire #{i} of 3"
@@ -224,7 +241,7 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     test "the awkward divisors grant their full allowance too" do
       # 3, 6, 7, 9 and 11 all divide 1000 badly. Each must still grant exactly `limit`.
       for limit <- [3, 6, 7, 9, 11] do
-        opts = start_limiter(%{default: %{limit: limit, per_ms: 1_000, burst: limit}})
+        opts = start_limiter(%{default: %{limit: limit, per_ms: 100_000, burst: limit}})
 
         for i <- 1..limit do
           assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0]),
@@ -236,7 +253,7 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     end
 
     test "a weight-N acquire spends exactly N of the allowance" do
-      opts = start_limiter(%{default: %{limit: 9, per_ms: 1_000, burst: 9}})
+      opts = start_limiter(%{default: %{limit: 9, per_ms: 100_000, burst: 9}})
 
       assert :ok = Limiter.acquire(:venue, 6, opts ++ [timeout: 0])
       assert :ok = Limiter.acquire(:venue, 3, opts ++ [timeout: 0])
