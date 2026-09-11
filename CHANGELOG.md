@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-09-11
+
 ### Fixed
 
 - **A flaky test of my own making, from 0.3.4: the dead-subscriber benchmark asserted
