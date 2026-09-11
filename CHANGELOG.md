@@ -21,6 +21,37 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A flaky test of my own making, from 0.3.4: the dead-subscriber benchmark asserted
+  `timed(unpruned) > timed(pruned)`.** That is a wall-clock comparison between two small
+  numbers, and it holds while the machine is quiet and inverts under load — it passed in
+  isolation every single time and failed inside the full suite under `--cover`, where twenty
+  async tests are competing for the same cores.
+
+  This is precisely what this suite's own `wait_until/1` comment says about sleeps: a test
+  that fails against code which is working correctly is worse than no test, because it
+  teaches the reader to distrust the suite. Writing one two releases after quoting that
+  comment at someone else's test is worth recording rather than quietly rewriting.
+
+  The property is real — `deliver/4` walks the whole set and calls `Process.alive?/1` per
+  entry per message, measured at 0.095 µs per fan-out against a clean set and 22.8 µs against
+  one carrying a thousand dead pids. But the **magnitude is a measurement**, and it belongs in
+  a comment and a changelog, where it already was. What belongs in an assertion is the
+  **mechanism**, which is exact: the work per message is one liveness check per entry, so the
+  cost *is* the size of the set. The test now counts that — 41 entries walked before pruning,
+  1 after, same delivery result — instead of timing it.
+
+  Found by clean-building every repo in the family, which is a habit that came out of
+  `dp_exchange_webull` 0.4.14: an incremental build is not a quieter build, it is one that
+  has already told you and moved on. No hidden warnings turned up anywhere; this failure did.
+
+  The two other `:timer.tc` assertions in the family were examined and **left alone**. They
+  are a different shape: bimodal checks with wide margins — "is this instant, or did it sleep
+  the configured minute" at 60× margin in this package, 10× in `dp_exchange_schwab` — rather
+  than a comparison between two similar small durations. Changing them would be motion with
+  no defect behind it.
+
 ## [0.3.4] - 2026-09-11
 
 ### Fixed

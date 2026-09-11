@@ -252,35 +252,39 @@ defmodule DpExchange.Core.FanoutTest do
       assert Fanout.forget(self(), %{}) == %{}
     end
 
-    test "pruning is what keeps the fan-out flat, and the cost of not doing it is real" do
-      # Measured rather than asserted in the abstract: `deliver/4` walks the whole set and
-      # calls `Process.alive?/1` per entry, per message, so an unpruned set makes every
-      # message linearly more expensive. 0 dead is ~0.095 us and 1000 dead is ~22.8 us on
-      # the machine this was written on — 240x. This test does not pin those numbers, which
-      # are hardware; it pins the PROPERTY that a pruned set does strictly less work.
+    test "pruning is what keeps the fan-out flat — the work removed, counted exactly" do
+      # This used to assert `timed(unpruned) > timed(pruned)`, and that was a bad test of a
+      # real property. `deliver/4` walks the whole set and calls `Process.alive?/1` per entry
+      # per message, so an unpruned set genuinely is linearly more expensive — measured at
+      # 0.095 us per fan-out against a clean set and 22.8 us against one carrying a thousand
+      # dead pids, about 240x. But a wall-clock comparison between two small numbers holds
+      # while the machine is quiet and inverts under load: it passed in isolation every time
+      # and failed inside the full suite under `--cover`, where twenty async tests are
+      # competing. That is exactly what this suite's own `wait_until/1` comment says about
+      # sleeps — a test that fails against code which is working correctly is worse than no
+      # test, because it teaches the reader to distrust the suite.
+      #
+      # The magnitude is a measurement and belongs in the changelog and the comment above,
+      # where it is. What belongs in an assertion is the MECHANISM, which is exact: the work
+      # per message is one liveness check per entry, so the cost is the size of the set, and
+      # pruning is what makes that size right. Counted here rather than timed.
       live = stalled_subscriber()
       dead = for _each <- 1..40, do: dead_subscriber()
 
       unpruned = MapSet.new([live | dead])
-      pruned = MapSet.new([live])
 
-      assert timed(unpruned) > timed(pruned),
-             "a set carrying dead subscribers must cost more to fan out than one without " <>
-               "them — if this ever stops being true, the leak stopped mattering and this " <>
-               "machinery can go"
+      # Every entry is walked, every message: 41 liveness checks to deliver one payload to
+      # one live subscriber.
+      assert MapSet.size(unpruned) == 41
+      assert {1, _dropping, []} = Fanout.deliver(unpruned, :payload, MapSet.new())
 
-      # And the pruning itself is correct: every dead pid is gone, the live one is not.
-      remaining = Enum.filter(unpruned, &Fanout.resolve/1)
-      assert remaining == [live]
-    end
+      # After pruning, the same delivery walks one entry. Same result, one fortieth of the
+      # work, and it is the `:DOWN`-driven `forget/2` in a venue's feed that gets it there.
+      pruned = unpruned |> Enum.filter(&Fanout.resolve/1) |> MapSet.new()
 
-    defp timed(subscribers) do
-      {us, _result} =
-        :timer.tc(fn ->
-          Enum.each(1..2_000, fn _each -> Fanout.deliver(subscribers, :x, MapSet.new()) end)
-        end)
-
-      us
+      assert MapSet.size(pruned) == 1
+      assert MapSet.to_list(pruned) == [live]
+      assert {1, _dropping, []} = Fanout.deliver(pruned, :payload, MapSet.new())
     end
 
     defp dead_subscriber do
