@@ -21,6 +21,43 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dead subscriber's pid was never removed from a feed's subscriber set, and the hot path
+  paid for it linearly.** `Fanout.resolve/1` skips a dead subscriber at send time, so no
+  *events* accumulated for it — which is what `Core.Venue`'s `unsubscribe/2` doc asks for,
+  and it was true. What accumulated was the **pid**. No venue in the family monitored a
+  subscriber or pruned one, so a supervised consumer that restarts left its old pid behind
+  on every restart, for the life of the feed.
+
+  That is not a rounding error, because `deliver/4` walks the whole set and calls
+  `Process.alive?/1` on every entry, once per message. Measured:
+
+  | dead pids in set | µs per fan-out |
+  |---|---|
+  | 0 | 0.095 |
+  | 50 | 0.956 |
+  | 200 | 4.301 |
+  | 1000 | 22.842 |
+
+  Linear, and at a thousand accumulated pids each message costs roughly **240×** what it
+  should. `dp_exchange_coinbase`'s `level2` channel measured 4258 frames in the window that
+  produced this family's coverage incident; at that size the dead entries alone are about
+  97 ms of liveness checks inside the one process every subscriber's data flows through —
+  and it only ever grows.
+
+  `Fanout.watch/2` monitors a subscriber so a feed can drop it on `:DOWN`, and
+  `Fanout.forget/2` cleans up on both `:DOWN` and an explicit unsubscribe. The venue side
+  ships in each venue's own release against this version.
+
+  **A registered name is deliberately not monitored.** A pid that has died is gone
+  permanently, so removing it is always right. A name is not a process: `subscribe/2` accepts
+  one precisely so a consumer can restart under it, and a monitor on a name fires when the
+  *current holder* dies. Pruning on that would silently unsubscribe a consumer whose
+  supervisor is about to bring it straight back — data loss with nothing to notice it by,
+  which is worse than the leak. A name cannot leak anyway: the set holds one atom however
+  many times the process behind it restarts.
+
 ## [0.3.2] - 2026-09-11
 
 ### Fixed

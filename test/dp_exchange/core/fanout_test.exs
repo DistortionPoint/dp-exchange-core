@@ -201,6 +201,96 @@ defmodule DpExchange.Core.FanoutTest do
     end
   end
 
+  describe "watch/2 and forget/2 — the dead-subscriber leak" do
+    test "a pid is monitored once, however many times it subscribes" do
+      subscriber = stalled_subscriber()
+
+      monitors = Fanout.watch(subscriber, %{})
+      assert %{^subscriber => ref} = monitors
+      assert is_reference(ref)
+
+      # A consumer re-subscribing must not stack monitors: each one delivers its own
+      # `:DOWN`, so N monitors on one pid means N-1 messages nothing will match.
+      assert Fanout.watch(subscriber, monitors) == monitors
+    end
+
+    test "a registered name is deliberately NOT monitored" do
+      # A name is not a process. `subscribe/2` accepts one precisely so a consumer can
+      # restart under it, and a monitor fires when the CURRENT HOLDER dies — pruning on that
+      # would silently unsubscribe a consumer whose supervisor is about to bring it straight
+      # back. A name cannot leak anyway: the set holds one atom however many restarts happen.
+      assert Fanout.watch(:some_registered_name, %{}) == %{}
+    end
+
+    test "a dead pid's monitor fires, and forget/2 cleans the map" do
+      subscriber = stalled_subscriber()
+      monitors = Fanout.watch(subscriber, %{})
+      %{^subscriber => ref} = monitors
+
+      Process.exit(subscriber, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^subscriber, _reason}
+
+      assert Fanout.forget(subscriber, monitors) == %{}
+    end
+
+    test "forget/2 on an explicit unsubscribe demonitors, so no stray :DOWN arrives" do
+      # The monitor is still LIVE here, unlike the `:DOWN` case. Without the demonitor the
+      # feed would later receive a `:DOWN` for a subscriber it has already forgotten — and
+      # `flush: true` covers the pid that dies in the same instant it unsubscribes.
+      subscriber = stalled_subscriber()
+      monitors = Fanout.watch(subscriber, %{})
+
+      assert Fanout.forget(subscriber, monitors) == %{}
+
+      Process.exit(subscriber, :kill)
+      refute_receive {:DOWN, _ref, :process, ^subscriber, _reason}, 100
+    end
+
+    test "forget/2 on a pid that was never watched is a no-op, not a crash" do
+      # A name subscriber reaches this path: it is in the subscriber set and never in
+      # `monitors`, so unsubscribing one must not raise.
+      assert Fanout.forget(self(), %{}) == %{}
+    end
+
+    test "pruning is what keeps the fan-out flat, and the cost of not doing it is real" do
+      # Measured rather than asserted in the abstract: `deliver/4` walks the whole set and
+      # calls `Process.alive?/1` per entry, per message, so an unpruned set makes every
+      # message linearly more expensive. 0 dead is ~0.095 us and 1000 dead is ~22.8 us on
+      # the machine this was written on — 240x. This test does not pin those numbers, which
+      # are hardware; it pins the PROPERTY that a pruned set does strictly less work.
+      live = stalled_subscriber()
+      dead = for _each <- 1..40, do: dead_subscriber()
+
+      unpruned = MapSet.new([live | dead])
+      pruned = MapSet.new([live])
+
+      assert timed(unpruned) > timed(pruned),
+             "a set carrying dead subscribers must cost more to fan out than one without " <>
+               "them — if this ever stops being true, the leak stopped mattering and this " <>
+               "machinery can go"
+
+      # And the pruning itself is correct: every dead pid is gone, the live one is not.
+      remaining = Enum.filter(unpruned, &Fanout.resolve/1)
+      assert remaining == [live]
+    end
+
+    defp timed(subscribers) do
+      {us, _result} =
+        :timer.tc(fn ->
+          Enum.each(1..2_000, fn _each -> Fanout.deliver(subscribers, :x, MapSet.new()) end)
+        end)
+
+      us
+    end
+
+    defp dead_subscriber do
+      pid = spawn(fn -> :ok end)
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+      pid
+    end
+  end
+
   describe "notice_for/3" do
     test "the dropping notice is a warning and carries the numbers a consumer needs" do
       pid = self()

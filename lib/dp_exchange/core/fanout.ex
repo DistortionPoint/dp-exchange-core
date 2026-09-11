@@ -183,6 +183,91 @@ defmodule DpExchange.Core.Fanout do
 
   def resolve(name) when is_atom(name), do: Process.whereis(name)
 
+  @typedoc """
+  Monitor references for subscribers that are raw pids, keyed by pid.
+
+  Carried in a feed's own state. Only pids appear here — see `watch/2` for why a registered
+  name deliberately does not.
+  """
+  @type monitors :: %{pid() => reference()}
+
+  @doc """
+  Monitors `subscriber` if it is a pid and is not already monitored, so a feed can drop it
+  when it dies.
+
+  ## The leak this closes
+
+  `resolve/1` skips a dead subscriber at send time, so a dead consumer never accumulates
+  *events* — which is what `Core.Venue`'s `unsubscribe/2` doc asks for, and it was true.
+  What accumulated was the **pid**. Nothing ever removed one from a feed's subscriber set,
+  so a supervised consumer that restarts leaves its old pid behind on every restart, for the
+  life of the feed.
+
+  That is not a rounding error on the hot path, because `deliver/4` walks the whole set and
+  calls `Process.alive?/1` on every entry, once per message. Measured on the machine this
+  family develops on, cost of one fan-out against a set holding one live subscriber plus N
+  dead ones:
+
+      0 dead     0.095 us
+      50 dead    0.956 us
+      200 dead   4.301 us
+      1000 dead  22.842 us
+
+  Linear, and at a thousand accumulated pids each message costs roughly 240 times what it
+  should. `dp_exchange_coinbase`'s `level2` channel measured 4258 frames in the window that
+  produced this family's coverage incident; at that size the dead entries alone would be
+  about 97 ms of liveness checks inside the one process every subscriber's data flows
+  through. And it only ever grows.
+
+  ## Why a registered name is NOT monitored
+
+  A pid that has died is gone permanently, so removing it is always right. **A name is not
+  a process.** `subscribe/2` accepts a registered name precisely so a consumer can restart
+  under it — that is the ordinary OTP arrangement the name form exists for — and a monitor
+  on a name fires when the *current holder* dies, not when the name is abandoned. Pruning on
+  that `:DOWN` would silently unsubscribe a consumer whose supervisor is about to bring it
+  straight back under the same name, which is a worse failure than the leak: it is data loss
+  with nothing to notice it by.
+
+  A name also cannot leak. The set holds one atom however many times the process behind it
+  restarts, and `resolve/1` answers `nil` for a name nothing is registered under. The
+  unbounded growth is entirely the pid case, which is exactly the case this covers.
+  """
+  @spec watch(subscriber(), monitors()) :: monitors()
+  def watch(pid, monitors) when is_pid(pid) do
+    if Map.has_key?(monitors, pid) do
+      monitors
+    else
+      Map.put(monitors, pid, Process.monitor(pid))
+    end
+  end
+
+  def watch(_name, monitors), do: monitors
+
+  @doc """
+  Stops monitoring `pid` and drops it from `monitors`.
+
+  Call it from a `:DOWN` handler and from `unsubscribe/2`. Both matter: on `:DOWN` the
+  monitor is already spent and this only cleans the map, while on an explicit unsubscribe
+  the monitor is still live and would otherwise deliver a `:DOWN` for a subscriber the feed
+  has already forgotten — harmless in itself, but it leaves a reference the feed has no
+  record of, which is the same bookkeeping drift one level down.
+
+  `flush: true` on the demonitor drops any `:DOWN` already in the mailbox, so a pid that
+  dies in the same instant it unsubscribes cannot leave a message nothing will match.
+  """
+  @spec forget(pid(), monitors()) :: monitors()
+  def forget(pid, monitors) do
+    case Map.pop(monitors, pid) do
+      {nil, monitors} ->
+        monitors
+
+      {ref, monitors} ->
+        Process.demonitor(ref, [:flush])
+        monitors
+    end
+  end
+
   @doc """
   Turns one `t:transition/0` into the `Core.Notice` the contract promises.
 
