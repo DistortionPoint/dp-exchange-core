@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-09-11
+
 ### Fixed
 
 - **`Types.Balance` required a non-nil `:balance` that every package in the family
