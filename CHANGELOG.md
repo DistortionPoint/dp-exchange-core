@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.2.7] - 2026-09-11
+
 ### Fixed
 
 - **The telemetry spec had nine documented event names and nothing in the family emitted a
