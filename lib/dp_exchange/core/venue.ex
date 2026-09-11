@@ -99,6 +99,35 @@ defmodule DpExchange.Core.Venue do
 
   Never what was subscribed. A venue that cannot observe delivery answers `:not_covered`
   rather than assuming its subscription worked.
+
+  `:stream` deliberately does **not** say *socket*. Whether a pushed route is a WebSocket,
+  an MQTT session or long-polling is package-internal, and a consumer branching on it would
+  be branching on mechanism. What a consumer legitimately needs is whether the data is
+  pushed or fetched, because only the second scales with catalogue size.
+
+  ## Where this type came from
+
+  Carried here from `Core.FeedBehaviour`, deleted in 0.3.0 as a contract with no adopters —
+  its history is the reason this type exists and is worth more than the module was.
+
+  Orchestration had accreted in a shared collection layer one venue at a time, until that
+  layer held Webull's session count, Gemini's ten-pairs-per-socket limit, Coinbase's channel
+  ordering, and a `case provider do` for which module speaks which protocol. Every one of
+  those is knowledge only the venue has, and the cost was not tidiness — shared code was
+  making transport decisions with information it could not have:
+
+    * the poll set had to guess which pairs a subscription covered, because the only honest
+      answer lives inside the venue;
+    * Webull's documented ceiling of "3 messages per second per connection" was rationed by
+      a module that could not see it, so 151 subscribed pairs delivered nothing and it read
+      as a quiet market;
+    * a venue with **no socket at all** was reported to the user in socket terms, because
+      the layer describing it was inferring transport rather than being told.
+
+  That third one is why `:stream` names a push and not a socket, and why `:internal_poll`
+  exists as a first-class answer rather than an absence. A venue with no streaming API is
+  still a feed: `dp_exchange_robinhood` polls REST internally and emits through the same
+  path as a socket venue, so nothing above the facade branches on transport.
   """
   @type route :: :stream | :internal_poll | :not_covered
 

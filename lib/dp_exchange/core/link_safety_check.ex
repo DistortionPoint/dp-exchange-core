@@ -49,7 +49,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   works by knowing a venue's private test-injection option name is that bug.
 
   There is also no reliable, generic way to *find* "the feed" once a tree is running.
-  `DpExchange.Core.FeedBehaviour` exists for exactly this and is implemented by none of
+  `DpExchange.Core.FeedBehaviour` existed for exactly this and was implemented by none of
   the five venues — grepped, zero adopters. Walking `child_spec/1`'s supervision tree for
   worker children finds every long-lived process a venue starts (a rate limiter, a task
   supervisor, a feed), not specifically the one this invariant is about.
@@ -69,11 +69,20 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   hours later, in `dp_exchange_schwab` `9973c0d`. All five venues now defer every dial to
   `subscribe/2` or a first tick, so starting a tree touches no network.
 
-  The *second* objection stands unchanged: there is still no contract-sanctioned way to
-  locate "the feed" generically. `Core.FeedBehaviour` has zero adopters, and walking
-  `child_spec/1`'s tree finds every long-lived child rather than the one this invariant is
-  about. So a behavioural check is now **possible but still not clean**, and it is recorded
-  here rather than built, so the next person weighing it starts from what is actually true.
+  The *second* objection stands, and hardened in 0.3.0: there is still no
+  contract-sanctioned way to locate "the feed" generically, and `Core.FeedBehaviour` — the
+  thing that would have provided one — was **deleted** rather than adopted. Its signatures
+  matched nothing: `start_feed/2` existed in no venue, and its `update_symbols/2` was wrong
+  for `dp_exchange_webull`, which takes credentials per call like every other endpoint in
+  this family and so needs `update_symbols/3`. A behaviour whose shape contradicts all five
+  implementations is not a hook waiting to be used; it is a fourth restatement of the
+  contract that happens to be wrong, and adopting it would have meant changing working
+  venues to match a module nobody had ever run.
+
+  So walking `child_spec/1`'s tree still finds every long-lived child rather than the one
+  this invariant is about. A behavioural check remains **possible but not clean**, and is
+  recorded here rather than built, so the next person weighing it starts from what is
+  actually true — including that the obvious-looking hook was examined and found unusable.
 
   ### What a static check cannot see, stated so nobody over-trusts it
 

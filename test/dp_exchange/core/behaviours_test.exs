@@ -1,47 +1,74 @@
 defmodule DpExchange.Core.BehavioursTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{DataProvider, FeedBehaviour, RateLimitBehaviour}
+  alias DpExchange.Core.RateLimitBehaviour
 
-  # These are contracts, so what is worth asserting is the contract itself: which
-  # callbacks exist, and which a venue may omit. An optional callback that should have
-  # been required is a venue silently shipping without a capability; a required one that
-  # should have been optional is ceremony every venue has to fake.
+  # A behaviour is a contract, so what is worth asserting is the contract itself: which
+  # callbacks exist, and which a venue may omit. An optional callback that should have been
+  # required is a venue silently shipping without a capability; a required one that should
+  # have been optional is ceremony every venue has to fake.
+  #
+  # **And who adopts it.** This file used to assert that `Core.DataProvider` declared
+  # exactly 24 callbacks. It did, for as long as it existed, and not one of them was ever
+  # implemented by anything — the assertion pinned a dead contract and kept it green, which
+  # is `Core.UnwiredCheck`'s own line ("a test is not a caller") applied to a behaviour
+  # instead of a function. The ledger below exists so the next orphan is visible the day it
+  # is written rather than never.
 
-  describe "DataProvider" do
-    test "declares the full facade surface" do
-      assert length(DataProvider.behaviour_info(:callbacks)) == 24
+  # Every module in this package that declares a `@callback`, and who implements it.
+  #
+  # A new behaviour with no entry here fails this file, which is the point: adding one
+  # becomes a deliberate act with a stated adopter. An entry of `:none` is allowed and is
+  # not a loophole — it is a visible, reviewable claim that a contract exists with nobody on
+  # the other end, which is exactly the state two modules sat in undetected.
+  @behaviour_adopters %{
+    DpExchange.Core.Venue => "every venue package's facade module",
+    DpExchange.Core.RateLimitBehaviour => "DpExchange.Core.DefaultRateLimiter",
+    DpExchange.Core.SymbolNormalizer => "each venue's own SymbolFormat module"
+  }
+
+  describe "the behaviour ledger" do
+    test "every behaviour this package declares has a stated adopter" do
+      # Read from the compiled beams rather than from source text: `@callback` inside a
+      # `quote` (which `Core.AdapterContract` uses heavily) is not a behaviour declaration,
+      # and a grep cannot tell the two apart. `behaviour_info/1` is only exported by a
+      # module that genuinely declares callbacks.
+      declared =
+        :code.lib_dir(:dp_exchange_core)
+        |> Path.join("ebin/*.beam")
+        |> Path.wildcard()
+        |> Enum.map(&(&1 |> Path.basename(".beam") |> String.to_atom()))
+        # `Code.ensure_loaded?/1` first: `function_exported?/3` answers `false` for a module
+        # that is merely on disk, and every module here is lazily loaded. Without it this
+        # check finds nothing and passes vacuously — which is the same shape of hole it was
+        # written to close, so it is worth the extra line and this comment.
+        |> Enum.filter(&(Code.ensure_loaded?(&1) and function_exported?(&1, :behaviour_info, 1)))
+        |> MapSet.new()
+
+      ledger = MapSet.new(Map.keys(@behaviour_adopters))
+
+      unlisted = MapSet.difference(declared, ledger)
+      stale = MapSet.difference(ledger, declared)
+
+      assert MapSet.to_list(unlisted) == [],
+             "behaviour(s) declared with no entry in @behaviour_adopters: " <>
+               "#{inspect(MapSet.to_list(unlisted))}. Add one naming who implements it — " <>
+               "or `:none`, which is a reviewable claim rather than an accident. " <>
+               "Core.DataProvider sat unimplemented with 24 callbacks precisely because " <>
+               "nothing made that state visible."
+
+      assert MapSet.to_list(stale) == [],
+             "@behaviour_adopters names module(s) that declare no callbacks: " <>
+               "#{inspect(MapSet.to_list(stale))}"
     end
 
-    test "the declaration callbacks are all required" do
-      callbacks = DataProvider.behaviour_info(:callbacks)
-      optional = DataProvider.behaviour_info(:optional_callbacks)
-
-      for cb <- [{:provider_name, 0}, {:runtime_id, 0}, {:capabilities, 0}] do
-        assert cb in callbacks
-        refute cb in optional
+    test "no entry claims an adopter of :none without saying so out loud" do
+      # `:none` is permitted; a vague string is not. A behaviour's adopter is either a
+      # named thing or an explicit admission that there is nobody.
+      for {module, adopter} <- @behaviour_adopters do
+        assert adopter == :none or (is_binary(adopter) and byte_size(adopter) > 0),
+               "#{inspect(module)} has no usable adopter entry"
       end
-    end
-
-    test "list_instruments/1 is optional, by design" do
-      # Single-quote `-USD` venues derive base and quote trivially and have no
-      # non-spot instruments, so requiring an implementation there is ceremony.
-      assert {:list_instruments, 1} in DataProvider.behaviour_info(:optional_callbacks)
-    end
-
-    test "every optional callback is also a declared callback" do
-      callbacks = DataProvider.behaviour_info(:callbacks)
-
-      for cb <- DataProvider.behaviour_info(:optional_callbacks) do
-        assert cb in callbacks
-      end
-    end
-  end
-
-  describe "FeedBehaviour" do
-    test "declares three callbacks, none optional" do
-      assert length(FeedBehaviour.behaviour_info(:callbacks)) == 3
-      assert FeedBehaviour.behaviour_info(:optional_callbacks) == []
     end
   end
 

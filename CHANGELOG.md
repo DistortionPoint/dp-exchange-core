@@ -21,6 +21,77 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Removed — BREAKING
+
+- **`DpExchange.Core.DataProvider` is deleted. It was a second, competing definition of the
+  venue interface — 24 callbacks, zero implementers — and every shape in it is one this
+  family has since fixed.** Its own moduledoc called it *"a unified interface for
+  interacting with different trading venues"*, so a venue author who found it first would
+  have built, plausibly and entirely wrongly:
+
+  | `Core.DataProvider` said | The real contract says | Why the difference matters |
+  |---|---|---|
+  | `decimal_string :: String.t()` | `Decimal` in every `Core.Types.*` | string arithmetic, silently |
+  | `provider: String.t()` | `provider: atom()` | every match on `:coinbase` fails |
+  | `balance_data` with **no timestamp** | `Types.Balance` `@enforce_keys` it | "no way to tell a current balance from a stale one" — its own moduledoc |
+  | `price_data` with one `timestamp` | `venue_time` + `observed_at` since 0.2.0 | the split issue #31 asked for |
+  | `{:error, String.t()}` everywhere | `{:refused, term()}` vs `{:error, term()}` | the permanent/transient distinction a caller acts on |
+  | `get_order_book` → `{:ok, map()}` | `{:ok, Types.OrderBook.t()}` | a bare map cannot enforce anything |
+
+  Nothing referenced it. `Core.Venue` and `Core.AdapterContract` never mentioned it, and no
+  venue package named it outside one stale comment. It shipped in the Hex tarball anyway,
+  which is the whole problem: a contract a consumer can read is a contract a consumer can
+  believe.
+
+  **How it survived:** it was ported wholesale from the host application on 2026-08-27
+  (`docs/design/closed/2026-08-26_exchange-adapter-package-family.md`, item 1.5 — "776 lines
+  across the three"), alongside the contract that replaced it, and nothing ever removed the
+  one that lost. And `test/dp_exchange/core/behaviours_test.exs` asserted it declared exactly
+  24 callbacks — a green test pinning a dead contract, which is `Core.UnwiredCheck`'s own
+  line ("a test is not a caller") applied to a behaviour instead of a function.
+
+- **`DpExchange.Core.FeedBehaviour` is deleted too — a fourth restatement of the contract,
+  with signatures that matched nothing.** `start_feed/2` existed in no venue. Its
+  `update_symbols/2` was wrong for `dp_exchange_webull`, which takes credentials per call
+  like every other endpoint in this family and so needs `update_symbols/3`. A behaviour
+  whose shape contradicts all five implementations is not a hook waiting to be used;
+  adopting it would have meant changing five working venues to match a module nobody had
+  ever run.
+
+  **Its moduledoc was the valuable part and it is kept**, carried into `Core.Venue`'s
+  `route()` typedoc where the real `coverage/1` lives: the poll set guessing which pairs a
+  subscription covered, Webull's "3 messages per second per connection" rationed by a module
+  that could not see it (151 pairs delivering nothing, reading as a quiet market), and a
+  venue with **no socket at all** described to the user in socket terms. That last one is
+  why `:stream` names a push rather than a socket, and why `:internal_poll` is a first-class
+  answer instead of an absence.
+
+  It also removes a duplicate definition of `route()` — the same three atoms declared in two
+  modules, free to drift.
+
+### Added
+
+- **A behaviour-adopters ledger, so the next orphan is visible the day it is written.**
+  `behaviours_test.exs` now enumerates every module in this package that declares a
+  `@callback` — read from the compiled beams, because `@callback` inside a `quote` (which
+  `Core.AdapterContract` uses heavily) is not a behaviour declaration and a grep cannot tell
+  them apart — and asserts each has an entry naming who implements it.
+
+  An entry of `:none` is allowed and is not a loophole: it is a visible, reviewable claim
+  that a contract exists with nobody on the other end, which is exactly the state two
+  modules sat in undetected. A new behaviour with no entry fails the build.
+
+  This is the third instance in as many releases of *declared in Core, implemented by
+  nobody* — after `subscribe/2`'s back-pressure paragraph (0.2.6) and the entire telemetry
+  spec (0.2.7). The pattern is now checked rather than re-found.
+
+### Changed
+
+- **This release is `0.3.x`, not `0.2.x`.** Removing a public module is breaking even when
+  nothing implements it, and a minor bump is how this family says so. Venue packages pinned
+  `~> 0.2.8` will not resolve it until their floors are raised — which is the pin doing its
+  job, not a problem to route around.
+
 ## [0.2.8] - 2026-09-11
 
 ### Added
