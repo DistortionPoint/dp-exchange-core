@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.2.8] - 2026-09-11
+
 ### Added
 
 - **The polling route reports a link too, so a polling venue is not permanently "down" on a
