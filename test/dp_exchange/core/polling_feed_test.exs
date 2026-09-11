@@ -656,4 +656,102 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert PollingFeed.status(pid).symbols == 1
     end
   end
+
+  describe "a polling route reports a link too" do
+    # "Why the category is `:link` and not `:ws`" — what carries the route is
+    # package-internal, so a venue that polls reports `[:dp_exchange, :link, …]` exactly as
+    # a venue holding a socket does, and a consumer's dashboard does not have to know which
+    # is which. Without this, `dp_exchange_robinhood` (polling only) and
+    # `dp_exchange_schwab`'s fallback poll would emit no link events at all, and a fleet
+    # dashboard would show them permanently disconnected.
+    defp attach_link(provider) do
+      test_pid = self()
+      handler_id = "polling-link-#{System.unique_integer([:positive])}"
+
+      # Scoped by provider: `:telemetry` handlers are global to the VM, so an unscoped one
+      # receives every other concurrently-running test's events too.
+      :telemetry.attach_many(
+        handler_id,
+        [
+          [:dp_exchange, :link, :up],
+          [:dp_exchange, :link, :down],
+          [:dp_exchange, :link, :event]
+        ],
+        fn event, measurements, metadata, _config ->
+          if metadata.provider == provider do
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    test "each delivered payload is a link event, with NO bytes rather than a fake zero" do
+      # A poll has no frame, so there is no point at which a byte count means what it does
+      # on a socket. Absent and zero are different claims and only one of them is true: a
+      # consumer summing `:bytes` across a mixed fleet must get the streaming venues'
+      # throughput, not a total depressed by every poller reporting a confident zero.
+      label = "poll_#{System.unique_integer([:positive])}"
+      :ok = attach_link(label)
+
+      start_feed(
+        label: label,
+        symbols: ["BTC-USD"],
+        fetch: fn symbol -> {:ok, quote_for(symbol)} end
+      )
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}, 2_000
+      assert measurements.count == 1
+      refute Map.has_key?(measurements, :bytes)
+      # The struct names its own kind — never a channel name, never a subscription intent.
+      assert metadata.type == "Quote"
+    end
+
+    test "crossing into delivering-nothing is a link down, and recovery is a link up" do
+      # Mapped onto the `notice_state` latch that already exists rather than a new one, so
+      # the telemetry inherits its once-per-crossing property and cannot storm on a long
+      # outage.
+      label = "poll_#{System.unique_integer([:positive])}"
+      :ok = attach_link(label)
+
+      answer = :atomics.new(1, [])
+
+      feed =
+        start_feed(
+          label: label,
+          symbols: ["BTC-USD"],
+          interval_ms: 10,
+          fetch: fn symbol ->
+            if :atomics.get(answer, 1) == 0 do
+              {:error, :venue_down}
+            else
+              {:ok, quote_for(symbol)}
+            end
+          end
+        )
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :down], %{count: 1}, metadata}, 5_000
+      assert is_binary(metadata.reason)
+
+      :atomics.put(answer, 1, 1)
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :up], %{count: 1}, up_metadata}, 5_000
+      assert up_metadata.provider == label
+      assert Process.alive?(feed)
+    end
+
+    # A real `Core.Types.*` struct rather than this file's plain-map `event/1`, because what
+    # is being asserted is that the STRUCT names its own kind.
+    defp quote_for(symbol) do
+      %DpExchange.Core.Types.Quote{
+        symbol: symbol,
+        price: Decimal.new(1),
+        observed_at: ~U[2026-09-11 00:00:00Z],
+        provider: :test_venue
+      }
+    end
+  end
 end

@@ -21,6 +21,30 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **The polling route reports a link too, so a polling venue is not permanently "down" on a
+  fleet dashboard.** `Core.PollingFeed` now emits `[:dp_exchange, :link, :event]` per
+  delivered payload, and `:link, :up` / `:link, :down` mapped onto the `notice_state` latch
+  it already had — so the telemetry inherits that latch's once-per-crossing property and
+  cannot storm on a long outage. `:link, :down` is the feed crossing into
+  delivering-nothing, which is the closest true statement a poller can make about a route it
+  does not hold open.
+
+  Without this, `dp_exchange_robinhood` — which only polls — and `dp_exchange_schwab`'s
+  fallback poll would emit no link events at all, and a dashboard reading
+  `[:dp_exchange, :link, …]` across the family would show them disconnected forever. See
+  `Core.Telemetry`'s "Why the category is `:link` and not `:ws`": what carries the route is
+  package-internal, and a consumer should not have to know which venues hold a socket.
+
+- **`Telemetry.link_event/2`, for a route that cannot measure wire size.** A poll has no
+  frame — `PollingFeed` receives a decoded body and hands on a `Core.Types.*` struct — so
+  there is no point at which a byte count means what `link_event/3`'s does on a socket.
+  `:bytes` is therefore **absent**, not zero. Absent and zero are different claims and only
+  one of them is true here: a consumer summing `:bytes` across a mixed fleet gets the
+  streaming venues' throughput correctly, instead of a total silently depressed by every
+  polling venue reporting a confident zero.
+
 ## [0.2.7] - 2026-09-11
 
 ### Fixed

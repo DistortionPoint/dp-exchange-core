@@ -110,7 +110,7 @@ defmodule DpExchange.Core.PollingFeed do
 
   require Logger
 
-  alias DpExchange.Core.{Config, Notice}
+  alias DpExchange.Core.{Config, Notice, Telemetry}
 
   @typedoc """
   Fetches one symbol's current price.
@@ -499,6 +499,7 @@ defmodule DpExchange.Core.PollingFeed do
       {:ok, event} ->
         %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
         |> tap(fn _state -> state.sink.(event) end)
+        |> tap(fn _state -> report_delivery(state, event) end)
         |> record_success()
 
       # The venue says it does not carry this symbol. Reported outward — a
@@ -523,7 +524,10 @@ defmodule DpExchange.Core.PollingFeed do
     # symbol missing from the response is one the venue did not answer for,
     # and marking it covered would be the feed asserting a delivery that
     # never happened.
-    Enum.each(events, state.sink)
+    Enum.each(events, fn event ->
+      state.sink.(event)
+      report_delivery(state, event)
+    end)
 
     seen = Map.new(events, fn event -> {event.symbol, now} end)
     record_success(%{state | last_ok: Map.merge(state.last_ok, seen)})
@@ -559,6 +563,16 @@ defmodule DpExchange.Core.PollingFeed do
   # this function's `:dead` clause — and the recovery notice it fires — only ever fires
   # when something was truly delivered. There is no `record_success(state, false)`
   # clause; every caller already knows it delivered before reaching here.
+  # A polling route has a LINK too — see `Core.Telemetry`'s "Why the category is `:link` and
+  # not `:ws`". What carries the route is package-internal, so a venue that polls reports
+  # `[:dp_exchange, :link, …]` exactly as a venue that holds a socket does, and a consumer's
+  # dashboard does not have to know which is which.
+  #
+  # Mapped onto the latch that already exists rather than a new one: `notice_state` fires
+  # `on_notice` exactly once per crossing, so the telemetry inherits that and cannot storm
+  # on a long outage. `:link, :down` is this feed crossing into delivering-nothing — the
+  # closest true statement a poller can make about a route it does not hold open — and
+  # `:link, :up` is the recovery.
   defp record_success(%{notice_state: :dead} = state) do
     notice =
       Notice.new(:coverage_change, state.label,
@@ -570,6 +584,7 @@ defmodule DpExchange.Core.PollingFeed do
       )
 
     state.on_notice.(notice)
+    Telemetry.link_up(state.label)
     %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
   end
 
@@ -613,6 +628,7 @@ defmodule DpExchange.Core.PollingFeed do
       )
 
     state.on_notice.(notice)
+    Telemetry.link_down(state.label, inspect(reason))
     %{state | notice_state: :dead}
   end
 
@@ -641,6 +657,21 @@ defmodule DpExchange.Core.PollingFeed do
   # Recency, not ever-ness: a feed whose newest success is older than
   # `@nothing_delivered_after_ms` is not delivering, whatever it managed hours
   # ago.
+  # One per delivered payload, which is what makes this comparable with a streaming venue's
+  # per-frame event. `link_event/2`, not `/3`: a poll has no frame, so there is no point at
+  # which a byte count means what it does on a socket, and `:bytes` is ABSENT rather than a
+  # confident zero. A consumer summing bytes across a mixed fleet then gets the throughput
+  # of the streaming venues, correctly, instead of a total depressed by every polling venue.
+  defp report_delivery(state, event) do
+    Telemetry.link_event(state.label, delivery_type(event))
+    :ok
+  end
+
+  # The struct names its own kind, in the same spirit as every `coverage_by_kind/1` in the
+  # family: never a channel name, never a subscription intent, only what actually arrived.
+  defp delivery_type(%module{}), do: module |> Module.split() |> List.last()
+  defp delivery_type(_other), do: "unknown"
+
   defp delivering_nothing?(state, failures) do
     per_sweep = max(MapSet.size(state.symbols), 1)
     sweep = if is_nil(state.fetch_all), do: per_sweep, else: 1

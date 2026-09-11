@@ -220,7 +220,7 @@ defmodule DpExchange.Core.Telemetry do
   "Route", not "socket": what carries it is package-internal, and a venue that polls has a
   link too. See "Why the category is `:link` and not `:ws`" above.
   """
-  @spec link_up(atom()) :: :ok
+  @spec link_up(atom() | String.t()) :: :ok
   def link_up(provider),
     do: :telemetry.execute([:dp_exchange, :link, :up], %{count: 1}, %{provider: provider})
 
@@ -232,12 +232,33 @@ defmodule DpExchange.Core.Telemetry do
   every occurrence a distinct series. It is also the shape `Core.Notice`'s own
   `details.reason` uses, so the two channels agree about one event.
   """
-  @spec link_down(atom(), String.t()) :: :ok
+  @spec link_down(atom() | String.t(), String.t()) :: :ok
   def link_down(provider, reason) when is_binary(reason) do
     :telemetry.execute(
       [:dp_exchange, :link, :down],
       %{count: 1},
       %{provider: provider, reason: reason}
+    )
+  end
+
+  @doc """
+  Emits `[:dp_exchange, :link, :event]` for a route that cannot measure wire size.
+
+  A polling route has no frame: `Core.PollingFeed` receives a decoded HTTP body and hands
+  on a `Core.Types.*` struct, and there is no point at which a byte count of the payload
+  means what `link_event/3`'s does on a socket. So `:bytes` is **absent**, not zero.
+
+  Absent and zero are different claims and only one of them is true here — the same
+  distinction `link_reconnect_attempt/3` makes about `delay_ms`. A consumer summing
+  `:bytes` across a mixed fleet gets the throughput of the streaming venues, correctly,
+  instead of a total silently depressed by every polling venue reporting a confident zero.
+  """
+  @spec link_event(atom() | String.t(), atom() | String.t()) :: :ok
+  def link_event(provider, type) do
+    :telemetry.execute(
+      [:dp_exchange, :link, :event],
+      %{count: 1},
+      %{provider: provider, type: type}
     )
   end
 
@@ -249,7 +270,7 @@ defmodule DpExchange.Core.Telemetry do
   venue's own terms; `bytes` is the size on the wire, which is what makes this usable as a
   throughput signal rather than only a count.
   """
-  @spec link_event(atom(), atom() | String.t(), non_neg_integer()) :: :ok
+  @spec link_event(atom() | String.t(), atom() | String.t(), non_neg_integer()) :: :ok
   def link_event(provider, type, bytes) do
     :telemetry.execute(
       [:dp_exchange, :link, :event],
@@ -266,7 +287,7 @@ defmodule DpExchange.Core.Telemetry do
   venue that reconnects immediately reports `delay_ms: 0` rather than omitting the field —
   absent and zero mean different things, and only one of them is true here.
   """
-  @spec link_reconnect_attempt(atom(), pos_integer(), non_neg_integer()) :: :ok
+  @spec link_reconnect_attempt(atom() | String.t(), pos_integer(), non_neg_integer()) :: :ok
   def link_reconnect_attempt(provider, attempt, delay_ms) do
     :telemetry.execute(
       [:dp_exchange, :link, :reconnect_attempt],
