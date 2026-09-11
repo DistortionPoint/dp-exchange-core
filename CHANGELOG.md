@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-11
+
 ### Removed — BREAKING
 
 - **`DpExchange.Core.DataProvider` is deleted. It was a second, competing definition of the
