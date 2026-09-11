@@ -223,10 +223,60 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def init(opts) do
     {:ok,
      %{
-       limits: Config.opt(opts, :limits, %{}),
+       limits: opts |> Config.opt(:limits, %{}) |> validate_limits!(),
        # provider => theoretical arrival time, in native monotonic milliseconds
        tat: %{}
      }}
+  end
+
+  # Validated HERE, at start, because the alternative is where it used to fail: `reserve/3`
+  # destructures `%{limit: _, per_ms: _, burst: _}`, so a limits entry missing any of the
+  # three raised a `MatchError` **inside this GenServer on the first acquire** — not at
+  # start. A supervisor then restarts the limiter, the next request crashes it again, and
+  # what a consumer sees is a crash loop whose message names `reserve/3` rather than the
+  # configuration that is actually wrong.
+  #
+  # It is a real trap rather than a hypothetical one, because Core's own two types do not
+  # compose: `Capabilities.ceiling` declares `burst` **optional** and this module's
+  # `t:limit/0` declares it **required**. Every venue in this family therefore writes its own
+  # little `to_limit/1` to bridge them, and all five happen to get it right — but the sixth
+  # venue, or any consumer wiring `DefaultRateLimiter` up directly against a `capabilities/0`
+  # ceiling (which is the obvious thing to do, and the shape that reads as correct), gets the
+  # crash loop instead of an error.
+  #
+  # Raising rather than defaulting `burst` to `limit` is deliberate, even though that is what
+  # `@default_limit` itself does and what four of the five venues chose. Burst tolerance is
+  # how far a caller may run ahead of the smooth rate; picking one silently would hand a
+  # consumer a throughput characteristic it did not choose and cannot see, which is the same
+  # objection `Core.Fanout.max_queue_len!/2` records for a back-pressure bound. A ceiling is
+  # a claim about a venue, and this module is not the place to invent half of one.
+  defp validate_limits!(limits) when is_map(limits) do
+    Enum.each(limits, fn {provider, limit} ->
+      case limit do
+        %{limit: l, per_ms: p, burst: b}
+        when is_integer(l) and l >= 0 and is_integer(p) and p > 0 and is_integer(b) and b >= 0 ->
+          :ok
+
+        other ->
+          raise ArgumentError,
+                "DpExchange.Core.DefaultRateLimiter: the limit for provider #{inspect(provider)} " <>
+                  "must be %{limit: non_neg_integer, per_ms: pos_integer, burst: non_neg_integer}, " <>
+                  "got #{inspect(other)}. `:burst` is required here and OPTIONAL in " <>
+                  "`Core.Capabilities.ceiling/0`, so a ceiling read straight off `capabilities/0` " <>
+                  "will not have it — add one. It is the tolerance a caller may run ahead of the " <>
+                  "smooth rate by; `burst: limit` is what this module's own default uses and what " <>
+                  "every venue in this family chose, but it is a throughput decision and not one " <>
+                  "this module will make on a caller's behalf."
+      end
+    end)
+
+    limits
+  end
+
+  defp validate_limits!(other) do
+    raise ArgumentError,
+          "DpExchange.Core.DefaultRateLimiter: :limits must be a map of " <>
+            "provider => %{limit:, per_ms:, burst:}, got #{inspect(other)}"
   end
 
   @impl GenServer

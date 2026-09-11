@@ -17,6 +17,70 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
   defp fast, do: %{default: %{limit: 1_000, per_ms: 1_000, burst: 1_000}}
   defp slow, do: %{default: %{limit: 1, per_ms: 10_000, burst: 1}}
 
+  describe "a malformed :limits fails at start, not on the first request" do
+    # It used to fail on the first acquire: `reserve/3` destructures
+    # `%{limit: _, per_ms: _, burst: _}`, so a missing key raised a `MatchError` INSIDE this
+    # GenServer. A supervisor then restarts it, the next request crashes it again, and what
+    # a consumer sees is a crash loop whose message names `reserve/3` rather than the
+    # configuration that is wrong.
+    #
+    # Not hypothetical: `Capabilities.ceiling` declares `:burst` OPTIONAL and this module
+    # declares it REQUIRED, so a ceiling read straight off `capabilities/0` — the obvious
+    # thing to do, and the shape that reads as correct — is exactly the map that used to
+    # crash. Found by probing the limiter with `%{limit: 10, per_ms: 1_000}` while chasing
+    # an unrelated flake.
+    #
+    # Trapped rather than `assert_raise`d: the raise happens in the GenServer being started,
+    # not in the caller, so `start_link/1` reports it as an `{:error, {exception, stack}}`
+    # and would otherwise take the test process down with it.
+    setup do
+      Process.flag(:trap_exit, true)
+      :ok
+    end
+
+    defp start_with_limits(limits) do
+      Limiter.start_link(name: :"lim_#{System.unique_integer([:positive])}", limits: limits)
+    end
+
+    test "a ceiling straight off capabilities/0, with no :burst, is refused by name" do
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               start_with_limits(%{coinbase: %{limit: 10, per_ms: 1_000}})
+
+      assert message =~ ":coinbase"
+      assert message =~ ":burst"
+      # The message has to say what to do, not only that something is wrong.
+      assert message =~ "Core.Capabilities.ceiling"
+    end
+
+    test "every malformed shape is refused, not just a missing :burst" do
+      for bad <- [
+            %{limit: 10, burst: 10},
+            %{per_ms: 1_000, burst: 10},
+            %{limit: 10, per_ms: 0, burst: 10},
+            %{limit: -1, per_ms: 1_000, burst: 10},
+            %{limit: 10, per_ms: 1_000, burst: -1},
+            %{limit: "10", per_ms: 1_000, burst: 10},
+            :not_a_map
+          ] do
+        assert {:error, {%ArgumentError{}, _stack}} = start_with_limits(%{venue: bad}),
+               "#{inspect(bad)} was accepted as a limit"
+      end
+    end
+
+    test ":limits that is not a map at all is refused too" do
+      assert {:error, {%ArgumentError{}, _stack}} = start_with_limits([])
+    end
+
+    test "a well-formed limits map starts, and a zero limit is legal" do
+      # Zero is a real declaration — a registration that granted no throughput — and
+      # `dp_exchange_schwab` relies on it being expressible. It must not be confused with a
+      # missing value.
+      assert {:ok, pid} = start_with_limits(%{venue: %{limit: 0, per_ms: 60_000, burst: 0}})
+      assert Process.alive?(pid)
+      GenServer.stop(pid)
+    end
+  end
+
   describe "D-E.1 — a weight-N acquire is ONE atomic reservation" do
     test "acquiring weight N consumes N tokens, not N separate acquires" do
       opts = start_limiter(%{default: %{limit: 10, per_ms: 10_000, burst: 10}})

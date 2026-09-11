@@ -21,6 +21,39 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A malformed `:limits` crashed the rate limiter on its first request instead of failing
+  at start.** `reserve/3` destructures `%{limit: _, per_ms: _, burst: _}`, so an entry
+  missing any of the three raised a `MatchError` **inside the GenServer**. A supervisor then
+  restarts it, the next request crashes it again, and what a consumer sees is a crash loop
+  whose message names `reserve/3` rather than the configuration that is actually wrong.
+
+  **This is a real trap, not a hypothetical one, because two of Core's own types do not
+  compose.** `Capabilities.ceiling` declares `:burst` **optional**; this module's
+  `t:limit/0` declares it **required**. So every venue in the family has to write its own
+  little `to_limit/1` to bridge them — all five happen to do it correctly — and a consumer
+  wiring `DefaultRateLimiter` up directly against a `capabilities/0` ceiling, which is the
+  obvious thing to do and the shape that reads as correct, got the crash loop instead of an
+  error.
+
+  `init/1` now validates every entry and raises with a message naming the provider, the
+  required shape, and *why* the ceiling it was probably given lacks `:burst`.
+
+  **Raising rather than defaulting `burst` to `limit` is deliberate**, even though that is
+  what `@default_limit` itself does and what four of the five venues chose. Burst tolerance
+  is how far a caller may run ahead of the smooth rate; picking one silently hands a consumer
+  a throughput characteristic it did not choose and cannot see — the same objection
+  `Fanout.max_queue_len!/2` already records for a back-pressure bound. A ceiling is a claim
+  about a venue, and this module is not the place to invent half of one.
+
+  A `limit:` of `0` stays legal and is tested: it is a real declaration — a registration that
+  granted no throughput, which `dp_exchange_schwab` relies on being able to express — and
+  must not be confused with a missing value.
+
+  Found while probing the limiter by hand to settle an unrelated flaky test, with
+  `%{limit: 10, per_ms: 1_000}` — the exact shape `capabilities/0` returns.
+
 ## [0.3.3] - 2026-09-11
 
 ### Fixed
