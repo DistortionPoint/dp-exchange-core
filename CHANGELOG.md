@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-09-11
+
 ### Fixed
 
 - **A dead subscriber's pid was never removed from a feed's subscriber set, and the hot path
