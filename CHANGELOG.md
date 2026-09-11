@@ -21,6 +21,55 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A compile warning in a test file never failed a build, and five were sitting in this
+  package's own output.** CI ran `mix compile --warnings-as-errors`, which compiles `lib/`
+  only — test files are compiled by `mix test`, which had no such flag. So every warning
+  from a test file was permanent and green.
+
+  Found by running `script/check_dependency_floor.sh` by hand and reading what scrolled
+  past. That checker had never executed once: it is scheduled weekly for Monday and landed
+  on a Tuesday, so no cron had come around, and the token available here cannot
+  `workflow_dispatch`. A checker nobody has ever seen run is a checker nobody has proved
+  works — running it found a different defect than the one it was written for, which is
+  argument enough for running it.
+
+  Two of the five were **real defects in the shared conformance suite**:
+
+  `venue_does_not_serve/0` and `coverage_by_kind/1` are **optional** callbacks, guarded by
+  `function_exported?/3` and then called directly — so every venue package that does not
+  implement one got a compile warning out of a macro it did not write. The
+  `venue_does_not_serve/0` site had a mitigation (`venue = @venue`, then calling through the
+  variable) and a comment claiming it worked. **It stopped working and the comment did
+  not**: Elixir 1.18 tracks the binding through, so the warning had come back and the
+  comment still said it could not. `coverage_by_kind/1` had no mitigation at all. Both are
+  now `apply/3` with a scoped `credo:disable-for-next-line`, which is the honest expression
+  of "this module is not knowable at compile time" rather than a trick that happens to
+  suppress a message.
+
+  The other three were the compiler **specialising a generic suite on whichever fake happens
+  to be compiling**. `Core.ReferenceVenue`'s fake always returns `{:ok, _}` from
+  `get_symbols/1` and always sets `venue_time`, so the `{:error, {:query_required, _}}`
+  branch was reported as "this clause will never match" and `is_nil(top.venue_time)` as a
+  "comparison between distinct types" — for branches that are live in the packages that need
+  them (`dp_exchange_schwab` genuinely answers `{:query_required, _}`, and a venue that
+  publishes no BBO time is the case `Types.Quote`'s 0.2.0 split exists for). Left alone,
+  every future venue with a simple fake would inherit mystery warnings from a shared macro.
+
+### Changed
+
+- **CI runs `mix test --cover --warnings-as-errors`.** Together with the existing
+  `mix compile --warnings-as-errors`, no warning now survives anywhere in the build —
+  `lib/` and test files both.
+
+  The argument is not tidiness. A handful of permanent warnings is exactly the noise a
+  genuinely wrong one hides behind, and in this family a "clause will never match" in the
+  conformance suite could be an assertion that cannot fail. Verified by injecting an unused
+  function into a test file and confirming the run aborts, then removing it — a gate nobody
+  has watched fail is a gate nobody has proved, which is the same mistake as the checker
+  that had never run.
+
 ## [0.3.1] - 2026-09-11
 
 ### Removed — BREAKING

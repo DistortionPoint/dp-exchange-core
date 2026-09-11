@@ -389,7 +389,18 @@ defmodule DpExchange.Core.AdapterContract do
                      "real venue would make every CI run hit the live API, which D7 " <>
                      "reserves for tier 2 and for a human choosing to run it."
 
-            result = @fake.get_symbols(credentials: @credentials)
+            # `apply/3` because this suite is GENERIC over a fake the consuming package
+            # supplies, and a direct call lets the compiler specialise on whichever one
+            # happens to be compiling. When that fake returns only `{:ok, _}` — Core's own
+            # reference venue does — every `{:error, _}` branch below is reported as "this
+            # clause will never match", for branches that are reachable in the packages that
+            # need them: `dp_exchange_schwab` genuinely answers `{:error, {:query_required,
+            # _}}` here, which is the whole reason `catalog_access` has a `:query_only`
+            # value. Silencing it per-package would mean every future venue with a simple
+            # fake inheriting mystery warnings out of a shared macro.
+            #
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            result = apply(@fake, :get_symbols, [[credentials: @credentials]])
 
             case caps.catalog_access do
               :query_only ->
@@ -514,11 +525,22 @@ defmodule DpExchange.Core.AdapterContract do
           caps = @venue.capabilities()
 
           if function_exported?(@venue, :venue_does_not_serve, 0) do
-            # Through a variable, not `@venue.venue_does_not_serve()`: the split is optional
-            # in the contract, so a direct call warns at compile time for every package that
-            # does not implement it. `apply/3` would say the same thing and credo objects.
-            venue = @venue
-            venue_absences = MapSet.new(venue.venue_does_not_serve())
+            # `apply/3`, and the credo exemption is deliberate. This is an OPTIONAL callback
+            # guarded by `function_exported?/3` one line up, so the module being called is
+            # not knowable at compile time — which is exactly what `apply/3` says and a
+            # direct call does not.
+            #
+            # This used to bind `venue = @venue` and call `venue.venue_does_not_serve()`, on
+            # the stated reasoning that going through a variable dodged the warning while
+            # `apply/3` "would say the same thing and credo objects". **The first half
+            # stopped being true and the comment did not.** Elixir 1.18 tracks the binding
+            # through, so the warning came back and this package emitted it on every test
+            # run — a mitigation that no longer mitigated, still carrying a comment claiming
+            # it did. Verified by compiling: the warning is gone with `apply/3` and present
+            # without it.
+            #
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            venue_absences = MapSet.new(apply(@venue, :venue_does_not_serve, []))
 
             unsupported =
               caps.endpoints
@@ -566,8 +588,11 @@ defmodule DpExchange.Core.AdapterContract do
           caps = @venue.capabilities()
 
           if function_exported?(@venue, :venue_does_not_serve, 0) do
-            venue = @venue
-            absent = MapSet.new(venue.venue_does_not_serve())
+            # See assertion 12's call site for why this is `apply/3` and why the credo
+            # exemption is deliberate.
+            #
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            absent = MapSet.new(apply(@venue, :venue_does_not_serve, []))
 
             contradictions =
               for {kind, endpoint} <- [
@@ -615,7 +640,12 @@ defmodule DpExchange.Core.AdapterContract do
           Code.ensure_loaded?(@venue)
 
           if function_exported?(@venue, :coverage_by_kind, 1) do
-            by_kind = @venue.coverage_by_kind([])
+            # `apply/3` for the same reason as assertion 12's — an optional callback guarded
+            # one line up is not knowable at compile time, and a direct call warns for every
+            # package that does not implement it. This site had no mitigation at all.
+            #
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            by_kind = apply(@venue, :coverage_by_kind, [[]])
             coverage_symbols = @venue.coverage([]) |> Map.keys() |> MapSet.new()
 
             union =
@@ -683,7 +713,15 @@ defmodule DpExchange.Core.AdapterContract do
                      "the real venue would make every CI run hit the live API, which " <>
                      "D7 reserves for tier 2 and for a human choosing to run it."
 
-            case @fake.get_top_of_book(hd(@sample_pairs), []) do
+            # `apply/3` for the same reason as assertion 12's `get_symbols/1` call: this
+            # suite is generic over the consuming package's fake, and specialising on one
+            # turns `is_nil(top.venue_time)` into a "comparison between distinct types"
+            # whenever that fake always sets `venue_time`. A venue that publishes no time
+            # for a BBO is exactly the case this assertion exists to allow — see
+            # `Types.Quote`'s 0.2.0 split — so the branch is live, just not for this fake.
+            #
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            case apply(@fake, :get_top_of_book, [hd(@sample_pairs), []]) do
               {:ok, top} ->
                 assert %DpExchange.Core.Types.TopOfBook{} = top,
                        "a BBO carries resting orders; a Quote carries a traded price, and " <>
