@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-09-11
+
 ### Fixed
 
 - **A compile warning in a test file never failed a build, and five were sitting in this
