@@ -373,6 +373,17 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # Every fake call inside this group builds its arguments with `endpoint_args/2`, never by
+  # hand. The `get_symbols/1` call here already carried `credentials:`, so it was not among
+  # the assertions found inert — but assertions 14 and 23 hand-built theirs too and, by
+  # omitting exactly that, ran on one venue in five. One builder for every call site means a
+  # venue's `endpoint_opts` and `endpoint_symbols` reach all of them and no call can drift
+  # back out of the mechanism.
+  #
+  # The note lives out here rather than beside the call because everything inside the
+  # `quote` counts toward credo's long-quote ceiling — which this comment tripped when it
+  # was written inline, and which is the same reason each assertion group is its own quoted
+  # block rather than one long one.
   defp agreement do
     quote location: :keep do
       # --- 6, 12. error discipline and agreement ---------------------------
@@ -439,12 +450,8 @@ defmodule DpExchange.Core.AdapterContract do
             # value. Silencing it per-package would mean every future venue with a simple
             # fake inheriting mystery warnings out of a shared macro.
             #
-            # `endpoint_args/2` rather than a hand-built arg list. This one already carried
-            # `credentials:`, so it was not among the assertions that skipped — but assertions
-            # 14 and 23 hand-built theirs too and, by omitting exactly this, ran on one venue
-            # in five. Every fake call in this suite goes through the one builder now, so a
-            # venue's `endpoint_opts` and `endpoint_symbols` reach all of them and none can
-            # drift out of the mechanism again.
+            # `endpoint_args/2`, never a hand-built arg list — see this function's own
+            # comment, above the `quote`, for what hand-building cost.
             #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
             result = apply(@fake, :get_symbols, endpoint_args(:get_symbols, 1))
