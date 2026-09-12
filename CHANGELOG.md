@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 24: a `Balance` names the asset it is a balance of.** `Types.Balance` enforces
+  `:currency` and its `new/1` refuses a `nil` there, but **no venue decoder in this family
+  calls `new/1`** — every one builds the struct literally, which `Types.Validate`'s own
+  moduledoc explicitly permits — so that check had never run anywhere, and four of the five
+  packages read `currency` straight out of the venue's JSON by key with nothing between. All
+  four were fixed in their own packages; this is the assertion that stops the fifth, or a
+  sixth, reintroducing it. The suite's own rule is why it belongs here: *"Every gap found
+  becomes a new assertion here. A gap fixed only in one venue's fake is a gap the next venue
+  will reintroduce."*
+
+  `:balance` is deliberately not checked — `Types.Balance` states it may honestly be `nil`
+  while `:currency` may not, and an assertion covering both would force
+  `dp_exchange_coinbase` to discard a real `available_balance` to report an absence
+  honestly.
+
+### Fixed
+
+- **Three venue packages were passing fake-driven assertions that never ran.** Several
+  assertions call an active endpoint through the venue's fake with `opts: []`, and on an
+  account-scoped venue every one of those calls is refused before it reaches the behaviour
+  under test: `dp_exchange_webull` needs an `:account_id`, `dp_exchange_robinhood` an
+  `:account_number`, `dp_exchange_schwab` an `:account_hash`. The assertions took that
+  refusal as a legitimate answer and skipped — a green test proving nothing, which is worse
+  than a red one.
+
+  Caught by deliberately breaking each venue's fake against the new assertion 24: two
+  packages went red and three stayed green. It was never confined to 24. **Assertion 17 —
+  the credential gate — has been passing for the wrong reason on those same three venues
+  since it was written**: it strips the credential and expects a failure, and what it got
+  was the missing account.
+
+  `use DpExchange.Core.AdapterContract` now takes `endpoint_opts:`, a
+  `%{{name, arity} => keyword()}` of what a venue's own endpoints need before its fake will
+  answer. The key is the venue's, not Core's — a table of `:account_id` / `:account_number`
+  / `:account_hash` in here would be exactly the venue-specific knowledge this contract
+  exists to keep out of Core. Assertion 17's stripped-credential args carry those same opts
+  alongside the emptied credential, so the only thing missing from the call is the one thing
+  it is testing.
+
 ## [0.3.6] - 2026-09-11
 
 ### Fixed

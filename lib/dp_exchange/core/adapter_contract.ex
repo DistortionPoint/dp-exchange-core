@@ -104,7 +104,10 @@ defmodule DpExchange.Core.AdapterContract do
          "rendered in the args a supervisor stores and OTP prints on every child crash"},
       {23,
        "venue time and observed time — Quote and OrderBook carry the venue's own DateTime " <>
-         "or nil in venue_time, never an unparsed stand-in, and observed_at is always there"}
+         "or nil in venue_time, never an unparsed stand-in, and observed_at is always there"},
+      {24,
+       "balance attribution — every Balance names the asset it is a balance of, because " <>
+         "an amount attributable to nothing cannot be sized, booked or reconciled"}
     ]
   end
 
@@ -128,6 +131,7 @@ defmodule DpExchange.Core.AdapterContract do
       subscribed_push_shape(),
       historical_timeframe_discipline(),
       venue_and_observed_time(),
+      balance_attribution(),
       helpers(),
       arg_helpers(),
       credential_gate_helpers(),
@@ -154,6 +158,27 @@ defmodule DpExchange.Core.AdapterContract do
       @sample_pairs Keyword.get(opts, :sample_pairs, [])
       @credentials Keyword.get(opts, :credentials, %{})
       @package_root Keyword.get(opts, :package_root, "lib")
+
+      # Per-endpoint options a venue's fake needs before it will answer at all, as
+      # `%{{name, arity} => keyword()}`. Empty for a venue whose endpoints need none.
+      #
+      # **This exists because three venues were passing assertions that never ran.** Several
+      # fake-driven assertions call an active endpoint with `opts: []`, and on an
+      # account-scoped venue every one of those calls is refused before it reaches the
+      # behaviour under test: `dp_exchange_webull` needs an `:account_id`,
+      # `dp_exchange_robinhood` an `:account_number`, `dp_exchange_schwab` an account hash.
+      # The assertions then took the refusal as a legitimate answer and skipped — a green
+      # test proving nothing, which is worse than a red one.
+      #
+      # Caught on assertion 24: breaking each venue's fake on purpose failed two packages
+      # and left three green. It is not confined to 24 — assertion 17 strips credentials and
+      # expects a failure, and on these same three venues it got one for the missing account
+      # rather than the missing credential, passing for the wrong reason.
+      #
+      # The KEY is the venue's, not Core's: `:account_id` and `:account_number` are venue
+      # facts, and a lookup table of them here would be exactly the venue-specific knowledge
+      # this contract is built to keep out of Core. The venue declares its own.
+      @endpoint_opts Keyword.get(opts, :endpoint_opts, %{})
     end
   end
 
@@ -1410,6 +1435,74 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  defp balance_attribution do
+    quote location: :keep do
+      # --- 24. a Balance names the asset it is a balance of ---------------------
+
+      describe "24. balance attribution" do
+        # `Core.Types.Balance` enforces `:currency`, and its `new/1` refuses a `nil` there.
+        # **No venue decoder in this family calls `new/1`** — every one builds the struct
+        # literally, which the type's own `Types.Validate` moduledoc explicitly permits — so
+        # that check had never run anywhere, and four of the five packages read `currency`
+        # straight out of the venue's JSON by key with nothing between. A renamed or absent
+        # key produced `%Balance{currency: nil}`: an amount attributable to no asset,
+        # returned inside `{:ok, balances}`, which a consumer cannot size, book or reconcile
+        # against and which nothing in the value flags.
+        #
+        # Fixed in all four, and asserted here because of this suite's own ratchet rule:
+        # "Every gap found becomes a new assertion here. A gap fixed only in one venue's
+        # fake is a gap the next venue will reintroduce." Four separate fixes with no shared
+        # assertion behind them is exactly that shape.
+        #
+        # **`:balance` is deliberately NOT checked.** `Core.Types.Balance` states that it may
+        # honestly be `nil` while `:currency` may not — `dp_exchange_coinbase` derives its
+        # total from the venue's available and hold figures and carries `nil` when either is
+        # missing, rather than claiming a total it cannot compute. The two fields are not the
+        # same kind of required: an unknown quantity is still a balance, an unattributable
+        # one is not. An assertion covering both would force that venue to discard a real
+        # `available_balance` in order to report an absence honestly.
+        #
+        # Fake-driven, like assertions 14, 20 and 23: `get_balances/2` is credentialed and
+        # active on every venue that serves it, so calling the real one would make an
+        # ordinary `mix test` reach the live API with real credentials.
+        test "get_balances/2's Balance carries the currency it is a balance of" do
+          assert_balance_attribution(@venue, @fake)
+        end
+      end
+
+      # Silently skips a venue that declares the endpoint `:unsupported`, one with no fake,
+      # and any answer that is not `{:ok, _}` — a refusal is a legitimate answer here, and a
+      # venue with no balances to report is not a failure either.
+      defp assert_balance_attribution(venue, fake) do
+        endpoint = {:get_balances, 2}
+
+        if Capabilities.active?(venue.capabilities(), endpoint) and fake do
+          case apply(fake, :get_balances, endpoint_args(:get_balances, 2)) do
+            {:ok, balances} when is_list(balances) -> Enum.each(balances, &assert_balance/1)
+            _refused_or_unsupported -> :ok
+          end
+        end
+      end
+
+      defp assert_balance(value) do
+        assert %DpExchange.Core.Types.Balance{} = value,
+               "get_balances/2 must return DpExchange.Core.Types.Balance structs"
+
+        assert is_binary(value.currency) and value.currency != "",
+               "Balance.currency must name the asset this is a balance of, got " <>
+                 "#{inspect(value.currency)} — an amount attributable to nothing cannot be " <>
+                 "sized, booked or reconciled, and unlike a missing quantity there is no " <>
+                 "'the venue declined to say' reading of it"
+
+        assert %DateTime{} = value.timestamp,
+               "Balance.timestamp is when the balance was asked for, and a balance with no " <>
+                 "freshness is indistinguishable from a stale one"
+
+        assert value.provider, "Balance.provider must say which venue answered"
+      end
+    end
+  end
+
   defp helpers do
     quote location: :keep do
       # --- helpers ---------------------------------------------------------
@@ -1462,13 +1555,17 @@ defmodule DpExchange.Core.AdapterContract do
 
         @arg_shapes
         |> Map.get({kind, arity}, List.duplicate(:opts, arity))
-        |> Enum.map(&arg_value/1)
+        |> Enum.map(&arg_value(&1, {name, arity}))
       end
 
-      defp arg_value(:credentials), do: @credentials
-      defp arg_value(:symbol), do: sample_symbol()
-      defp arg_value(:timeframe), do: "1h"
-      defp arg_value(:opts), do: []
+      defp arg_value(:credentials, _endpoint), do: @credentials
+      defp arg_value(:symbol, _endpoint), do: sample_symbol()
+      defp arg_value(:timeframe, _endpoint), do: "1h"
+
+      # The venue's own per-endpoint options, or none — see `@endpoint_opts` for the three
+      # packages whose fakes refuse an account-scoped call before the assertion under test
+      # can reach anything, and what that cost.
+      defp arg_value(:opts, endpoint), do: Map.get(@endpoint_opts, endpoint, [])
 
       defp sample_symbol, do: List.first(@sample_pairs) || "BTC-USD"
 
@@ -1519,20 +1616,30 @@ defmodule DpExchange.Core.AdapterContract do
 
         @arg_shapes
         |> Map.get({kind, arity}, List.duplicate(:opts, arity))
-        |> Enum.map(&stripped_arg_value/1)
+        |> Enum.map(&stripped_arg_value(&1, {name, arity}))
       end
 
-      defp stripped_arg_value(:credentials), do: %{}
+      defp stripped_arg_value(:credentials, _endpoint), do: %{}
 
-      # `[credentials: %{}]`, never `[]`. `endpoint_args/2` already sends `[]` for every
-      # `:opts` position, credentialed or not, so an opts list that started at `[]` and
-      # stayed `[]` here would prove nothing had been stripped — it never carried a
-      # credential to begin with, on any venue, credentialed or not. Sending
-      # `[credentials: %{}]` exercises a venue whose facade reads
-      # `Keyword.get(opts, :credentials, %{})` with an EXPLICIT empty credential rather
-      # than an absent key its own code may never have read at all.
-      defp stripped_arg_value(:opts), do: [credentials: %{}]
-      defp stripped_arg_value(other), do: arg_value(other)
+      # `credentials: %{}`, never a bare `[]`. An opts list that started empty and stayed
+      # empty would prove nothing had been stripped — it never carried a credential to begin
+      # with, on any venue. An EXPLICIT empty credential exercises a venue whose facade
+      # reads `Keyword.get(opts, :credentials, %{})` rather than an absent key its own code
+      # may never read at all.
+      #
+      # The venue's own `@endpoint_opts` are kept alongside it, and that is the half this
+      # was missing. On an account-scoped venue the call was refused for the MISSING ACCOUNT
+      # before the stripped credential was ever looked at, so this assertion passed for the
+      # wrong reason on three of the five packages — it proved the fake rejects a call with
+      # no account, which is not what it claims to prove. `credentials: %{}` is put last so
+      # a venue cannot accidentally supply a credential here through its endpoint opts.
+      defp stripped_arg_value(:opts, endpoint) do
+        @endpoint_opts
+        |> Map.get(endpoint, [])
+        |> Keyword.put(:credentials, %{})
+      end
+
+      defp stripped_arg_value(other, endpoint), do: arg_value(other, endpoint)
     end
   end
 
