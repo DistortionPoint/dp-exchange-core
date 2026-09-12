@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-09-12
+
 ### Added
 
 - **Assertion 24: a `Balance` names the asset it is a balance of.** `Types.Balance` enforces
