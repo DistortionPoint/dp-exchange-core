@@ -355,10 +355,10 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
   describe "run/2 — I/O edge cases" do
     test "an empty beam_dir yields no violations" do
       lib_root =
-        Path.join([File.cwd!(), "tmp", "unwired_check_test", "credential_empty_lib_#{uniq()}"])
+        Path.join(UnwiredFixture.run_root(), "credential_empty_lib_#{uniq()}")
 
       beam_dir =
-        Path.join([File.cwd!(), "tmp", "unwired_check_test", "credential_empty_beam_#{uniq()}"])
+        Path.join(UnwiredFixture.run_root(), "credential_empty_beam_#{uniq()}")
 
       File.mkdir_p!(beam_dir)
 

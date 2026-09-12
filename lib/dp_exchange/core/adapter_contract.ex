@@ -439,8 +439,15 @@ defmodule DpExchange.Core.AdapterContract do
             # value. Silencing it per-package would mean every future venue with a simple
             # fake inheriting mystery warnings out of a shared macro.
             #
+            # `endpoint_args/2` rather than a hand-built arg list. This one already carried
+            # `credentials:`, so it was not among the assertions that skipped — but assertions
+            # 14 and 23 hand-built theirs too and, by omitting exactly this, ran on one venue
+            # in five. Every fake call in this suite goes through the one builder now, so a
+            # venue's `endpoint_opts` and `endpoint_symbols` reach all of them and none can
+            # drift out of the mechanism again.
+            #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
-            result = apply(@fake, :get_symbols, [[credentials: @credentials]])
+            result = apply(@fake, :get_symbols, endpoint_args(:get_symbols, 1))
 
             case caps.catalog_access do
               :query_only ->
@@ -1422,11 +1429,16 @@ defmodule DpExchange.Core.AdapterContract do
               [unserved | _rest] ->
                 refute match?(
                          {:ok, _},
+                         # The timeframe is the one argument this assertion must choose
+                         # itself — an `unserved` width is the whole question. The symbol
+                         # and the opts come from the venue's own declarations, the same as
+                         # every other fake call here, so a venue needing an option or a
+                         # narrower symbol for this endpoint is not silently refused.
                          call_on(@fake, {:get_historical_prices, 4}, [
-                           sample_symbol(),
+                           arg_value(:symbol, {:get_historical_prices, 4}),
                            unserved,
                            [],
-                           [credentials: @credentials]
+                           arg_value(:opts, {:get_historical_prices, 4})
                          ])
                        ),
                        "get_historical_prices/4 answered {:ok, _} for #{inspect(unserved)}, " <>

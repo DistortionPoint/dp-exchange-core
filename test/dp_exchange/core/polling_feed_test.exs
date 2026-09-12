@@ -450,7 +450,17 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       # Deterministic ordering: wait for the hang to actually be in flight before calling
       # `status/1`, so this test cannot race the timer that schedules the first `:poll`.
-      assert_receive :fetch_started, 500
+      #
+      # The timeout is 5s, not the 500ms this file uses elsewhere, and the difference is the
+      # point: `interval_ms` above is ALSO 500, so waiting 500ms for a message the first poll
+      # produces left exactly zero margin for scheduler jitter. It held on a quiet machine
+      # and failed under load — caught by running two suites against each other, reported as
+      # "Found message matching :fetch_started after 500ms", i.e. it arrived, just late.
+      #
+      # Waiting longer cannot weaken what this test claims. The claim is that `status/1`
+      # answers WHILE a fetch hangs; how long the hang takes to begin is scheduling, not
+      # behaviour, and pinning it to the poll interval was measuring the test harness.
+      assert_receive :fetch_started, 5_000
 
       # Answered while the fetch is still hanging, and answered HONESTLY: nothing has been
       # delivered, and nothing has failed either, because the fetch has not finished. A
@@ -487,8 +497,13 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 500
         )
 
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
-      assert_receive :hang_started, 500
+      # 5s rather than 500ms, for the same reason as the test above: `interval_ms` is 500
+      # here too, so a 500ms wait for a message the first poll produces had no margin at all.
+      # Both of these are synchronisation waits — the claim below is that `coverage/1`
+      # answers during a hang and names only what arrived, and neither part of that gets
+      # weaker by allowing the hang more time to begin.
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+      assert_receive :hang_started, 5_000
 
       coverage = PollingFeed.coverage(pid)
 

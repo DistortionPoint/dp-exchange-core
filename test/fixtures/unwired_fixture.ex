@@ -8,11 +8,39 @@ defmodule DpExchange.Core.UnwiredFixture do
   the system temp directory — see this repo's `CLAUDE.md`), named from
   `System.unique_integer/1` so concurrent `async: true` tests never share a directory
   or a module name.
+
+  ## The root is per-RUN, not just per-test
+
+  `System.unique_integer/1` is unique within one VM and restarts near 1 in the next, so two
+  `mix test` runs of this package at once generate the identical `beam_2`, `beam_3`, … names.
+  `test_helper.exs` then makes that fatal rather than merely confusing: it wipes this root
+  before `ExUnit.start/0`, so a second run's start-up deletes the directories a first run's
+  tests are still writing into. Observed as
+
+      ** (File.Error) could not write to file ".../tmp/unwired_check_test/beam_2/
+         Elixir.Outsider1.beam": no such file or directory
+
+  across `UnwiredCheckTest`, `LinkSafetyCheckTest` and `CredentialRedactionCheckTest` — every
+  test that compiles a fixture — and only ever when two runs overlapped, which is why it read
+  as an intermittent rather than as the deterministic collision it is.
+
+  `run_root/0` puts the OS pid in the path, so two runs cannot collide however their unique
+  integers line up, and `test_helper.exs` wipes only the root belonging to its own run. Both
+  call this one function: the wipe and the writes agreeing on the path is the whole point, and
+  a second copy of the expression is how they would stop agreeing.
   """
 
-  @root Path.join([File.cwd!(), "tmp", "unwired_check_test"])
-
   @type source :: %{required(:code) => String.t(), required(:path) => String.t()}
+
+  @doc """
+  This run's own fixture root, under the package's `tmp/`.
+
+  A function rather than a module attribute on purpose: an attribute is evaluated when this
+  file is COMPILED, which would bake in the compiling VM's pid and hand every later run the
+  same directory — the exact collision this exists to remove.
+  """
+  @spec run_root() :: Path.t()
+  def run_root, do: Path.join([File.cwd!(), "tmp", "unwired_check_test", "run_#{System.pid()}"])
 
   @doc """
   Compiles each `%{code: source, path: "relative/lib/path.ex"}` entry and writes the
@@ -34,8 +62,8 @@ defmodule DpExchange.Core.UnwiredFixture do
     Code.put_compiler_option(:debug_info, true)
 
     unique = System.unique_integer([:positive, :monotonic])
-    lib_root = Path.join(@root, "lib_#{unique}")
-    beam_dir = Path.join(@root, "beam_#{unique}")
+    lib_root = Path.join(run_root(), "lib_#{unique}")
+    beam_dir = Path.join(run_root(), "beam_#{unique}")
     File.mkdir_p!(beam_dir)
 
     Enum.each(sources, fn %{code: code, path: path} ->

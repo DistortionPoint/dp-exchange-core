@@ -21,6 +21,68 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Three checker test suites failed whenever two `mix test` runs of this package
+  overlapped.** `UnwiredFixture` names each fixture directory from
+  `System.unique_integer/1`, which is unique within a VM and restarts near 1 in the next, so
+  two runs generate the identical `beam_2`, `beam_3`, … names. `test_helper.exs` then made
+  that fatal rather than merely confusing: it wiped `tmp/unwired_check_test` **wholesale**
+  before `ExUnit.start/0`, so a second run's start-up deleted directories the first run's
+  tests were still writing into —
+
+      ** (File.Error) could not write to file ".../tmp/unwired_check_test/beam_2/
+         Elixir.Outsider1.beam": no such file or directory
+
+  — in whichever of `UnwiredCheckTest`, `LinkSafetyCheckTest` or
+  `CredentialRedactionCheckTest` happened to be mid-fixture. It read as a rare flake because
+  it needed two runs to overlap; it is a deterministic collision.
+
+  Each run now owns a pid-named subtree (`UnwiredFixture.run_root/0`) and `test_helper.exs`
+  wipes only its own, which keeps the stale-beam guarantee that wipe exists for and cannot
+  reach another run's files. `run_root/0` is a function, not a module attribute: an attribute
+  is evaluated at COMPILE time and would bake in the compiling VM's pid, handing every later
+  run the same directory — the exact collision being removed.
+
+- **Two `PollingFeed` tests waited exactly one poll interval for a synchronisation message.**
+  Both set `interval_ms: 500` and then `assert_receive ..., 500`, so the wait for a message
+  the first poll produces had zero margin for scheduler jitter — despite a comment claiming
+  the wait made the ordering deterministic. They held on a quiet machine and failed under
+  load with *"Found message matching `:fetch_started` after 500ms"*: the message arrived,
+  just late.
+
+  Raised to 5s. Waiting longer cannot weaken either claim — that `status/1` and `coverage/1`
+  answer *while* a fetch hangs — because how long the hang takes to begin is scheduling, not
+  behaviour. Pinning it to the poll interval was measuring the harness.
+
+  Both were found by running two suites against each other, which is now the recorded way to
+  surface this class in this package: a timing assertion that holds when quiet and fails
+  under load is the same shape as the rate-limiter bucket race fixed in 0.3.6.
+
+### Changed
+
+- **Every fake call in the conformance suite now builds its arguments through
+  `endpoint_args/2`.** Assertions 12 and 21 still hand-built theirs. Both happened to carry
+  `credentials:`, so neither was among the assertions found inert in 0.3.9 — but hand-building
+  is precisely what made 14 and 23 inert on four venues out of five, and a mechanism that some
+  call sites use and others do not is one drift away from the same defect. A venue's
+  `endpoint_opts` and `endpoint_symbols` now reach every fake call the suite makes.
+
+  Assertion 21 still chooses its own timeframe, because an unserved width is the whole
+  question it asks; its symbol and opts come from the venue's declarations like everything
+  else.
+
+- **`docs/reference/core/assertion-coverage.md` records a completed mutation sweep.** All
+  seven fake-driven assertions were broken on purpose — the exact property each one claims —
+  against every venue the assertion applies to, and every break produced a failure. Nothing
+  was found still inert, which is the result worth writing down: it is what stops the next
+  reader repeating thirty experiments to learn it.
+
+  The table records which venues each assertion applies to and why the counts differ, since
+  assertion 23's uneven 3/3/3/2/1 matches each venue's own `capabilities/0` exactly — that is
+  what "runs where it should and nowhere else" looks like when it is visible. Two legitimate
+  skips remain, both declared rather than inferred from an opaque refusal.
+
 ## [0.3.9] - 2026-09-12
 
 ### Fixed

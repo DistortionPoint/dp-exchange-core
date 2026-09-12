@@ -1,6 +1,7 @@
 # What the conformance suite does — and does not — check
 
-**Audited 2026-09-08. Revised 2026-09-11 — see "Second axis" and the two closures below.**
+**Audited 2026-09-08. Revised 2026-09-11 and 2026-09-12 — see "Second axis", "The sweep
+completed", and the two closures below.**
 `Core.AdapterContract`'s 19 assertion groups (now **24** — see "Gaps closed" below) have
 each caught real, shipped defects within minutes of existing. Nobody had asked the inverse
 question: which parts of `Core.Venue`, `Core.Capabilities`, `Core.Notice` and
@@ -457,3 +458,41 @@ only as wired as its call sites.
 order book for US stocks and ETFs and refuses one for a crypto pair, and all its sample pairs
 are crypto. Naming a symbol the endpoint actually serves makes the assertion run rather than
 skip — which, throughout this file, is the whole difference.
+
+### The sweep completed 2026-09-12 — every fake-driven assertion, every venue
+
+The two sections above each found an assertion inert by breaking what it checks. This is
+that method carried across **all seven fake-driven assertions on all five venues**, so the
+next reader does not repeat thirty experiments to learn the same thing.
+
+Each row is a deliberate break of the exact property the assertion claims, run against every
+venue the assertion applies to. Every one produced a failure; **nothing was found still
+inert.**
+
+| assertion | break applied | venues it applies to | result |
+|---|---|---|---|
+| 12 agreement | `get_symbols/1` returns `{:error, :not_supported}` while `capabilities/0` declares it active | all 5 | 5/5 fail |
+| 14 top of book | fake's `observed_at` set to `nil` | all 5 | 5/5 fail |
+| 17 credential gate | `FakeInjection.credentials_bypassed?/1` forced `true`, so every gate opens | 3 — `webull`, `robinhood`, `schwab` | 3/3 fail |
+| 20 subscribed push | fake pushes a raw map instead of a `Core.Types.*` struct | all 5 | 5/5 fail |
+| 21 timeframe discipline | fake's width guard disabled, so it serves any width | 4 — `robinhood` declares the endpoint unsupported | 4/4 fail |
+| 23 venue/observed time | fake's `observed_at` set to `nil` | all 5 | failures per venue: 3, 3, 3, 2, 1 |
+| 24 balance attribution | fake's `Balance.currency` set to `nil` | all 5 | 5/5 fail |
+
+**Assertion 23's uneven counts are the point, not a blemish.** Three failures on the venues
+serving `get_top_of_book/2`, `get_price/2` and `get_order_book/2`; two on `dp_exchange_schwab`
+(no order book); one on `dp_exchange_robinhood` (no `get_price/2`, no order book). Those match
+each venue's own `capabilities/0` exactly, which is what "runs where it should and nowhere
+else" looks like when you can actually see it.
+
+**Two legitimate skips remain, and both are declared rather than inferred.** A venue that
+declares an endpoint `:unsupported` is skipped, which is the honest reason to skip; and
+assertion 21 skips a venue declaring the entire nameable timeframe vocabulary, since no width
+is left that would prove it refuses one. Neither is a refusal being mistaken for an answer —
+that clause is gone from all three assertions that had it.
+
+**One consolidation came out of this.** Assertions 12 and 21 still hand-built their fake
+argument lists. Both happened to carry `credentials:`, so neither was among the inert ones —
+but hand-building is exactly what made 14 and 23 inert, so every fake call in the suite now
+goes through `endpoint_args/2`. A venue's `endpoint_opts` and `endpoint_symbols` reach all of
+them, and no call site can drift back out of the mechanism.
