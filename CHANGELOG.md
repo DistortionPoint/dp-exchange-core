@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.11] - 2026-09-12
+
 ### Changed
 
 - **`usage-rules/adapter.md` states the `Balance` rule the type now enforces.** `:balance` may
