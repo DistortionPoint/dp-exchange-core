@@ -1473,13 +1473,41 @@ defmodule DpExchange.Core.AdapterContract do
       # Silently skips a venue that declares the endpoint `:unsupported`, one with no fake,
       # and any answer that is not `{:ok, _}` — a refusal is a legitimate answer here, and a
       # venue with no balances to report is not a failure either.
+      # A venue that declares `get_balances/2` `:unsupported`, or passes no fake, is skipped.
+      # A venue that declares it ACTIVE and whose fake then refuses is NOT — that is the
+      # silent skip this whole assertion exists to stop being possible.
+      #
+      # It used to end `_refused_or_unsupported -> :ok`, and that one clause is how three
+      # packages passed an assertion that never ran on them: their fakes refused an
+      # account-scoped call the suite made with no account, and the refusal was taken for an
+      # answer. `endpoint_opts` removed the reason for that refusal, so a refusal now means
+      # something is genuinely out of step — the capability says the endpoint works and the
+      # venue's own fake says otherwise — and the two ways to be honest about it are both
+      # named in the message.
       defp assert_balance_attribution(venue, fake) do
         endpoint = {:get_balances, 2}
 
         if Capabilities.active?(venue.capabilities(), endpoint) and fake do
           case apply(fake, :get_balances, endpoint_args(:get_balances, 2)) do
-            {:ok, balances} when is_list(balances) -> Enum.each(balances, &assert_balance/1)
-            _refused_or_unsupported -> :ok
+            {:ok, balances} when is_list(balances) ->
+              Enum.each(balances, &assert_balance/1)
+
+            other ->
+              flunk("""
+              capabilities/0 declares get_balances/2 active, but the fake answered:
+
+                  #{inspect(other)}
+
+              A refusal here is not a pass. Either the endpoint is not really active and
+              capabilities/0 should say `:unsupported`, or the fake needs something this
+              call did not carry — declare it in `endpoint_opts:` on
+              `use DpExchange.Core.AdapterContract`, the way the account-scoped venues
+              declare their own `:account_id` / `:account_number` / `:account_hash`.
+
+              Silently accepting this is what let three packages pass assertions that never
+              executed on them — see docs/reference/core/assertion-coverage.md, "Second
+              axis".
+              """)
           end
         end
       end

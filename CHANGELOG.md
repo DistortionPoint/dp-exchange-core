@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertion 24 accepted a refusal as a pass.** Its helper ended
+  `_refused_or_unsupported -> :ok`, and that one clause is how three packages passed an
+  assertion that never executed on them: their fakes refused an account-scoped call the
+  suite made with no account, and the refusal was taken for an answer. `endpoint_opts`
+  (0.3.7) removed the reason for that refusal, so a refusal now means something is genuinely
+  out of step — `capabilities/0` says the endpoint is active and the venue's own fake says
+  otherwise — and it fails, naming both honest remedies: declare the endpoint `:unsupported`,
+  or declare what the fake needs in `endpoint_opts:`.
+
+  Verified by renaming a venue's `endpoint_opts:` key so Core stops seeing it, which
+  reproduces the pre-0.3.7 state exactly: the suite now fails there instead of passing.
+
+### Changed
+
+- **`docs/reference/core/assertion-coverage.md` brought current, and given a second axis.**
+  It was the map the next audit starts from, and it had drifted into pointing at three
+  problems that no longer exist while missing the newest assertion: it said 23 groups
+  (24 now), and it still reported as open both the `dp_exchange_coinbase` `has_staking`
+  finding and the "tier 1 dials out" finding on assertions 12 and 14. Both are fixed —
+  re-verified in source and by running all five contract suites, which reach no venue
+  hostname at all — and are now marked closed in place rather than edited away, since the
+  tables are a record of what the audit found on the day.
+
+  **The new part is the axis the original audit did not have.** Every status in that file
+  answers "does an assertion exist?", which is not the same question as "does it run on
+  every venue?" — and the difference had been hiding real absence behind green runs. The
+  file now opens by saying so, and records the method that found it: break what an assertion
+  checks and require the suite to go red, on every venue rather than on the first. Two of
+  the five would have told you nothing.
+
 ## [0.3.7] - 2026-09-12
 
 ### Added

@@ -1,10 +1,17 @@
 # What the conformance suite does — and does not — check
 
-**Audited 2026-09-08.** `Core.AdapterContract`'s 19 assertion groups (now 23 — see
-"Gaps closed" below) have each caught real, shipped defects within minutes of existing.
-Nobody had asked the inverse question: which parts of `Core.Venue`, `Core.Capabilities`,
-`Core.Notice` and `Core.PollingFeed` have **no** assertion touching them at all. This is
-that map, done once so the next audit starts from it instead of from zero.
+**Audited 2026-09-08. Revised 2026-09-11 — see "Second axis" and the two closures below.**
+`Core.AdapterContract`'s 19 assertion groups (now **24** — see "Gaps closed" below) have
+each caught real, shipped defects within minutes of existing. Nobody had asked the inverse
+question: which parts of `Core.Venue`, `Core.Capabilities`, `Core.Notice` and
+`Core.PollingFeed` have **no** assertion touching them at all. This is that map, done once
+so the next audit starts from it instead of from zero.
+
+> **Read "Second axis — an assertion that exists is not an assertion that runs" before
+> trusting any **covered** below.** Every status in this file answers "does an assertion
+> exist?". Three venues were later found passing assertions that never executed on them, so
+> "covered" and "covered everywhere" are different claims and this file only ever made the
+> first.
 
 Status per item is one of:
 
@@ -299,6 +306,12 @@ add `has_staking: true` to its `capabilities/0` call in `lib/dp_exchange/coinbas
 one-line fix, not attempted here per this audit's own instruction to report rather than
 rush a venue fix.
 
+> **CLOSED, verified 2026-09-11.** `lib/dp_exchange/coinbase.ex` now carries
+> `has_staking: true` and that package's contract suite passes in full. The table above is
+> kept as it was written — it is the record of what the audit found on the day, not a status
+> board — but nothing in it is outstanding any more. Current counts, all five venues,
+> 2026-09-11: **47 tests, 0 failures each.**
+
 **Incidental finding, pre-existing and out of scope for this audit:** running each suite
 surfaced real `Logger.debug` lines showing live HTTP calls to the venue's own public API
 — `GET https://api.gemini.com/v1/pubticker/btcusd` and `.../v1/symbols` on Gemini,
@@ -316,6 +329,14 @@ every CI run and never dials out" is not quite true today for these two pre-exis
 checks. Reported here because it was found in the course of the verification this task
 requires; not fixed here — it is a change to two existing assertions, not a gap this
 audit was scoped to close.
+
+> **CLOSED, verified 2026-09-11.** Both now drive `@fake`. Assertion 12's catalog_access
+> check carries the incident in its own comment — *"calling it for real would make every
+> ordinary `mix test` run dial the live API — reproduced live against
+> `api.gemini.com/v1/symbols` before this was fixed"* — and both assert `@fake` is present
+> rather than silently falling back to the real module. Re-checked in source and by running
+> all five contract suites: no venue hostname appears in any of them. Tier 1 dials out
+> nowhere.
 
 ## Gap closed 2026-09-10 — assertion 23
 
@@ -345,3 +366,56 @@ to prevent.
 A third test is structural rather than behavioural: neither type may regrow a `:timestamp`
 field. Same reasoning as `TopOfBook has no price field` — a field with no defined meaning
 gets filled from whichever value is nearest to hand, which is the ambiguity the split removed.
+
+## Gap closed 2026-09-11 — assertion 24
+
+`Types.Balance` enforces `:currency` and its `new/1` refuses a `nil` there. **No venue
+decoder in this family calls `new/1`** — every one builds the struct literally, which
+`Types.Validate`'s own moduledoc explicitly permits — so that check had never run anywhere,
+and four of the five packages read `currency` straight out of the venue's JSON by key with
+nothing between. A renamed or absent key produced `%Balance{currency: nil}`: an amount
+attributable to no asset, returned inside `{:ok, balances}`, which a consumer cannot size,
+book or reconcile against.
+
+All four were fixed in their own packages. Assertion 24 is the ratchet, per this suite's own
+rule — *"Every gap found becomes a new assertion here. A gap fixed only in one venue's fake
+is a gap the next venue will reintroduce."* Four separate fixes with no shared assertion
+behind them is exactly that shape.
+
+**What it does not check, deliberately: `:balance`.** `Types.Balance` states that field may
+honestly be `nil` while `:currency` may not — `dp_exchange_coinbase` derives its total from
+the venue's available and hold figures and carries `nil` when either is missing, rather than
+claiming a total it cannot compute. An assertion covering both would force that venue to
+discard a real `available_balance` in order to report an absence honestly.
+
+## Second axis — an assertion that exists is not an assertion that runs
+
+**Found 2026-09-11, while verifying assertion 24 rather than while writing it.** Every status
+in this file answers one question: *does an assertion exist for this?* That is not the same
+question as *does it execute on every venue?*, and the difference had been hiding real
+absence behind green runs.
+
+The method that found it is the one worth keeping: **break the thing on purpose and require
+the suite to go red.** Niling each venue's fake balance currency failed two packages and left
+three green. Those three — `dp_exchange_webull`, `dp_exchange_robinhood`,
+`dp_exchange_schwab` — are account-scoped: several fake-driven assertions call an active
+endpoint with `opts: []`, and every account-scoped call was refused for the missing account
+(`:account_id`, `:account_number`, `:account_hash` respectively) before reaching the
+behaviour under test. The suite took that refusal as a legitimate answer and skipped.
+
+**It was never confined to assertion 24.** Assertion 17 — the credential gate — had been
+passing for the wrong reason on those same three venues since it was written: it strips the
+credential and expects a failure, and the failure it got was the absent account, not the
+stripped credential. Assertion 12's endpoint sweep was calling those endpoints without ever
+reaching them.
+
+Closed by `endpoint_opts:` on `use DpExchange.Core.AdapterContract` (Core 0.3.7), a
+`%{{name, arity} => keyword()}` each venue declares for its own endpoints. **The key stays
+the venue's**: a table of `:account_id` / `:account_number` / `:account_hash` inside Core
+would be exactly the venue-specific knowledge this contract exists to keep out of it.
+Assertion 17's stripped-credential args carry those same opts alongside the emptied
+credential, so the only thing missing from that call is the one thing it tests.
+
+**For the next audit.** A **covered** row above means an assertion exists. Before relying on
+one, break what it checks and confirm the suite fails — on every venue, not on the first.
+Two of the five would have told you nothing.
