@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.9] - 2026-09-12
+
 ### Fixed
 
 - **Assertions 14 and 23 had only ever run on one venue out of five.** Both build a call to
