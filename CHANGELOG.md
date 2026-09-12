@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.8] - 2026-09-12
+
 ### Fixed
 
 - **Assertion 24 accepted a refusal as a pass.** Its helper ended
