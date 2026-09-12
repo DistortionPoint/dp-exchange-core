@@ -21,6 +21,19 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`usage-rules/adapter.md` states the `Balance` rule the type now enforces.** `:balance` may
+  honestly be `nil` and `:currency` may not — two enforced keys that are not the same kind of
+  required, and reading them as if they were is how a package reports an unusable value as
+  success. The contract changed in 0.3.5 and the document a consuming agent reads did not say
+  so, which left the rule discoverable only from `new/1` raising.
+
+  It records what each `nil` means for a caller: an unstated total is a real answer and must
+  be read as unknown rather than zero, with `available_balance` beside it often still real; an
+  unstated currency is not an answer at all, and a venue package that cannot name the asset
+  must refuse the row. Assertion 24 holds every venue to the second half.
+
 ## [0.3.10] - 2026-09-12
 
 ### Fixed

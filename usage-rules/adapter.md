@@ -211,6 +211,28 @@ a substituted local clock is a plausible value with the wrong meaning.
 because a balance has no venue event time and its freshness is the only thing a caller can
 reason about.
 
+## `Balance.balance` may be `nil`; `Balance.currency` may not
+
+Two of that struct's enforced keys are not the same kind of required, and reading them as if
+they were is how a package ends up reporting an unusable value as success.
+
+**An unstated total is a real answer.** A venue that publishes an available figure and a hold
+figure but no total leaves `balance` `nil` rather than adding up what it can and calling the
+result the venue's number — "available 1, total unknown" and "total equals available" are
+different claims, and sizing against the second when the first is true trades against money
+that is held. Read `nil` there as unknown, never as zero, and use `available_balance` beside
+it, which is often still real.
+
+**An unstated currency is not.** An amount attributable to no asset cannot be sized, booked
+or reconciled by anyone, and unlike a quantity there is no "the venue declined to say" case —
+a holdings row names its asset. A venue package that cannot name it must refuse the row
+rather than emit one, and assertion 24 of the conformance suite holds every venue to that.
+
+`new/1` checks accordingly: it refuses a `nil` `:currency`, `:timestamp` or `:provider` and
+allows a `nil` `:balance`. `@enforce_keys` still guards `:balance`'s *presence*, so a decoder
+that never sets the field at all is still caught — stating an absence and omitting one are
+different mistakes.
+
 ## Carry the incident, not just the code
 
 Where a moduledoc explains *why* a guard exists, that explanation is the most valuable
