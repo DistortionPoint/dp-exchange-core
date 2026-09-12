@@ -179,6 +179,21 @@ defmodule DpExchange.Core.AdapterContract do
       # facts, and a lookup table of them here would be exactly the venue-specific knowledge
       # this contract is built to keep out of Core. The venue declares its own.
       @endpoint_opts Keyword.get(opts, :endpoint_opts, %{})
+
+      # Per-endpoint sample symbol, as `%{{name, arity} => symbol}`, for the endpoint whose
+      # coverage is narrower than `sample_pairs:`. Empty for a venue where one symbol suits
+      # every endpoint.
+      #
+      # `dp_exchange_webull` is the case: it serves an order book for US stocks and ETFs and
+      # refuses one for a crypto pair — deliberately, since the venue publishes no crypto
+      # depth endpoint and the fake "refuses it the same way the real package does rather
+      # than inventing a book". Its `sample_pairs:` are crypto, so assertion 23's
+      # `get_order_book/2` arm could only ever see that refusal.
+      #
+      # The alternative was to keep treating the refusal as a skip, which is how these
+      # assertions came to run on one venue in five. Naming a symbol the endpoint actually
+      # serves makes the assertion RUN instead, which is the point of having it.
+      @endpoint_symbols Keyword.get(opts, :endpoint_symbols, %{})
     end
   end
 
@@ -745,8 +760,13 @@ defmodule DpExchange.Core.AdapterContract do
             # for a BBO is exactly the case this assertion exists to allow — see
             # `Types.Quote`'s 0.2.0 split — so the branch is live, just not for this fake.
             #
+            # `endpoint_args/2` rather than a hand-built `[symbol, []]`. The hand-built
+            # version is why this assertion ran on one venue out of five: it carried no
+            # credential, and a public-SHAPED endpoint on a `credential_benefit: :required`
+            # venue can only receive one through `opts`.
+            #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
-            case apply(@fake, :get_top_of_book, [hd(@sample_pairs), []]) do
+            case apply(@fake, :get_top_of_book, endpoint_args(:get_top_of_book, 2)) do
               {:ok, top} ->
                 assert %DpExchange.Core.Types.TopOfBook{} = top,
                        "a BBO carries resting orders; a Quote carries a traded price, and " <>
@@ -759,8 +779,24 @@ defmodule DpExchange.Core.AdapterContract do
                 assert is_nil(top.venue_time) or match?(%DateTime{}, top.venue_time),
                        "venue_time is the venue's own or nil — never a stand-in for it"
 
-              _refused_or_unsupported ->
-                :ok
+              # A refusal from an endpoint `capabilities/0` declares ACTIVE is not a pass.
+              # See assertion 24's helper for the incident: the identical
+              # `_refused_or_unsupported -> :ok` clause is how three packages passed an
+              # assertion that never executed on them, and closing it there and not here
+              # would be the "fix applied where it was found rather than where it applies"
+              # this family keeps paying for.
+              other ->
+                flunk("""
+                capabilities/0 declares get_top_of_book/2 active, but the fake answered:
+
+                    #{inspect(other)}
+
+                Either the endpoint is not really active and capabilities/0 should say
+                `:unsupported`, or the fake needs something this call did not carry —
+                declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
+
+                See docs/reference/core/assertion-coverage.md, "Second axis".
+                """)
             end
           end
         end
@@ -1305,15 +1341,39 @@ defmodule DpExchange.Core.AdapterContract do
       # inlining it twice pushed the enclosing quote past credo's complexity ceiling — which
       # is the tool noticing the duplication before a reader had to.
       #
-      # Silently skips a venue that declares the endpoint `:unsupported`, and any answer
-      # that is not `{:ok, _}` — a refusal is a legitimate answer here, not a failure.
+      # Skips a venue that declares the endpoint `:unsupported` — `dp_exchange_robinhood`
+      # serves no `get_price/2` and no order book, `dp_exchange_schwab` no order book, and
+      # each says so in `capabilities/0`, which is the honest reason to skip.
+      #
+      # A refusal from an endpoint declared ACTIVE is NOT one, and this used to end
+      # `_refused_or_unsupported -> :ok` with a comment calling that "a legitimate answer
+      # here, not a failure". It is the identical clause that let three packages pass
+      # assertion 24 without ever executing it — see that helper for the incident. Leaving
+      # it closed there and open here would be the "fix applied where it was found rather
+      # than where it applies" this family keeps paying for.
       defp assert_times(venue, fake, {name, arity} = endpoint, expected_module) do
         caps = venue.capabilities()
 
         if Capabilities.active?(caps, endpoint) and @sample_pairs != [] and fake do
-          case apply(fake, name, [hd(@sample_pairs), []]) do
-            {:ok, value} -> assert_time_fields(value, expected_module, name, arity)
-            _refused_or_unsupported -> :ok
+          # `endpoint_args/2` rather than a hand-built `[symbol, []]` — see `arg_value/2`'s
+          # `credentials:` note. The hand-built version carried no credential, so this ran
+          # on one venue out of five.
+          case apply(fake, name, endpoint_args(name, arity)) do
+            {:ok, value} ->
+              assert_time_fields(value, expected_module, name, arity)
+
+            other ->
+              flunk("""
+              capabilities/0 declares #{name}/#{arity} active, but the fake answered:
+
+                  #{inspect(other)}
+
+              Either the endpoint is not really active and capabilities/0 should say
+              `:unsupported`, or the fake needs something this call did not carry —
+              declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
+
+              See docs/reference/core/assertion-coverage.md, "Second axis".
+              """)
           end
         end
       end
@@ -1587,13 +1647,33 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp arg_value(:credentials, _endpoint), do: @credentials
-      defp arg_value(:symbol, _endpoint), do: sample_symbol()
+
+      defp arg_value(:symbol, endpoint),
+        do: Map.get(@endpoint_symbols, endpoint, sample_symbol())
+
       defp arg_value(:timeframe, _endpoint), do: "1h"
 
-      # The venue's own per-endpoint options, or none — see `@endpoint_opts` for the three
-      # packages whose fakes refuse an account-scoped call before the assertion under test
-      # can reach anything, and what that cost.
-      defp arg_value(:opts, endpoint), do: Map.get(@endpoint_opts, endpoint, [])
+      # The venue's own per-endpoint options, plus the credential every venue's contract
+      # test already supplies.
+      #
+      # **`credentials:` is here because four of five packages were skipping assertions 14
+      # and 23 entirely.** Both build a call to the fake for a PUBLIC-shaped endpoint —
+      # `get_top_of_book/2`, `get_price/2`, `get_order_book/2` — whose arg shape carries no
+      # credential position, so the only place one can travel is `opts`. Nothing put it
+      # there, so every venue declaring `credential_benefit: :required` answered
+      # `{:error, {:missing_credentials, _}}`, and the assertions' own
+      # `_refused_or_unsupported -> :ok` clause took that for an answer. Only
+      # `dp_exchange_gemini`, which needs no credential, ever ran them.
+      #
+      # `put_new/3`, so a venue's own `endpoint_opts` still wins, and so assertion 17's
+      # stripped-credential path — which sets `credentials: %{}` deliberately — is not
+      # fighting this one. A venue that needs no credential is unharmed: an extra opt its
+      # facade does not read costs nothing.
+      defp arg_value(:opts, endpoint) do
+        @endpoint_opts
+        |> Map.get(endpoint, [])
+        |> Keyword.put_new(:credentials, @credentials)
+      end
 
       defp sample_symbol, do: List.first(@sample_pairs) || "BTC-USD"
 

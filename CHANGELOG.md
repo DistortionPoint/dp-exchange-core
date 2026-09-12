@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertions 14 and 23 had only ever run on one venue out of five.** Both build a call to
+  the venue's fake for a PUBLIC-shaped endpoint — `get_top_of_book/2`, `get_price/2`,
+  `get_order_book/2` — whose argument shape carries no credential position, so the only
+  place a credential can travel is `opts`. Both passed a hand-built `[symbol, []]`. Every
+  venue declaring `credential_benefit: :required` therefore answered
+  `{:error, {:missing_credentials, _}}`, and each assertion's own
+  `_refused_or_unsupported -> :ok` clause took that for an answer. Only `dp_exchange_gemini`,
+  which needs no credential, ever executed them.
+
+  **Measured, not inferred.** Setting a fake's `observed_at` to `nil` — the precise defect
+  assertion 14 exists to catch — and running `dp_exchange_schwab`'s contract suite against
+  the published Core 0.3.8 reports **0 failures**. Against this change, all five fail, with
+  counts matching each venue's own capability declaration exactly: 3 for the venues serving
+  all three endpoints, 2 for `dp_exchange_schwab` (no order book), 1 for
+  `dp_exchange_robinhood` (no `get_price/2`, no order book).
+
+  Both now build their arguments through `endpoint_args/2`, and `arg_value(:opts, _)` carries
+  `credentials:` via `Keyword.put_new/3` — so a venue's own `endpoint_opts` still wins, and
+  assertion 17's deliberately-emptied credential is not fought.
+
+- **The same `_refused_or_unsupported -> :ok` clause closed in assertion 24 was left open in
+  14 and 23.** Fixed in one place and not the others, which is the "fix applied where it was
+  found rather than where it applies" this family keeps paying for — committed here, in the
+  suite whose job is to stop exactly that. A refusal from an endpoint `capabilities/0`
+  declares active now fails in all three, naming both honest remedies.
+
+### Added
+
+- **`endpoint_symbols:` on `use DpExchange.Core.AdapterContract`**, a
+  `%{{name, arity} => symbol}` for the endpoint whose coverage is narrower than
+  `sample_pairs:`. `dp_exchange_webull` serves an order book for US stocks and ETFs and
+  refuses one for a crypto pair — deliberately, since the venue publishes no crypto depth
+  endpoint — and all of its sample pairs are crypto, so assertion 23's `get_order_book/2`
+  arm could only ever see that refusal.
+
+  The alternative was to keep treating the refusal as a skip, which is how these assertions
+  came to run on one venue in five. Naming a symbol the endpoint actually serves makes the
+  assertion run instead, which is the point of having it.
+
 ## [0.3.8] - 2026-09-12
 
 ### Fixed

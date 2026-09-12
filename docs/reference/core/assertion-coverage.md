@@ -419,3 +419,41 @@ credential, so the only thing missing from that call is the one thing it tests.
 **For the next audit.** A **covered** row above means an assertion exists. Before relying on
 one, break what it checks and confirm the suite fails — on every venue, not on the first.
 Two of the five would have told you nothing.
+
+### Second axis, applied 2026-09-12 — assertions 14 and 23
+
+The section above told the next auditor to break what an assertion checks and require the
+suite to go red **on every venue rather than on the first**. Doing that to assertions 14 and
+23 found them inert on four packages out of five.
+
+Both build a call to the venue's fake for a PUBLIC-shaped endpoint — `get_top_of_book/2`,
+`get_price/2`, `get_order_book/2` — whose argument shape carries no credential position, so
+the only place a credential can travel is `opts`. Both passed a hand-built `[symbol, []]`.
+Every venue declaring `credential_benefit: :required` answered
+`{:error, {:missing_credentials, _}}`, and the `_refused_or_unsupported -> :ok` clause took
+it for an answer. Only `dp_exchange_gemini`, needing no credential, ever ran them.
+
+**The measurement.** Set a fake's `observed_at` to `nil` — the precise defect assertion 14
+exists to catch — and run `dp_exchange_schwab`'s contract suite:
+
+| Core | result |
+|---|---|
+| published 0.3.8 | **0 failures** — the assertion is inert |
+| this change | 2 failures — `get_top_of_book/2` and `get_price/2`, exactly the two that venue declares active |
+
+Across all five, with the same break: 3 failures each for the venues serving all three
+endpoints, 2 for `dp_exchange_schwab` (no order book), 1 for `dp_exchange_robinhood` (no
+`get_price/2`, no order book). Those counts match each venue's own `capabilities/0` exactly,
+which is what "runs where it should and nowhere else" looks like when you can see it.
+
+**Two things this cost, worth naming.** The `_refused_or_unsupported -> :ok` clause was
+closed in assertion 24 one day earlier and left open in 14 and 23 — a fix applied where it
+was found rather than where it applied, committed inside the suite whose job is to stop
+exactly that. And `endpoint_opts:`, added the same day, was not reached by either assertion,
+because both bypassed `endpoint_args/2` and built their arguments by hand. A mechanism is
+only as wired as its call sites.
+
+`endpoint_symbols:` was added for the one case that survived: `dp_exchange_webull` serves an
+order book for US stocks and ETFs and refuses one for a crypto pair, and all its sample pairs
+are crypto. Naming a symbol the endpoint actually serves makes the assertion run rather than
+skip — which, throughout this file, is the whole difference.
