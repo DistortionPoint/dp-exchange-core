@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.10] - 2026-09-12
+
 ### Fixed
 
 - **Three checker test suites failed whenever two `mix test` runs of this package
