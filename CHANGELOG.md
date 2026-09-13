@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Trade.new/1` demanded a non-nil `:id` and `:side` that two venues cannot supply, and
+  its typespec said they were never nil while a shipped venue returns one.**
+  `@required_non_nil` is now narrower than `@enforce_keys` — the same split
+  `Types.Balance` already makes, for the reason it states: *state what is true rather than a
+  stricter rule the packages then quietly violate.*
+
+  * `dp_exchange_webull`'s `tick` topic publishes no per-print identifier, on the socket or
+    on its REST tape, and its usage rules say so. Its decoder records that `Trade.new/1`
+    "is deliberately not used here: it would raise on the very absence this comment and the
+    moduledoc both document as real rather than accidental".
+  * `dp_exchange_gemini` on `:side`: "Absent means the venue did not say which side lifted,
+    and neither answer is honest." `dp_exchange_webull` matches only the venue's documented
+    `"B"`/`"S"` and answers `nil` otherwise.
+
+  The cost was not the rule being wrong — it was the packages' response to it. Bypassing the
+  constructor skips the checks that ARE right, so one unkeepable requirement cost the
+  other four: a `nil` price, quantity, timestamp or symbol went unchecked in every venue that
+  built the struct literally to avoid raising on the id.
+
+  `@enforce_keys` still lists both, so a decoder that forgets the key entirely is caught;
+  what is allowed is stating the absence. `t:t/0` now reads `id: String.t() | nil` and
+  `side: :buy | :sell | nil`, which is what the family already produced.
+
+  **Consumers must treat `:id` and `:side` as optional.** This is not a behaviour change —
+  `%Trade{id: nil}` has been arriving from `dp_exchange_webull` all along — it is the
+  typespec catching up, so dialyzer can see it.
+
+  Found by a mechanical audit of every literal struct construction in the family against the
+  fields its Core type requires non-nil.
+
 ## [0.3.11] - 2026-09-12
 
 ### Changed

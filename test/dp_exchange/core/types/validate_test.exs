@@ -584,6 +584,33 @@ defmodule DpExchange.Core.Types.ValidateTest do
         Trade.new(Keyword.put(@valid, :quantity, nil))
       end
     end
+
+    test "accepts a nil id, because a venue tape can carry no trade id" do
+      # `dp_exchange_webull`'s `tick` topic publishes no per-print identifier, on the socket
+      # or on its REST tape, and says so in its usage rules. It could not call this
+      # constructor — its own comment records that `Trade.new/1` "is deliberately not used
+      # here: it would raise on the very absence this comment and the moduledoc both document
+      # as real rather than accidental".
+      #
+      # A rule two packages route around is not a rule; it is a constructor nobody can use.
+      assert %Trade{id: nil} = Trade.new(Keyword.put(@valid, :id, nil))
+    end
+
+    test "accepts a nil side, because a venue can decline to say who lifted" do
+      # `dp_exchange_gemini`: "Absent means the venue did not say which side lifted, and
+      # neither answer is honest." `dp_exchange_webull` matches only the venue's documented
+      # `"B"`/`"S"` and answers `nil` otherwise — "a real trade with an unknown aggressor,
+      # rather than a guess that would put volume on the wrong side of a delta".
+      assert %Trade{side: nil} = Trade.new(Keyword.put(@valid, :side, nil))
+    end
+
+    test "still rejects the fields no venue has an honest nil for" do
+      for field <- [:symbol, :price, :timestamp, :provider] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          Trade.new(Keyword.put(@valid, field, nil))
+        end
+      end
+    end
   end
 
   describe "VolumeProfile.new/1" do
