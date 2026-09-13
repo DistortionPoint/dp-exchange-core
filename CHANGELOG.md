@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.12] - 2026-09-13
+
 ### Fixed
 
 - **`Trade.new/1` demanded a non-nil `:id` and `:side` that two venues cannot supply, and
