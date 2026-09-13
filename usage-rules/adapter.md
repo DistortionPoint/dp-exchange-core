@@ -233,6 +233,34 @@ allows a `nil` `:balance`. `@enforce_keys` still guards `:balance`'s *presence*,
 that never sets the field at all is still caught — stating an absence and omitting one are
 different mistakes.
 
+## `Trade.id` and `Trade.side` may be `nil`; its price, quantity and time may not
+
+The same split as `Balance` above, on the type most likely to be built from a socket frame.
+
+**A tape can carry no per-print identifier.** `dp_exchange_webull`'s `tick` topic publishes
+none, on the socket or on its REST tape, and says so in its usage rules. `nil` there means
+the venue did not identify this print — it does not mean the print is doubtful, and it is
+not an invitation to synthesise one from a symbol and a timestamp. A consumer deduplicating
+a tape must handle `nil` rather than assume uniqueness.
+
+**A venue can decline to say which side lifted.** `dp_exchange_gemini`: "Absent means the
+venue did not say which side lifted, and neither answer is honest." `dp_exchange_webull`
+matches only the venue's documented `"B"`/`"S"` and answers `nil` otherwise, "rather than a
+guess that would put volume on the wrong side of a delta". Read `nil` as unknown aggressor
+and exclude the print from a buy/sell split; counting it as either is the substitution.
+
+**The other four are not negotiable.** `:symbol`, `:price`, `:quantity` and `:timestamp`
+have no honest absence — a print with no price is not a print — and `new/1` refuses a `nil`
+in any of them.
+
+This was the other way round until Core 0.3.12, and the cost is worth recording because it
+is the argument for the rule above about preferring `new/1`. `:id` and `:side` were in the
+non-nil set, two venues could not keep it, and both responded by building the struct
+literally to avoid raising. **Skipping the constructor skips the checks that are right**, so
+one unkeepable requirement cost the other four: a `nil` price or timestamp went unchecked in
+exactly the packages that had most reason to check. A rule a package must route around is
+not a stricter rule; it is a constructor nobody can use.
+
 ## Carry the incident, not just the code
 
 Where a moduledoc explains *why* a guard exists, that explanation is the most valuable
