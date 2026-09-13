@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.13] - 2026-09-13
+
 ### Added
 
 - **Assertion 25 — order book ordering.** `Core.Types.OrderBook` states that `bids`
