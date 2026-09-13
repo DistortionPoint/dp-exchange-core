@@ -107,7 +107,10 @@ defmodule DpExchange.Core.AdapterContract do
          "or nil in venue_time, never an unparsed stand-in, and observed_at is always there"},
       {24,
        "balance attribution — every Balance names the asset it is a balance of, because " <>
-         "an amount attributable to nothing cannot be sized, booked or reconciled"}
+         "an amount attributable to nothing cannot be sized, booked or reconciled"},
+      {25,
+       "order book ordering — bids descending and asks ascending, so hd(bids) is the best " <>
+         "bid, and every level carries a real Decimal price"}
     ]
   end
 
@@ -132,6 +135,7 @@ defmodule DpExchange.Core.AdapterContract do
       historical_timeframe_discipline(),
       venue_and_observed_time(),
       balance_attribution(),
+      order_book_ordering(),
       helpers(),
       arg_helpers(),
       credential_gate_helpers(),
@@ -1294,6 +1298,94 @@ defmodule DpExchange.Core.AdapterContract do
                      "value the pull endpoints return, never raw venue data"
           end
         end
+      end
+    end
+  end
+
+  defp order_book_ordering do
+    quote location: :keep do
+      # --- 25. order book ordering ---------------------------------------------
+
+      describe "25. order book ordering" do
+        # `Core.Types.OrderBook` states this and anticipates the mistake by name: "The
+        # ordering is part of the contract, not a convenience: a caller reading `hd(bids)`
+        # as the best bid is reading it correctly, and a venue package that returns
+        # venue-order without re-sorting has broken the contract even though every value in
+        # it is true."
+        #
+        # **Nothing checked it, and on 2026-09-13 three of the four packages that build an
+        # `OrderBook` were returning the venue's row order.** `dp_exchange_coinbase` was the
+        # only one sorting, so the family had both answers running at once and every suite
+        # was green. One of the three even carried a test asserting the venue's order was
+        # kept, with an ascending bid list as its fixture.
+        #
+        # This is the suite's own policy applied: "Every gap found becomes a new assertion
+        # here. A gap fixed only in one venue's fake is a gap the next venue reintroduces."
+        #
+        # **What this does NOT catch, stated plainly: the bug that prompted it.** The suite
+        # drives the venue's FAKE, and all five fakes already returned sorted books — the
+        # drift was in the real decoders, which read venue rows this suite never sees.
+        # Driving the real one would make every ordinary `mix test` dial the live API, and
+        # feeding it an unsorted fixture would mean handing the suite a `plug:`, which is
+        # transport and which this module's own rule forbids an assertion to name.
+        #
+        # So the division of labour is: each venue's own tests hold its decoder (every one
+        # of the three fixed on 2026-09-13 gained a test that fails if the sort is removed),
+        # and this holds the fake, the contract's visibility, and the next venue to arrive.
+        # Saying so is more useful than implying it closes the hole — the same reason
+        # assertion 23 records that it cannot catch a venue's own local clock.
+        #
+        # It does catch the regression that matters most for a fake: assertion 9 requires
+        # the fake to satisfy this suite, so a fake written with a plausible-looking
+        # descending ask ladder now fails here instead of teaching the next reader that
+        # venue order is acceptable.
+        test "bids come back highest first and asks lowest first" do
+          assert_book_ordering(@venue, @fake)
+        end
+      end
+
+      # Skips a venue that declares the endpoint `:unsupported` — `dp_exchange_robinhood`
+      # and `dp_exchange_schwab` serve no REST order book and say so in `capabilities/0`,
+      # which is the honest reason to skip. A refusal from an endpoint declared ACTIVE is
+      # not one, for the reason assertion 24's helper records.
+      defp assert_book_ordering(venue, fake) do
+        endpoint = {:get_order_book, 2}
+
+        if Capabilities.active?(venue.capabilities(), endpoint) and @sample_pairs != [] and fake do
+          case apply(fake, :get_order_book, endpoint_args(:get_order_book, 2)) do
+            {:ok, %DpExchange.Core.Types.OrderBook{} = book} ->
+              assert_side_ordering(book.bids, :desc, "bids", "highest")
+              assert_side_ordering(book.asks, :asc, "asks", "lowest")
+
+            other ->
+              flunk("""
+              capabilities/0 declares get_order_book/2 active, but the fake answered:
+
+                  #{inspect(other)}
+
+              Either the endpoint is not really active and capabilities/0 should say
+              `:unsupported`, or the fake needs something this call did not carry —
+              declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
+              """)
+          end
+        end
+      end
+
+      defp assert_side_ordering(levels, direction, side, superlative) do
+        for {price, _quantity} <- levels do
+          assert match?(%Decimal{}, price),
+                 "every #{side} level carries a real Decimal price — `Core.Types.OrderBook`'s " <>
+                   "`level/0` is `{Decimal.t(), Decimal.t()}`, and a caller reading " <>
+                   "`hd(#{side})` as the #{superlative} price cannot be handed a nil"
+        end
+
+        prices = Enum.map(levels, fn {price, _quantity} -> price end)
+
+        assert prices == Enum.sort_by(prices, & &1, {direction, Decimal}),
+               "#{side} must be #{direction}ending so `hd(#{side})` is the #{superlative} — " <>
+                 "the ordering is part of `Core.Types.OrderBook`'s contract, not a " <>
+                 "convenience, and a package returning venue-order without re-sorting has " <>
+                 "broken it even though every value in it is true. Got: #{inspect(prices)}"
       end
     end
   end

@@ -21,6 +21,30 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 25 — order book ordering.** `Core.Types.OrderBook` states that `bids`
+  descending and `asks` ascending is part of the contract and anticipates the mistake by
+  name, and nothing in this suite checked it. On 2026-09-13 **three of the four packages that
+  build an `OrderBook` were returning the venue's row order**; `dp_exchange_coinbase` was the
+  only one sorting, so the family had both answers running at once and every suite was green.
+  One of the three even carried a test asserting the venue's order was kept, with an
+  ascending bid list as its fixture.
+
+  This is the suite's own policy applied — *"Every gap found becomes a new assertion here. A
+  gap fixed only in one venue's fake is a gap the next venue reintroduces."*
+
+  The assertion also requires every level's price to be a real `Decimal`, which was the
+  second half of the same defect: `level/0` is `{Decimal.t(), Decimal.t()}` and one package
+  was carrying `{nil, _}` levels, so `hd(bids)` could hand a caller a `nil` best bid.
+
+  **What it does not catch is recorded in the assertion itself**: the suite drives the
+  venue's fake, and all five fakes already returned sorted books — the drift was in the real
+  decoders, which this suite never sees. Driving the real one would make every ordinary
+  `mix test` dial the live API, and feeding it an unsorted fixture would mean handing the
+  suite a `plug:`, which is transport and which this module's own rule forbids an assertion
+  to name. Each venue's own tests hold its decoder; this holds the fake and the next venue.
+
 ## [0.3.12] - 2026-09-13
 
 ### Fixed
