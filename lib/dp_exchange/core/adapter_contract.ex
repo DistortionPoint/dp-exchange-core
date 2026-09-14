@@ -1313,11 +1313,23 @@ defmodule DpExchange.Core.AdapterContract do
         # venue-order without re-sorting has broken the contract even though every value in
         # it is true."
         #
-        # **Nothing checked it, and on 2026-09-13 three of the four packages that build an
-        # `OrderBook` were returning the venue's row order.** `dp_exchange_coinbase` was the
-        # only one sorting, so the family had both answers running at once and every suite
-        # was green. One of the three even carried a test asserting the venue's order was
-        # kept, with an ascending bid list as its fixture.
+        # **Nothing checked it, and on 2026-09-13 most of the packages that build an
+        # `OrderBook` were returning the venue's row order.** The family had both answers
+        # running at once and every suite was green. Two of them even carried a test
+        # asserting the venue's order was kept, each with an ascending bid list as its
+        # fixture — the tell, since that is precisely the order this contract calls broken.
+        #
+        # **The 2026-09-13 sweep credited `dp_exchange_coinbase` as the one package already
+        # sorting, and that was half right, which is worse than wrong.** Coinbase builds a
+        # book on TWO paths: `Socket`'s `level2` snapshot, which sorted, and `Rest`'s
+        # `get_order_book/2`, which did not. The sweep found `Socket.sorted/2`, took the
+        # package as done, and `dp_exchange_webull` copied the attribution into its own
+        # comment. Coinbase's REST decoder kept returning venue row order until 2026-09-14,
+        # protected by the family's own record saying it was fine.
+        #
+        # The lesson for the next reader is not about coinbase. It is that "does this
+        # package sort?" is the wrong question — a package has one book path per transport,
+        # and each one has to be checked.
         #
         # This is the suite's own policy applied: "Every gap found becomes a new assertion
         # here. A gap fixed only in one venue's fake is a gap the next venue reintroduces."
@@ -1330,7 +1342,8 @@ defmodule DpExchange.Core.AdapterContract do
         # transport and which this module's own rule forbids an assertion to name.
         #
         # So the division of labour is: each venue's own tests hold its decoder (every one
-        # of the three fixed on 2026-09-13 gained a test that fails if the sort is removed),
+        # fixed on 2026-09-13, and coinbase's REST path on 2026-09-14, gained a test that
+        # fails if the sort is removed),
         # and this holds the fake, the contract's visibility, and the next venue to arrive.
         # Saying so is more useful than implying it closes the hole — the same reason
         # assertion 23 records that it cannot catch a venue's own local clock.
