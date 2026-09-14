@@ -57,14 +57,48 @@ defmodule DpExchange.Core.Types.StakingRate do
   def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
 
   @doc """
-  Converts a rate in basis points to a percentage.
+  Converts a rate in basis points to a percentage, or `nil` for a value it cannot read.
 
   Provided here rather than left to each venue package, because it is the conversion most
   likely to be done inconsistently — and a rate wrong by 100× still looks like a rate.
+
+  ## What it refuses, and why it used to accept it
+
+  A caller passes this whatever the venue sent, which is the entire reason it exists. It
+  used to hand a binary straight to `Decimal.new/1`, and that is wrong in both directions:
+
+    * **It raised.** `Decimal.new("")` and `Decimal.new("n/a")` raise `Decimal.Error`, so a
+      venue omitting a rate, or naming it in words, crashed the caller rather than reporting
+      an absent rate. `Decimal.new("  500  ")` raises too — padding is not a number this
+      function should die on.
+
+    * **It accepted `"NaN"` and `"Infinity"`.** Both parse, so both became a `Decimal` and
+      then a rate. Every venue package in this family already refuses them, with the
+      measurement recorded beside each copy: `Decimal.add(nan, 1)` is NaN and poisons a
+      consumer's arithmetic silently, `Decimal.compare(nan, _)` raises in the consumer's own
+      process naming Decimal rather than the venue, and an Infinity is quieter still — it
+      compares greater than everything and never raises at all.
+
+  So this now answers `nil` for anything it cannot read, which is exactly the convention
+  every venue's own `decimal/1` follows. **The shared helper was less careful than the five
+  copies it exists to replace.**
+
+  `nil` is a rate the venue did not state. It is not zero, which is a rate.
   """
-  @spec bps_to_pct(Decimal.t() | number() | String.t()) :: Decimal.t()
-  def bps_to_pct(%Decimal{} = bps), do: Decimal.div(bps, 100)
+  @spec bps_to_pct(Decimal.t() | number() | String.t() | nil) :: Decimal.t() | nil
+  def bps_to_pct(%Decimal{} = bps) do
+    if Decimal.nan?(bps) or Decimal.inf?(bps), do: nil, else: Decimal.div(bps, 100)
+  end
+
   def bps_to_pct(bps) when is_integer(bps), do: bps |> Decimal.new() |> Decimal.div(100)
   def bps_to_pct(bps) when is_float(bps), do: bps |> Decimal.from_float() |> Decimal.div(100)
-  def bps_to_pct(bps) when is_binary(bps), do: bps |> Decimal.new() |> Decimal.div(100)
+
+  def bps_to_pct(bps) when is_binary(bps) do
+    case bps |> String.trim() |> Decimal.parse() do
+      {parsed, ""} -> bps_to_pct(parsed)
+      _unreadable -> nil
+    end
+  end
+
+  def bps_to_pct(_unreadable), do: nil
 end

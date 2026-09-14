@@ -25,6 +25,31 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **`StakingRate.bps_to_pct/1` crashed on a rate the venue did not state, and accepted one
+  that is not a number.** It handed a binary straight to `Decimal.new/1`, which is wrong in
+  both directions:
+
+  * **It raised.** `Decimal.new("")` and `Decimal.new("n/a")` raise `Decimal.Error`, so a
+    venue omitting a rate, or naming it in words, took the caller down rather than reporting
+    an absent rate. `Decimal.new("  500  ")` raises too — padding is not a number to die on.
+  * **It accepted `"NaN"` and `"Infinity"`.** Both parse, so both became a `Decimal` and
+    then a rate. Every venue package already refuses them, with the measurement recorded
+    beside each copy: `Decimal.add(nan, 1)` is NaN and poisons a consumer's arithmetic
+    silently, `Decimal.compare(nan, _)` raises in the CONSUMER's process naming Decimal
+    rather than the venue, and an Infinity compares greater than everything and never raises
+    at all.
+
+  It now answers `nil` for anything it cannot read — the convention every venue's own
+  `decimal/1` already follows. **The shared helper was less careful than the five copies it
+  exists to replace**, which is the opposite of the reason it was written: "provided here
+  rather than left to each venue package, because it is the conversion most likely to be
+  done inconsistently".
+
+  **The spec widens to `Decimal.t() | nil`.** Valid input is unchanged. Nobody can have been
+  relying on the raise, and `nil` in place of a NaN rate is both detectable and correct.
+
+### Fixed
+
 - **`CanonicalPair.to_exchange/2` appended the venue's separator to a symbol that had no
   quote part.** `"AAPL"` came back `"AAPL-"`, and `""` came back `"-"`. It built
   `"#{base}#{sep}#{quote}"` unconditionally, so anything that is not a `BASE-QUOTE` pair was

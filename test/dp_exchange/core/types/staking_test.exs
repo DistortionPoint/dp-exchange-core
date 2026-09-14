@@ -40,6 +40,41 @@ defmodule DpExchange.Core.Types.StakingTest do
       assert Decimal.equal?(StakingRate.bps_to_pct(450.0), Decimal.new("4.5"))
     end
 
+    test "a rate the venue did not state is nil, not a crash" do
+      # This handed a binary straight to `Decimal.new/1`, which RAISES on a string that is
+      # not a number. A venue omitting a rate, or naming it in words, took the caller down
+      # rather than reporting an absent rate — from a helper whose entire purpose is to make
+      # this conversion safe to do with whatever the venue sent.
+      #
+      # `nil` is a rate the venue did not state. It is not zero, which is a rate.
+      assert StakingRate.bps_to_pct("") == nil
+      assert StakingRate.bps_to_pct("n/a") == nil
+      assert StakingRate.bps_to_pct("--") == nil
+      assert StakingRate.bps_to_pct(nil) == nil
+    end
+
+    test "padding is not a reason to fail" do
+      # `Decimal.new("  500  ")` raises. Whitespace around a number does not change it.
+      assert Decimal.equal?(StakingRate.bps_to_pct("  450  "), Decimal.new("4.5"))
+    end
+
+    test "NaN and Infinity are refused, in every shape they arrive in" do
+      # Both parse cleanly, so both used to become a `Decimal` and then a rate. Every venue
+      # package in this family already refuses them and records why beside each copy:
+      # `Decimal.add(nan, 1)` is NaN and poisons a consumer's arithmetic silently,
+      # `Decimal.compare(nan, _)` raises in the CONSUMER's process naming Decimal rather
+      # than the venue that sent it, and an Infinity is quieter still — it compares greater
+      # than everything and never raises at all.
+      #
+      # The shared helper was less careful than the five copies it exists to replace.
+      for bad <- ["NaN", "nan", "Infinity", "inf", "-Inf"] do
+        assert StakingRate.bps_to_pct(bad) == nil, "#{bad} must not become a rate"
+      end
+
+      assert StakingRate.bps_to_pct(Decimal.new("NaN")) == nil
+      assert StakingRate.bps_to_pct(Decimal.new("Infinity")) == nil
+    end
+
     test "zero stays zero" do
       assert Decimal.equal?(StakingRate.bps_to_pct(0), Decimal.new("0"))
     end
