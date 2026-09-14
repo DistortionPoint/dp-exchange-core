@@ -547,6 +547,46 @@ defmodule DpExchange.Core.PollingFeedTest do
   end
 
   describe "on_notice: the delivering-nothing transition (issue #21)" do
+    test "provider defaults to the label, so an existing caller answers exactly what it did" do
+      test = self()
+
+      start_feed(
+        fetch: fn _symbol -> {:error, :down} end,
+        symbols: ~w(BTC-USD),
+        label: "robinhood",
+        on_notice: fn notice -> send(test, {:notice, notice}) end
+      )
+
+      assert_receive {:notice, notice}, 1_000
+      assert notice.provider == "robinhood"
+    end
+
+    test "an explicit provider is what the notice carries, and the label still names the feed" do
+      # The reason this option exists. A venue's own `Feed` builds notices with the venue
+      # ATOM, so a poller that named itself by its string label made the same venue emit
+      # both `:robinhood` and `"robinhood"` — and `dp_exchange_schwab`, whose poll is
+      # deliberately labelled "schwab-fallback-poll" so the MESSAGE reads unambiguously,
+      # emitted `:schwab` beside `"schwab-fallback-poll"`. A consumer routing notices by
+      # provider dropped or mis-filed every one that came from the poll, and nothing
+      # failed: the value stayed plausible and only its meaning was wrong.
+      #
+      # Both facts are now sayable at once — `provider` for routing, `label` for reading.
+      test = self()
+
+      start_feed(
+        fetch: fn _symbol -> {:error, :down} end,
+        symbols: ~w(BTC-USD),
+        label: "schwab-fallback-poll",
+        provider: :schwab,
+        on_notice: fn notice -> send(test, {:notice, notice}) end
+      )
+
+      assert_receive {:notice, notice}, 1_000
+      assert notice.provider == :schwab
+      assert notice.details.label == "schwab-fallback-poll"
+      assert notice.message =~ "schwab-fallback-poll"
+    end
+
     test "fires once on the crossing into delivering nothing, not once per failed tick or sweep after" do
       # Three symbols, so `sweep` (the number of failures a full cycle takes) is 3 —
       # large enough to prove this is NOT firing on every individual fetch failure.

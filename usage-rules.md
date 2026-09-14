@@ -188,6 +188,18 @@ Treat it as the record and a dropped message is silent, wrong state — which ha
 two symbols suspended at 03:14 and 03:27 opened fresh positions at 21:46 because the
 message that would have stopped them vanished with a restarting process.
 
+### `provider` is usually an atom, and sometimes a string
+
+Route on it, but match defensively. A venue's own feed names itself with the venue atom
+(`:coinbase`, `:schwab`). `Core.PollingFeed` — the poll a venue runs for symbols its stream
+does not reach, and the whole feed for a venue with no stream — names whatever its caller
+gave it as `provider:`, falling back to its `label`, which is a string.
+
+A venue package that wires `provider:` through emits the atom from both halves. One that
+does not emits `:venue` from its feed and `"some-label"` from its poll, **for the same
+venue**, and a consumer matching only the atom quietly misses half its notices.
+`details.label` always names which feed spoke, whichever the provider is.
+
 ## Credentials
 
 Passed as arguments, per call. A package never reads them from a vault, an environment

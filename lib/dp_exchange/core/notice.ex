@@ -129,12 +129,27 @@ defmodule DpExchange.Core.Notice do
   @typedoc "How much a consumer should care. Not a log level — a call to action."
   @type severity :: :info | :warning | :error
 
+  @typedoc """
+  Which venue this is about.
+
+  Normally the venue's own atom — `:coinbase`, `:schwab` — and a consumer routing notices by
+  venue should be able to match on that. A `String.t()` is permitted because a feed that is
+  not a venue can raise one too: `Core.PollingFeed` names itself here when its caller has not
+  told it which venue it polls for, and its own default is the string `"polling-feed"`.
+
+  **So match defensively, or make sure the poll is configured.** A venue package should pass
+  `provider:` to `PollingFeed` so both halves of that package agree; one that does not will
+  emit `:venue` from its `Feed` and `"its-label"` from its poll, for the same venue, and a
+  consumer matching only the atom will quietly miss half its notices.
+  """
+  @type provider :: atom() | String.t()
+
   @enforce_keys [:kind, :provider, :severity, :at]
   defstruct [:kind, :provider, :severity, :at, :message, details: %{}]
 
   @type t :: %__MODULE__{
           kind: kind(),
-          provider: atom() | String.t(),
+          provider: provider(),
           severity: severity(),
           at: DateTime.t(),
           message: String.t() | nil,
@@ -208,7 +223,7 @@ defmodule DpExchange.Core.Notice do
       iex> DpExchange.Core.Notice.new(:link_down, :v, severity: :critical)
       ** (ArgumentError) unknown notice severity :critical — must be one of [:info, :warning, :error]
   """
-  @spec new(kind(), atom() | String.t(), keyword()) :: t()
+  @spec new(kind(), provider(), keyword()) :: t()
   def new(kind, provider, opts \\ []) do
     unless kind in @kinds do
       raise ArgumentError, "unknown notice kind #{inspect(kind)}"

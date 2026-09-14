@@ -276,6 +276,23 @@ defmodule DpExchange.Core.PollingFeed do
       # closed the trap as a class rather than one incident at a time. See its moduledoc.
       interval_ms: interval_ms,
       label: Config.opt(opts, :label, "polling-feed"),
+      # What a `Core.Notice` from this feed names as its `provider`.
+      #
+      # It used to be `label` itself, and that made `notice.provider` unusable for the one
+      # thing a consumer reaches for it for. A venue's own `Feed` builds its notices with the
+      # venue ATOM (`Notice.new(:link_down, :robinhood, ...)`), while the poller inside the
+      # same package built them with a STRING — so one venue emitted both `:robinhood` and
+      # `"robinhood"`, and Schwab emitted `:schwab` alongside `"schwab-fallback-poll"`. A
+      # consumer routing notices by provider silently dropped or mis-filed every notice that
+      # came from the poll, and nothing failed: the value stayed plausible and only its
+      # meaning was wrong.
+      #
+      # Defaulting to `label` keeps every existing caller answering exactly what it did
+      # before; a venue that wants `provider` to mean the venue passes its own atom. The
+      # label still identifies WHICH feed inside `message` and `details.label`, which is what
+      # it was good at.
+      provider: Config.opt(opts, :provider, Config.opt(opts, :label, "polling-feed")),
+
       # Injected like the sink, so the feed never reaches outside its own inputs.
       # Defaults to a no-op: a caller that does not care about refusals gets a
       # working feed, not a crash.
@@ -575,7 +592,7 @@ defmodule DpExchange.Core.PollingFeed do
   # `:link, :up` is the recovery.
   defp record_success(%{notice_state: :dead} = state) do
     notice =
-      Notice.new(:coverage_change, state.label,
+      Notice.new(:coverage_change, state.provider,
         severity: :info,
         message:
           "#{state.label} has resumed delivering after #{state.failures_since_ok} " <>
@@ -621,7 +638,7 @@ defmodule DpExchange.Core.PollingFeed do
 
   defp notify_delivering_nothing(state, failures, reason) do
     notice =
-      Notice.new(:coverage_change, state.label,
+      Notice.new(:coverage_change, state.provider,
         severity: :warning,
         message: "#{state.label} has delivered nothing in #{failures} consecutive attempts",
         details: %{label: state.label, consecutive_failures: failures, last_error: reason}

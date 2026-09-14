@@ -21,6 +21,32 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`PollingFeed` takes a `:provider`, so `Notice.provider` can be trusted for routing.**
+  Its notices named `state.label`, a string. A venue's own `Feed` builds notices with the
+  venue ATOM, so the same package emitted both — `dp_exchange_robinhood` sent `:robinhood`
+  from its feed and `"robinhood"` from its poll, and `dp_exchange_schwab` sent `:schwab`
+  beside `"schwab-fallback-poll"`. A consumer routing notices by `provider` silently
+  dropped or mis-filed every notice that came from the poll: the value stayed plausible and
+  only its meaning was wrong, which is the substitution this family keeps paying for.
+
+  `:provider` defaults to `:label`, so every existing caller answers exactly what it did
+  before and no venue has to change to keep working. A venue that wants `provider` to mean
+  the venue passes its own atom, and `label` goes on doing what it is good at — naming WHICH
+  feed inside `message` and `details.label`. Schwab's poll is deliberately labelled
+  "schwab-fallback-poll" so a notice pasted into an issue cannot be mistaken for the
+  Streamer going dark; both facts are now sayable at once.
+
+### Fixed
+
+- **`Notice.provider` had no documentation at all.** `kind` and `severity` each carry a
+  `@typedoc`; the field a consumer actually routes on carried none, while its type quietly
+  permitted `atom() | String.t()`. A consumer reading the struct would write
+  `notice.provider == :robinhood` and never learn why half the notices did not match. It now
+  has a `@typedoc` saying which values occur, why the string exists, and what a venue
+  package should do about it.
+
 ## [0.3.16] - 2026-09-14
 
 ### Added
