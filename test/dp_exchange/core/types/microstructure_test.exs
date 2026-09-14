@@ -113,6 +113,62 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
       assert VolumeProfile.point_of_control(tied) == "24.20"
     end
 
+    test "a tie spanning a digit-count boundary still returns the lower price" do
+      # The case the "24.20"/"24.21" test above cannot reach. Those two have the same number
+      # of digits, so text order and numeric order agree and a lexicographic comparison
+      # passes it. Where the digit counts differ they disagree — `"10.00" <= "9.00"` is true
+      # as text — and the answer was the HIGHER price while still being one of the tied
+      # prices, so it stayed plausible and only its meaning was wrong.
+      tied =
+        profile(%{
+          buy_at_price: %{"9.00" => Decimal.new("100"), "10.00" => Decimal.new("100")},
+          sell_at_price: %{}
+        })
+
+      assert VolumeProfile.point_of_control(tied) == "9.00"
+
+      # And with no trailing zeros to pad the comparison either way.
+      assert VolumeProfile.point_of_control(
+               profile(%{
+                 buy_at_price: %{"99" => Decimal.new("7"), "100.5" => Decimal.new("7")},
+                 sell_at_price: %{}
+               })
+             ) == "99"
+    end
+
+    test "a tie between two spellings of the same number is still stable" do
+      # The venue's own rows are kept as it sent them — see the moduledoc — so "24.2" and
+      # "24.20" are two levels that no numeric comparison can order. The answer must still
+      # not depend on map ordering, so the string breaks that tie.
+      tied =
+        profile(%{
+          buy_at_price: %{"24.2" => Decimal.new("100"), "24.20" => Decimal.new("100")},
+          sell_at_price: %{}
+        })
+
+      assert VolumeProfile.point_of_control(tied) == "24.2"
+    end
+
+    test "a price key this module cannot read loses the tie rather than deciding it" do
+      # A key that is not a number at all should not win on text order over a real price,
+      # and "12abc" must not be read as 12 — that is a value invented from a key this
+      # module cannot actually read.
+      assert VolumeProfile.point_of_control(
+               profile(%{
+                 buy_at_price: %{"12abc" => Decimal.new("100"), "99" => Decimal.new("100")},
+                 sell_at_price: %{}
+               })
+             ) == "99"
+
+      # With nothing readable on either side the answer still has to be stable.
+      assert VolumeProfile.point_of_control(
+               profile(%{
+                 buy_at_price: %{"zzz" => Decimal.new("1"), "aaa" => Decimal.new("1")},
+                 sell_at_price: %{}
+               })
+             ) == "aaa"
+    end
+
     test "one-sided volume still has a point of control" do
       assert VolumeProfile.point_of_control(
                profile(%{buy_at_price: %{"24.30" => Decimal.new("5")}, sell_at_price: %{}})

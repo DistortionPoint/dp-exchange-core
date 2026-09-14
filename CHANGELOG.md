@@ -21,6 +21,27 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`VolumeProfile.point_of_control/1` returned the HIGHER price on a tie, where its own doc
+  promises the lower.** The tie-break was `price_a <= price_b`, and those keys are the
+  venue's own price STRINGS — kept that way on purpose, see the moduledoc. Text order is not
+  numeric order wherever the strings differ in digit count: `"10.00" <= "9.00"` is true, and
+  so is `"100.5" <= "99"`. So every tie spanning a digit-count boundary — a crypto price
+  crossing 9.xx/10.xx, a stock crossing 99/100 — answered with the wrong one of the two.
+
+  Reachable through a real venue: `dp_exchange_webull`'s `get_volume_profile/4` passes the
+  venue's raw price strings through as keys.
+
+  Nothing about it was visible. The answer was still one of the tied prices, so it stayed
+  plausible and only its meaning was wrong. The test that covered ties compared `"24.20"`
+  with `"24.21"` — equal digit counts, where the two orders agree — so it passed throughout.
+
+  Ties now break on the parsed value, with the string still breaking a tie between two
+  spellings of the same number (`"24.2"` and `"24.20"` are two of the venue's own rows and
+  cannot be ordered by value) so the answer stays stable across calls. A key that does not
+  parse whole loses the tie rather than deciding it, and `"12abc"` is not read as 12.
+
 ## [0.3.17] - 2026-09-14
 
 ### Added

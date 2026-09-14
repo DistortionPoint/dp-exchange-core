@@ -101,11 +101,60 @@ defmodule DpExchange.Core.Types.VolumeProfile do
           case Decimal.compare(volume_a, volume_b) do
             :gt -> true
             :lt -> false
-            :eq -> price_a <= price_b
+            :eq -> lower_price?(price_a, price_b)
           end
         end)
         |> hd()
         |> elem(0)
     end
   end
+
+  # Ties break on what the price string MEANS, not on how it sorts as text.
+  #
+  # This was `price_a <= price_b`. The keys here are the venue's own price strings — see the
+  # moduledoc on why they are kept that way — so that was a lexicographic comparison, and
+  # lexicographic order is not numeric order wherever the strings differ in digit count:
+  # `"10.00" <= "9.00"` is true, and `"100.5" <= "99"` is true. The doc above promises the
+  # LOWER price, and on any tie spanning a digit-count boundary it returned the higher one.
+  #
+  # Nothing about that was visible. The answer was still one of the tied prices, so it stayed
+  # plausible and only its meaning was wrong — and the test that covered ties compared
+  # "24.20" with "24.21", where the two orders happen to agree, so it passed throughout.
+  defp lower_price?(price_a, price_b) do
+    case {parsed_price(price_a), parsed_price(price_b)} do
+      # Neither is a number this module can read. Any total order will do, and the string one
+      # is deterministic, which is what the tie-break is for.
+      {nil, nil} ->
+        price_a <= price_b
+
+      # A price that parses beats one that does not, rather than the answer depending on
+      # which unreadable key the venue happened to send first.
+      {nil, _parsed} ->
+        false
+
+      {_parsed, nil} ->
+        true
+
+      {a, b} ->
+        # Two spellings of the same number — "24.2" and "24.20" — are two of the venue's own
+        # rows and both are kept (see the moduledoc). They cannot be ordered by value, so the
+        # string breaks that tie and the answer stays stable across calls.
+        case Decimal.compare(a, b) do
+          :eq -> price_a <= price_b
+          :lt -> true
+          :gt -> false
+        end
+    end
+  end
+
+  # A whole-string parse only: `Decimal.parse/1` answers `{decimal, rest}` and would read
+  # "12abc" as 12, which is a value invented from a key this module cannot actually read.
+  defp parsed_price(price) when is_binary(price) do
+    case Decimal.parse(price) do
+      {decimal, ""} -> decimal
+      _partial_or_error -> nil
+    end
+  end
+
+  defp parsed_price(_other), do: nil
 end
