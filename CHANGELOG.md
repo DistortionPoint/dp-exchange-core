@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.17] - 2026-09-14
+
 ### Added
 
 - **`PollingFeed` takes a `:provider`, so `Notice.provider` can be trusted for routing.**
