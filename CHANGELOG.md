@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.18] - 2026-09-14
+
 ### Fixed
 
 - **`VolumeProfile.point_of_control/1` returned the HIGHER price on a tie, where its own doc
