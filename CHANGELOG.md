@@ -21,6 +21,39 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`assertions/0` is now checked against the suite it describes.** It is public and
+  documented as "for documentation and for a venue package to report against", and **no test
+  called it**. Nothing connected the published list to the assertion groups that actually
+  run, so a group added without a matching entry — or an entry left behind after one was
+  renamed — would ship silently. Adding group 25 is what surfaced it: the list had to be
+  updated by hand, and nothing would have noticed if it had not been.
+
+  Three tests, read from the describes the suite actually generated rather than by parsing
+  the macro's source:
+
+  * every numbered group that runs is listed — a venue reporting against that list must not
+    claim conformance it was never measured for;
+  * the numbering is contiguous from 1, so a gap means a group was dropped;
+  * the four listed groups that have **no describe of their own** are pinned as exactly
+    `[5, 6, 9, 10]`, with why in the test.
+
+  That last one is the part worth knowing. The mapping is deliberately not one-to-one, and
+  asserting the reverse direction would make the list harder to write honestly: **5** (return
+  types) and **9** (fake fidelity) are cross-cutting, with several groups each checking part
+  of them; **6** (error discipline) is checked inside group 12's describe; **10** (facade
+  completeness and exclusivity) inside group 1's. Pinning the set means that if one of the
+  four later grows its own describe, or stops being covered where it is, this test is where
+  the next reader finds out what was intended.
+
+  Checked in Core alone rather than added to the macro: every venue runs the identical
+  groups, so the same comparison in five more repos would report the same thing five more
+  times, and a venue with its own numbered describe in that module would false-positive.
+
+  All three verified by breaking them — dropping group 25 from the list while its describe
+  still runs, and renumbering a group to leave a gap.
+
 ## [0.3.15] - 2026-09-13
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._
