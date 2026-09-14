@@ -21,6 +21,27 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`CanonicalPair.to_exchange/2` appended the venue's separator to a symbol that had no
+  quote part.** `"AAPL"` came back `"AAPL-"`, and `""` came back `"-"`. It built
+  `"#{base}#{sep}#{quote}"` unconditionally, so anything that is not a `BASE-QUOTE` pair was
+  decorated into something that looks like one.
+
+  That is the family's signature shape: a plausible string that matches nothing. It goes
+  into a request URL, the venue answers 404, and `classify/1` reports
+  `{:refused, :not_listed}` — this package telling a caller the VENUE said a symbol is not
+  listed, when what happened is that the normaliser invented a symbol the venue was never
+  asked about.
+
+  `dp_exchange_coinbase` and `dp_exchange_robinhood` both map with `sep: "-"` and were
+  exposed. The concat venues (`sep: ""`) never were, because joining with an empty string is
+  a no-op — **and that is exactly why the existing test missed it**: "a bare asset with no
+  quote survives" used the concat mapping, the one shape where the bug cannot occur.
+
+  Input with no quote part now comes back unchanged, which is what `to_canonical/2` already
+  does with input it cannot split. The two directions agree about what they cannot interpret.
+
 ## [0.3.22] - 2026-09-14
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

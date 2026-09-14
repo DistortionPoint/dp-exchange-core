@@ -61,12 +61,34 @@ defmodule DpExchange.Core.CanonicalPair do
 
   @doc """
   Canonical `BASE-QUOTE` → exchange-native, per the connector's `mapping`.
+
+  Input with no quote part is not a pair and comes back unchanged — never decorated with a
+  trailing separator, which would be a symbol no venue was ever asked about.
   """
   @spec to_exchange(mapping(), String.t()) :: String.t()
   def to_exchange(mapping, canonical) when is_map(mapping) and is_binary(canonical) do
-    {base, quote_} = split_canonical(canonical)
-    base_ex = reverse_alias(aliases(mapping), base)
-    "#{base_ex}#{mapping.sep}#{quote_}"
+    case split_canonical(canonical) do
+      # No quote part, so this is not a pair and there is nothing to join. Returned as it
+      # came, the way `to_canonical/2` returns input it cannot split — the two directions
+      # agree about what they cannot interpret.
+      #
+      # It used to build `"#{base}#{sep}"` regardless, so a mapping with a real separator
+      # turned `"AAPL"` into `"AAPL-"`. That is the family's signature shape: a plausible
+      # string that matches nothing. It goes into a request URL, the venue answers 404, and
+      # `classify/1` reports `{:refused, :not_listed}` — the package telling a caller the
+      # VENUE said a symbol is not listed, when what actually happened is that this function
+      # invented a symbol the venue was never asked about.
+      #
+      # `dp_exchange_coinbase` and `dp_exchange_robinhood` both map with `sep: "-"`; the
+      # concat venues were never exposed, because joining with `""` is a no-op. The test
+      # covering a bare symbol used the concat mapping, which is why this survived.
+      {base, ""} ->
+        reverse_alias(aliases(mapping), base)
+
+      {base, quote_} ->
+        base_ex = reverse_alias(aliases(mapping), base)
+        "#{base_ex}#{mapping.sep}#{quote_}"
+    end
   end
 
   # --- internal ----------------------------------------------------------

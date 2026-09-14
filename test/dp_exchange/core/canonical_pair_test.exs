@@ -55,6 +55,32 @@ defmodule DpExchange.Core.CanonicalPairTest do
     test "a bare asset with no quote survives" do
       assert "BTC" = CanonicalPair.to_exchange(@concat, "BTC")
     end
+
+    test "a bare asset is not decorated with the venue's separator" do
+      # The test above cannot reach this. It uses `@concat`, whose separator is `""`, so
+      # joining a bare asset to an empty quote is a no-op and passes whatever the code does.
+      # With a real separator it did not: `"AAPL"` came back `"AAPL-"`.
+      #
+      # That is the family's signature shape — a plausible string that matches nothing. It
+      # goes into a request URL, the venue answers 404, and `classify/1` reports
+      # `{:refused, :not_listed}`: the package telling a caller the VENUE said a symbol is
+      # not listed, when what happened is that this function invented a symbol the venue was
+      # never asked about. `dp_exchange_coinbase` and `dp_exchange_robinhood` both map with
+      # `sep: "-"`.
+      assert "AAPL" = CanonicalPair.to_exchange(@dashed, "AAPL")
+      assert "BTC" = CanonicalPair.to_exchange(@dashed, "BTC")
+      assert "BRK.B" = CanonicalPair.to_exchange(@dashed, "BRK.B")
+    end
+
+    test "an alias still reverses when there is no quote to join" do
+      assert "XBT" = CanonicalPair.to_exchange(@aliased, "BTC")
+    end
+
+    test "a canonical with an empty quote loses the meaningless separator" do
+      # `"BTC-"` is not a pair either. Carrying the dash forward would send the venue a
+      # symbol with a dangling separator.
+      assert "BTC" = CanonicalPair.to_exchange(@dashed, "BTC-")
+    end
   end
 
   describe "quotes is sorted longest-first internally, regardless of caller order (C6)" do
