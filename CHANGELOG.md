@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.21] - 2026-09-14
+
 ### Changed
 
 - **The fan-out no longer asks whether a subscriber is alive before asking how deep its
