@@ -25,6 +25,18 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **A malformed rate-limit header was read as its leading digits.** `fetch_integer/2` took
+  `{integer, _rest}` from `Integer.parse/1`, which matches anything merely STARTING with a
+  number — so `"100 requests"` became 100 and `"37/100"` became 37. Those flowed on as facts:
+  into the limit/remaining budget the limiter throttles against, and into `parse_reset/1`,
+  whose own comment says it answers `nil` "rather than a guessed instant" — a promise it
+  could not keep while a partial parse produced one. A malformed header is exactly when
+  guessing is worst, because the guess is unverifiable and silently changes how hard this
+  package hits the venue. A whole-string parse is required now.
+
+  The test covering this used `"lots"`, which `Integer.parse/1` refuses outright, so it never
+  reached the partial case.
+
 - **`VolumeProfile.point_of_control/1` returned the HIGHER price on a tie, where its own doc
   promises the lower.** The tie-break was `price_a <= price_b`, and those keys are the
   venue's own price STRINGS — kept that way on purpose, see the moduledoc. Text order is not

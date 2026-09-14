@@ -176,6 +176,35 @@ defmodule DpExchange.Core.HttpClientTest do
       assert nil == HttpClient.parse_rate_limit_headers(headers)
     end
 
+    test "a value that merely STARTS with digits is not read as those digits" do
+      # The case `"lots"` above cannot reach: `Integer.parse/1` answers `{integer, rest}` for
+      # anything beginning with a number, so ignoring `rest` read a budget out of a header
+      # this package cannot actually read — `"12abc"` became 12. A malformed header is
+      # exactly when guessing is worst, because the guess is unverifiable and silently
+      # changes how hard this package hits the venue.
+      assert nil ==
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "100 requests"},
+                 {"X-RateLimit-Remaining", "37"}
+               ])
+
+      assert nil ==
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "100"},
+                 {"X-RateLimit-Remaining", "37/100"}
+               ])
+
+      # And the same for the reset, which `parse_reset/1` promises to answer `nil` for
+      # "rather than a guessed instant" — a promise it could not keep while a partial parse
+      # produced one.
+      assert %{reset_time: nil} =
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "100"},
+                 {"X-RateLimit-Remaining", "37"},
+                 {"X-RateLimit-Reset", "30s"}
+               ])
+    end
+
     test "a large reset is an absolute timestamp, a small one a delta" do
       # Nothing in the header says which form a venue uses, so the split is by
       # plausibility: no delta is 50 years, and no unix timestamp is 30 seconds.

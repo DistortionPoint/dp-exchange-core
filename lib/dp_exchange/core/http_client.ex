@@ -301,9 +301,21 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
+  # A WHOLE-string parse, and the `_rest` this used to discard is the reason.
+  #
+  # `Integer.parse/1` answers `{integer, rest}` for anything merely STARTING with digits, so
+  # a header this package cannot actually read still produced a number: `"12abc"` became 12,
+  # and `"1757000000000-ish"` became a timestamp. Both then flowed on as facts — into the
+  # limit/remaining budget the limiter throttles against, and into `parse_reset/1`, whose own
+  # comment directly above says it answers `nil` "rather than a guessed instant". It could
+  # not keep that promise while this read one out of text that is not a number.
+  #
+  # Header values for these are plain integers, so a partial parse means the header is
+  # malformed — which is exactly when guessing is worst, because the guess is unverifiable
+  # and silently changes how hard this package hits the venue.
   defp fetch_integer(headers, key) do
     with value when is_binary(value) <- Map.get(headers, key),
-         {integer, _rest} <- Integer.parse(value) do
+         {integer, ""} <- Integer.parse(value) do
       {:ok, integer}
     else
       _absent_or_unparseable -> :error
