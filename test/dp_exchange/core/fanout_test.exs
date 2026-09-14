@@ -254,15 +254,19 @@ defmodule DpExchange.Core.FanoutTest do
 
     test "pruning is what keeps the fan-out flat — the work removed, counted exactly" do
       # This used to assert `timed(unpruned) > timed(pruned)`, and that was a bad test of a
-      # real property. `deliver/4` walks the whole set and calls `Process.alive?/1` per entry
-      # per message, so an unpruned set genuinely is linearly more expensive — measured at
-      # 0.095 us per fan-out against a clean set and 22.8 us against one carrying a thousand
-      # dead pids, about 240x. But a wall-clock comparison between two small numbers holds
-      # while the machine is quiet and inverts under load: it passed in isolation every time
-      # and failed inside the full suite under `--cover`, where twenty async tests are
-      # competing. That is exactly what this suite's own `wait_until/1` comment says about
-      # sleeps — a test that fails against code which is working correctly is worse than no
-      # test, because it teaches the reader to distrust the suite.
+      # real property. `deliver/4` walks the whole set and asks the runtime about every entry
+      # once per message, so an unpruned set genuinely is linearly more expensive — measured
+      # at 0.68 us per fan-out against a clean set and 28.6 us against one carrying a
+      # thousand dead pids, about 40x. (The per-entry call is `Process.info/2`, not
+      # `Process.alive?/1`, since `delivery_pid/1`: the liveness check that used to be here
+      # was duplicating an answer `deliver_one/5` was about to get anyway.)
+      #
+      # But a wall-clock comparison between two small numbers holds while the machine is
+      # quiet and inverts under load: it passed in isolation every time and failed inside the
+      # full suite under `--cover`, where twenty async tests are competing. That is exactly
+      # what this suite's own `wait_until/1` comment says about sleeps — a test that fails
+      # against code which is working correctly is worse than no test, because it teaches the
+      # reader to distrust the suite.
       #
       # The magnitude is a measurement and belongs in the changelog and the comment above,
       # where it is. What belongs in an assertion is the MECHANISM, which is exact: the work
@@ -273,8 +277,8 @@ defmodule DpExchange.Core.FanoutTest do
 
       unpruned = MapSet.new([live | dead])
 
-      # Every entry is walked, every message: 41 liveness checks to deliver one payload to
-      # one live subscriber.
+      # Every entry is walked, every message: 41 runtime calls to deliver one payload to one
+      # live subscriber.
       assert MapSet.size(unpruned) == 41
       assert {1, _dropping, []} = Fanout.deliver(unpruned, :payload, MapSet.new())
 

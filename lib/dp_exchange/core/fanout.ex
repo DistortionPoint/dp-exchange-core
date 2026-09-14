@@ -160,7 +160,7 @@ defmodule DpExchange.Core.Fanout do
     max = Keyword.get(opts, :max_queue_len, default_max_queue_len())
 
     Enum.reduce(subscribers, {0, MapSet.new(), []}, fn subscriber, acc ->
-      case resolve(subscriber) do
+      case delivery_pid(subscriber) do
         nil -> acc
         pid -> deliver_one(pid, message, max, dropping, acc)
       end
@@ -203,21 +203,26 @@ defmodule DpExchange.Core.Fanout do
   so a supervised consumer that restarts leaves its old pid behind on every restart, for the
   life of the feed.
 
-  That is not a rounding error on the hot path, because `deliver/4` walks the whole set and
-  calls `Process.alive?/1` on every entry, once per message. Measured on the machine this
-  family develops on, cost of one fan-out against a set holding one live subscriber plus N
-  dead ones:
+  That is not a rounding error on the hot path, because `deliver/4` walks the whole set once
+  per message and asks the runtime about every entry. Re-measured on the machine this family
+  develops on, against the delivery path as it ships today — cost of one fan-out against a
+  set holding one live subscriber plus N dead ones, median of eleven runs of 30_000:
 
-      0 dead     0.095 us
-      50 dead    0.956 us
-      200 dead   4.301 us
-      1000 dead  22.842 us
+      0 dead      0.68 us
+      50 dead     2.05 us
+      200 dead    5.90 us
+      1000 dead  28.56 us
 
-  Linear, and at a thousand accumulated pids each message costs roughly 240 times what it
+  Linear, and at a thousand accumulated pids each message costs roughly forty times what it
   should. `dp_exchange_coinbase`'s `level2` channel measured 4258 frames in the window that
   produced this family's coverage incident; at that size the dead entries alone would be
-  about 97 ms of liveness checks inside the one process every subscriber's data flows
+  about 119 ms of runtime calls inside the one process every subscriber's data flows
   through. And it only ever grows.
+
+  An earlier version of this table read 0.095 / 0.956 / 4.301 / 22.842 and was taken when
+  this path asked `Process.alive?/1` per entry. It no longer does — see `delivery_pid/1` —
+  and a dead entry is now slightly DEARER rather than cheaper, which sharpens this argument
+  rather than softening it.
 
   ## Why a registered name is NOT monitored
 
@@ -306,6 +311,43 @@ defmodule DpExchange.Core.Fanout do
   # nothing to report, and specifically NOT a back-pressure transition — reporting a dead
   # consumer as "behind" would send an operator looking for a slow process that no longer
   # exists.
+  # `resolve/1` without its liveness check — deliberately, and only here.
+  #
+  # This runs once per subscriber PER MESSAGE, which makes it the hottest path in the
+  # family: `dp_exchange_coinbase`'s `level2` channel measured 4258 delta frames in one
+  # incident window. `resolve/1` asks `Process.alive?/1` and then `deliver_one/5` asks
+  # `Process.info(pid, :message_queue_len)` — and that second call already answers `nil` for
+  # a process that is gone, which `deliver_one/5` already treats as "nobody to send to". The
+  # liveness check was pure duplication of an answer the next line was about to get anyway.
+  #
+  # Measured on this machine against `deliver/4` itself, median of fifteen runs of 30_000,
+  # microseconds per fan-out:
+  #
+  #                          before   after
+  #     1 live                1.057   0.655
+  #     3 live                1.385   1.149
+  #     10 live               4.578   2.967
+  #     1 live + 1000 dead   20.046  28.728
+  #
+  # **The last row is a real regression, and it is the reason to state the trade rather than
+  # claim a win.** `Process.info/2` does more work than `Process.alive?/1` before concluding
+  # a process is gone, so a set full of dead pids costs MORE now, not less.
+  #
+  # It is still the right default. A set full of dead pids is not a state to tune for — it is
+  # the bug `watch/2` and `forget/2` exist to prevent, and the moduledoc above argues that at
+  # length. A subscriber set that has been pruned correctly is the first three rows, and
+  # those are the ones a running system is in on every message of every day.
+  #
+  # The dominant cost is neither of these. Broken down separately, 100_000 messages to three
+  # draining subscribers: bare send 22.5 ms, `Process.info` + send 110.2 ms, `alive?` +
+  # `Process.info` + send 125.1 ms. The queue check costs four times the send — that is the
+  # back-pressure guarantee this module exists for, and it stays.
+  #
+  # `resolve/1` itself is unchanged and still public: a venue's notice path has no second
+  # call to lean on, and the two must agree on what counts as reachable.
+  defp delivery_pid(pid) when is_pid(pid), do: pid
+  defp delivery_pid(name) when is_atom(name), do: Process.whereis(name)
+
   defp deliver_one(pid, message, max, was_dropping, {sent, now_dropping, transitions}) do
     case Process.info(pid, :message_queue_len) do
       {:message_queue_len, queue_len} when queue_len >= max ->

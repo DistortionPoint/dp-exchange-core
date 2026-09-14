@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **The fan-out no longer asks whether a subscriber is alive before asking how deep its
+  mailbox is.** `deliver/4` called `resolve/1` (`Process.alive?/1`) and then `deliver_one/5`
+  called `Process.info(pid, :message_queue_len)` — and that second call already answers `nil`
+  for a process that is gone, which `deliver_one/5` already treats as "nobody to send to".
+  The liveness check was duplicating an answer the next line was about to get anyway, once
+  per subscriber per message, on the hottest path in the family.
+
+  Measured against `deliver/4` itself, median of fifteen runs of 30_000, µs per fan-out:
+
+      |                     | before | after  |
+      | 1 live              |  1.057 |  0.655 |
+      | 3 live              |  1.385 |  1.149 |
+      | 10 live             |  4.578 |  2.967 |
+      | 1 live + 1000 dead  | 20.046 | 28.728 |
+
+  **The last row is a real regression and is stated rather than buried.** `Process.info/2`
+  does more work than `Process.alive?/1` before concluding a process is gone, so a set full
+  of dead pids costs more now. It is still the right default: a set full of dead pids is not
+  a state to tune for, it is the bug `watch/2` and `forget/2` exist to prevent, and a
+  correctly pruned set is the first three rows — which is what a running system is in on
+  every message of every day.
+
+  Behaviour is identical either way, and `resolve/1` is unchanged and still public: a venue's
+  notice path has no second call to lean on.
+
+  The measured table in `Fanout`'s own moduledoc was taken when this path used
+  `Process.alive?/1`, so it has been re-measured rather than left to drift, and the derived
+  figure beside it (the cost of 4258 `level2` frames against a thousand dead pids) recomputed
+  from the new numbers: 97 ms becomes 119 ms.
+
 ## [0.3.20] - 2026-09-14
 
 ### Fixed
