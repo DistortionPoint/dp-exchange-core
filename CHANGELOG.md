@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-09-14
+
 ### Fixed
 
 - **`CanonicalPair.to_exchange/2` appended the venue's separator to a symbol that had no
