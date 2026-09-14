@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **An out-of-range rate-limit reset raised out of every response.** `parse_reset/1` used
+  `DateTime.from_unix!/1`, which RAISES rather than returning an error, and
+  `parse_rate_limit_headers/1` runs on every response. A venue moving that header from
+  seconds to milliseconds — ordinary drift — sends a value that is `invalid Unix time`, and
+  the exception came out of the request path rather than out of anything that looked like a
+  header problem. A rate-limit header this package cannot read must not be able to fail the
+  request it rode in on. `nil` now, which is the answer the caller already handles.
+
 ## [0.3.19] - 2026-09-14
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

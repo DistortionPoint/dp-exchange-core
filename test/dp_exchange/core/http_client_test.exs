@@ -205,6 +205,21 @@ defmodule DpExchange.Core.HttpClientTest do
                ])
     end
 
+    test "a reset value outside the representable range is nil, not a raise" do
+      # `DateTime.from_unix!/1` RAISES on an out-of-range value, and this ran on every
+      # response. A venue moving its reset header from seconds to milliseconds — ordinary
+      # drift — sends `"1787936147000"`, which is `invalid Unix time` as seconds, and the
+      # exception came out of `parse_rate_limit_headers/1` rather than out of anything that
+      # looked like a header problem. A header this package cannot read must not be able to
+      # fail the request it rode in on.
+      assert %{limit: 100, remaining: 37, reset_time: nil} =
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "100"},
+                 {"X-RateLimit-Remaining", "37"},
+                 {"X-RateLimit-Reset", "1787936147000"}
+               ])
+    end
+
     test "a large reset is an absolute timestamp, a small one a delta" do
       # Nothing in the header says which form a venue uses, so the split is by
       # plausibility: no delta is 50 years, and no unix timestamp is 30 seconds.

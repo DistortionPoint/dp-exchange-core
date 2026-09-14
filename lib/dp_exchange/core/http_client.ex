@@ -328,9 +328,26 @@ defmodule DpExchange.Core.HttpClient do
   # `nil` rather than a guessed instant.
   defp parse_reset(headers) do
     case fetch_integer(headers, "x-ratelimit-reset") do
-      {:ok, value} when value > 31_536_000 -> DateTime.from_unix!(value)
+      {:ok, value} when value > 31_536_000 -> absolute_reset(value)
       {:ok, value} -> DateTime.add(DateTime.utc_now(), value, :second)
       :error -> nil
+    end
+  end
+
+  # `DateTime.from_unix/2`, not `from_unix!/2`.
+  #
+  # The bang version RAISES on a value outside the representable range, and a header is
+  # venue-supplied text: `"1787936147000"` in a seconds field — a venue that moved to
+  # milliseconds, which is an ordinary kind of drift — is `invalid Unix time`, thrown out of
+  # `parse_rate_limit_headers/1`, which runs on EVERY response. A rate-limit header this
+  # package cannot read must not be able to fail the request it rode in on.
+  #
+  # `nil` is the answer the caller already handles and the one `parse_reset/1`'s own comment
+  # promises: "did not say", rather than a guessed instant.
+  defp absolute_reset(seconds) do
+    case DateTime.from_unix(seconds) do
+      {:ok, at} -> at
+      {:error, _out_of_range} -> nil
     end
   end
 
