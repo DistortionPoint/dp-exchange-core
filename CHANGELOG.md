@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-09-14
+
 ### Fixed
 
 - **An out-of-range rate-limit reset raised out of every response.** `parse_reset/1` used
