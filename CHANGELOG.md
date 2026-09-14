@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.16] - 2026-09-14
+
 ### Added
 
 - **`assertions/0` is now checked against the suite it describes.** It is public and
