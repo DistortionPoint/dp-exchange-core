@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.27] - 2026-09-15
+
 ### Fixed
 
 - **Assertions 14 and 15 had never been able to fail, on any venue.** Both read the **real**
