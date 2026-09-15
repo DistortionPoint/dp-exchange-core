@@ -1079,7 +1079,8 @@ defmodule DpExchange.Core.AdapterContract do
           facade_and_fake = Enum.reject([@venue, @fake], &is_nil/1)
 
           assert {:ok, violations} =
-                   DpExchange.Core.UnwiredCheck.run(beam_dir, lib_root, facade_and_fake)
+                   DpExchange.Core.UnwiredCheck.run(beam_dir, lib_root, facade_and_fake),
+                 scan_failure_message(:unwired, lib_root)
 
           assert violations == [],
                  "internal function(s) with no caller anywhere in this package's own " <>
@@ -1122,7 +1123,8 @@ defmodule DpExchange.Core.AdapterContract do
           lib_root = Path.expand(@package_root)
           beam_dir = Mix.Project.build_path() |> Path.join("lib/#{app}/ebin")
 
-          assert {:ok, violations} = DpExchange.Core.LinkSafetyCheck.run(beam_dir, lib_root)
+          assert {:ok, violations} = DpExchange.Core.LinkSafetyCheck.run(beam_dir, lib_root),
+                 scan_failure_message(:link_safety, lib_root)
 
           assert violations == [],
                  "process(es) that link a child they start and never call " <>
@@ -1328,7 +1330,8 @@ defmodule DpExchange.Core.AdapterContract do
           beam_dir = Mix.Project.build_path() |> Path.join("lib/#{app}/ebin")
 
           assert {:ok, violations} =
-                   DpExchange.Core.CredentialRedactionCheck.run(beam_dir, lib_root)
+                   DpExchange.Core.CredentialRedactionCheck.run(beam_dir, lib_root),
+                 scan_failure_message(:credential_redaction, lib_root)
 
           assert violations == [],
                  "struct(s) with a secret-named field that prints in cleartext under " <>
@@ -1887,6 +1890,21 @@ defmodule DpExchange.Core.AdapterContract do
         {:public, 3} => [:symbol, :timeframe, :opts],
         {:public, 4} => [:symbol, :timeframe, :opts, :opts]
       }
+
+      # Assertions 16, 18 and 19 all read compiled modules under `package_root`. A root that
+      # matches nothing used to answer `{:ok, []}` from all three — "no violations" — so one
+      # mistyped or stale `package_root:` turned three assertions green at once, two of them
+      # the credential-leak ones, while examining nothing. The checks now refuse an empty
+      # scan; this says what to do about it, because `{:error, {:no_modules_scanned, _}}`
+      # arriving at a bare `assert ... = ...` would otherwise read as a broken check rather
+      # than as a misconfigured suite.
+      defp scan_failure_message(check, lib_root) do
+        "#{check} could not scan anything under #{lib_root}. That is almost always " <>
+          "`package_root:` on `use DpExchange.Core.AdapterContract` pointing somewhere this " <>
+          ~s(package's compiled modules are not — it defaults to "lib", venue packages set ) <>
+          ~s("lib/dp_exchange", and Core's own suite sets "test/support". Until it points ) <>
+          "at real modules, assertions 16, 18 and 19 are all examining nothing and passing."
+      end
 
       defp endpoint_args(name, arity) do
         kind = if name in @credentialed, do: :credentialed, else: :public

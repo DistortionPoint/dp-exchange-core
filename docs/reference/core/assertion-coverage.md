@@ -586,3 +586,46 @@ words: "this reference observes its own sends, so it reports what it actually de
 observed nothing; it was a constant. The new structural assertion failed on it immediately.
 That bug had sat there for as long as assertion 14 had been inert, which is the whole argument
 for asking the third-axis question rather than reading a green suite.
+
+### Third axis, applied 2026-09-16 — assertions 16, 18 and 19 shared one off switch
+
+The 2026-09-12 sweep covered the seven fake-driven assertions. The three **source-scanning**
+ones were not in it, and they turned out to share a single failure: all three read compiled
+modules under `package_root`, and a root matching no module answered `{:ok, []}` — "no
+violations" — from every one of them.
+
+So one mistyped or stale `package_root:` silently disables **three assertions at once**, two
+of which are the credential-leak checks. Nothing distinguishes that from a clean package.
+
+**The measurement**, pointing `package_root:` at a directory that does not exist:
+
+| | published 0.3.27 | this change |
+|---|---|---|
+| `dp_exchange_coinbase` | **48 tests, 0 failures** | 48 tests, 3 failures |
+| all five venues | — | 3 failures each |
+
+`UnwiredCheck.run/3`, `LinkSafetyCheck.run/2` and `CredentialRedactionCheck.run/2` now answer
+`{:error, {:no_modules_scanned, lib_root}}` rather than an empty violation list, and the three
+assertions carry a message naming `package_root:` as the thing to fix — otherwise that error
+arriving at a bare `assert {:ok, _} = ...` reads as a broken check rather than a misconfigured
+suite. There is no legitimate caller with zero modules to scan.
+
+**Three of Core's own tests asserted the old behaviour**, in the same shape this file keeps
+recording: `test "an empty beam_dir yields no violations"`, once per check, pinning a scan of
+nothing answering "nothing wrong". They now assert the error.
+
+**A fourth was itself inert.** `CredentialRedactionCheck`'s "a module whose source is outside
+lib_root is never analysed" compiled the outside module *alone*, so the scan found nothing and
+its `refute Enum.any?(violations, ...)` held over an empty list — it would have passed whether
+the exclusion worked or not. The two sibling checks' versions of that test each already
+carried an inside module; this one did not. It now compiles both and asserts in both
+directions, so the refute discriminates.
+
+**What was checked and found sound.** The same question asked of the other unverified
+assertions turned up nothing: 19 and 22 each go red on all five venues when a `Credentials`
+struct's redacting `Inspect` is removed (2 failures per venue, both assertions firing); every
+capability-derived collection the suite iterates is non-empty on every venue
+(`supported_quotes`, `endpoints_at/2` at each maturity, `streamable`); and assertion 13 tests
+`Core.Config`'s own process-scoped overrides, which fail the moment that mechanism does.
+Recording the negative result so the next audit does not re-run these thirty experiments.
+

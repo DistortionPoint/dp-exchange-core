@@ -334,8 +334,25 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     test "a module whose source is outside lib_root is never analysed" do
       u = uniq()
 
+      # **An inside module as well as the outside one, and a positive assertion beside the
+      # negative one.** This fixture used to compile the outside module alone, so the scan
+      # found nothing at all and `refute Enum.any?(violations, ...)` held over an empty list
+      # — it would have passed whether the exclusion worked or not, and equally if the check
+      # had silently stopped running. The two sibling files' versions of this test each
+      # carried an inside module already; this one did not.
+      #
+      # With both present, the assertions discriminate: the inside struct leaks and must be
+      # reported, the outside one leaks identically and must not be.
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          %{
+            path: "inside_credentials.ex",
+            code: """
+            defmodule InsideCredentials#{u} do
+              defstruct [:api_key, :api_secret]
+            end
+            """
+          },
           %{
             path: "../not_lib/outside_credentials.ex",
             code: """
@@ -347,13 +364,31 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
-      mod = Module.concat([:"Elixir", "OutsideCredentials#{u}"])
-      refute Enum.any?(violations, &(&1.module == mod))
+
+      inside = Module.concat([:"Elixir", "InsideCredentials#{u}"])
+      outside = Module.concat([:"Elixir", "OutsideCredentials#{u}"])
+
+      assert {inside, :api_key} in violation_fields(violations),
+             "the module under lib_root must be analysed, or the refute below proves nothing"
+
+      refute Enum.any?(violations, &(&1.module == outside))
     end
   end
 
   describe "run/2 — I/O edge cases" do
-    test "an empty beam_dir yields no violations" do
+    # **This asserted the behaviour that hid a bug**, in the same shape as the fixtures this
+    # repository has now found twice: a scan of nothing answering "nothing wrong". A
+    # `lib_root` matching no compiled module returned `{:ok, []}`, which every caller reads
+    # as a pass — so one mistyped or stale `package_root:` turned THREE of
+    # `Core.AdapterContract`'s assertions green at once (16 internal wiring, 18 link safety,
+    # 19 credential redaction), two of them the credential-leak ones, while examining
+    # nothing. Measured against `dp_exchange_coinbase` by pointing the root at a directory
+    # that does not exist: all three answered `{:ok, []}`, indistinguishable from a package
+    # that is genuinely clean.
+    #
+    # There is no legitimate caller with zero modules to scan, so it is an error now, and
+    # this test says so.
+    test "an empty scan is an error, not a clean bill of health" do
       lib_root =
         Path.join(UnwiredFixture.run_root(), "credential_empty_lib_#{uniq()}")
 
@@ -362,7 +397,8 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       File.mkdir_p!(beam_dir)
 
-      assert {:ok, []} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert {:error, {:no_modules_scanned, ^lib_root}} =
+               CredentialRedactionCheck.run(beam_dir, lib_root)
     end
   end
 

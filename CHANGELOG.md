@@ -21,6 +21,40 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertions 16, 18 and 19 shared a single off switch: a `package_root` that matches no
+  module.** All three read compiled modules under that root, and all three answered
+  `{:ok, []}` — "no violations" — when it matched nothing. One mistyped or stale
+  `package_root:` therefore disabled three assertions at once, two of them the credential-leak
+  checks, with nothing to distinguish it from a package that is genuinely clean.
+
+  **The measurement**, pointing `package_root:` at a directory that does not exist:
+
+  | | published 0.3.27 | this change |
+  | --- | --- | --- |
+  | `dp_exchange_coinbase` | **48 tests, 0 failures** | 48 tests, 3 failures |
+  | all five venues | — | 3 failures each |
+
+  `UnwiredCheck.run/3`, `LinkSafetyCheck.run/2` and `CredentialRedactionCheck.run/2` now
+  answer `{:error, {:no_modules_scanned, lib_root}}`, and the three assertions carry a message
+  naming `package_root:` as the thing to fix — that error reaching a bare `assert {:ok, _} =`
+  would otherwise read as a broken check rather than a misconfigured suite. There is no
+  legitimate caller with zero modules to scan.
+
+  Three of Core's own tests asserted the old behaviour — `test "an empty beam_dir yields no
+  violations"`, once per check — and now assert the error. A fourth was itself inert:
+  `CredentialRedactionCheck`'s "a module whose source is outside lib_root is never analysed"
+  compiled the outside module alone, so its `refute` held over an empty list and would have
+  passed whether the exclusion worked or not. The two sibling checks' versions of that test
+  each already carried an inside module; this one did not. It now compiles both and asserts
+  in both directions.
+
+  **Checked and found sound, recorded so the next audit does not repeat it:** assertions 19
+  and 22 each go red on all five venues when a `Credentials` struct's redacting `Inspect` is
+  removed; every capability-derived collection the suite iterates is non-empty on every venue;
+  and assertion 13 exercises `Core.Config`'s own process-scoped overrides.
+
 ## [0.3.27] - 2026-09-15
 
 ### Fixed

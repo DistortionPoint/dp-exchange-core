@@ -342,12 +342,24 @@ defmodule DpExchange.Core.UnwiredCheckTest do
   end
 
   describe "run/3 — I/O edge cases" do
-    test "an empty beam_dir yields no violations" do
+    # **This asserted the behaviour that hid a bug**, in the same shape as the fixtures this
+    # repository has now found twice: a scan of nothing answering "nothing wrong". A
+    # `lib_root` matching no compiled module returned `{:ok, []}`, which every caller reads
+    # as a pass — so one mistyped or stale `package_root:` turned THREE of
+    # `Core.AdapterContract`'s assertions green at once (16 internal wiring, 18 link safety,
+    # 19 credential redaction), two of them the credential-leak ones, while examining
+    # nothing. Measured against `dp_exchange_coinbase` by pointing the root at a directory
+    # that does not exist: all three answered `{:ok, []}`, indistinguishable from a package
+    # that is genuinely clean.
+    #
+    # There is no legitimate caller with zero modules to scan, so it is an error now, and
+    # this test says so.
+    test "an empty scan is an error, not a clean bill of health" do
       lib_root = Path.join(UnwiredFixture.run_root(), "empty_lib_#{uniq()}")
       beam_dir = Path.join(UnwiredFixture.run_root(), "empty_beam_#{uniq()}")
       File.mkdir_p!(beam_dir)
 
-      assert {:ok, []} = UnwiredCheck.run(beam_dir, lib_root)
+      assert {:error, {:no_modules_scanned, ^lib_root}} = UnwiredCheck.run(beam_dir, lib_root)
     end
   end
 

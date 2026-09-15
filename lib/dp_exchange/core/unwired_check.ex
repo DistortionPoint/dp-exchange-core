@@ -125,7 +125,8 @@ defmodule DpExchange.Core.UnwiredCheck do
     lib_root = Path.expand(lib_root)
     excluded = MapSet.new(excluded_modules)
 
-    with {:ok, modules} <- collect_modules(beam_dir, lib_root),
+    with {:ok, scanned} <- collect_modules(beam_dir, lib_root),
+         {:ok, modules} <- refuse_empty_scan(scanned, lib_root),
          {:ok, edges} <- called_edges(modules) do
       violations =
         modules
@@ -152,6 +153,22 @@ defmodule DpExchange.Core.UnwiredCheck do
     end)
     |> Enum.join("\n")
   end
+
+  # **Refuses an empty scan.** A `lib_root` that matches no compiled module used to answer
+  # `{:ok, []}` — "no violations" — which every caller reads as a pass. One mistyped or
+  # stale `package_root:` therefore turned THREE of `Core.AdapterContract`'s assertions
+  # green at once (16 internal wiring, 18 link safety, 19 credential redaction), two of
+  # them the credential-leak ones, while examining nothing at all. Measured against
+  # `dp_exchange_coinbase` by pointing the root at a directory that does not exist: all
+  # three answered `{:ok, []}` exactly as they do when a package is genuinely clean.
+  #
+  # There is no legitimate caller with zero modules to scan: a package with nothing under
+  # its own lib root is not a package this check has anything to say about, and silence is
+  # the wrong way to say so. This is the same reason assertions 24 and 25 refuse an empty
+  # balance list and a book too thin to order — see
+  # `docs/reference/core/assertion-coverage.md`, "Third axis".
+  defp refuse_empty_scan([], lib_root), do: {:error, {:no_modules_scanned, lib_root}}
+  defp refuse_empty_scan(modules, _lib_root), do: {:ok, modules}
 
   defp collect_modules(beam_dir, lib_root) do
     beam_dir
