@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 26 — subscription set semantics.** `subscribe/2` adds to the live set,
+  `update_symbols/2` replaces it, `unsubscribe/2` removes only what it names. The three are
+  different operations on one set, and nothing checked that a venue kept them different.
+
+  Found by asking all five fakes the same four questions in order. **Four of five answered
+  that a second `subscribe/2` REPLACED the first** — in each of them `subscribe/2` and
+  `update_symbols/2` were byte-for-byte the same line — while every real `Feed` in the family
+  unions (`wanted: MapSet.union(state.wanted, MapSet.new(symbols))`; `dp_exchange_robinhood`
+  spells it `current ++ symbols`). So a consumer's tier-1 tests certified the opposite of what
+  the venue does: subscribe twice, keep one symbol against the fake and both against the
+  venue.
+
+  `c:DpExchange.Core.Venue.subscribe/2`'s own doc does not say which it is, and this assertion
+  does not need it to. The contract settles it by shape: `c:update_symbols/2` exists to
+  "change a live subscription's symbol set" and `c:unsubscribe/2` to stop delivery for named
+  symbols, and neither has any purpose if `subscribe/2` already replaces. Two callbacks the
+  contract distinguishes, implemented as one function, is the tell.
+
+  Break-verified in both directions on all five venues: reverting a fake's `subscribe/2` to
+  replace fails it, and making `update_symbols/2` additive fails it too. The assertion also
+  refuses a `sample_pairs` too short to tell "added" from "replaced", for the reason
+  `docs/reference/core/assertion-coverage.md` records under "Third axis".
+
+  **What it does not catch, stated plainly:** the real feed's own set arithmetic. The suite
+  drives fakes; each venue's feed tests hold the real one. What it does catch is the fake
+  drifting from it, which is the half that reaches a consumer's test suite.
+
+### Fixed
+
+- **`Core.ReferenceVenue.update_symbols/2` was `:ok` and nothing else**, leaving the reference
+  implementing two of the contract's three subscription operations. `update_symbols/2`
+  REPLACES the live set — that is the whole difference between it and `subscribe/2` — and a
+  reference where one of them does nothing teaches the next venue author that the distinction
+  does not matter.
+
+  Caught by assertion 26 on the run that introduced it, the same way assertion 14 caught this
+  module's `coverage/1` reporting a constant one release earlier. Both had been sitting there
+  for exactly as long as nothing asked.
+
 ## [0.3.28] - 2026-09-15
 
 ### Fixed

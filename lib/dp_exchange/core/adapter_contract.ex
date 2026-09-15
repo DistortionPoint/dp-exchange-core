@@ -110,7 +110,10 @@ defmodule DpExchange.Core.AdapterContract do
          "an amount attributable to nothing cannot be sized, booked or reconciled"},
       {25,
        "order book ordering — bids descending and asks ascending, so hd(bids) is the best " <>
-         "bid, and every level carries a real Decimal price"}
+         "bid, and every level carries a real Decimal price"},
+      {26,
+       "subscription set semantics — subscribe/2 adds to the live set, update_symbols/2 " <>
+         "replaces it, unsubscribe/2 removes only what it names"}
     ]
   end
 
@@ -137,8 +140,10 @@ defmodule DpExchange.Core.AdapterContract do
       venue_and_observed_time(),
       balance_attribution(),
       order_book_ordering(),
+      subscription_set_semantics(),
       helpers(),
       arg_helpers(),
+      subscription_set_helpers(),
       credential_gate_helpers(),
       purity_helpers()
     ]
@@ -1840,6 +1845,98 @@ defmodule DpExchange.Core.AdapterContract do
                  "freshness is indistinguishable from a stale one"
 
         assert value.provider, "Balance.provider must say which venue answered"
+      end
+    end
+  end
+
+  defp subscription_set_semantics do
+    quote location: :keep do
+      # --- 26. subscription set semantics ---------------------------------------
+
+      describe "26. subscription set semantics" do
+        # **`subscribe/2` adds; `update_symbols/2` replaces; `unsubscribe/2` removes.** The
+        # three are different operations on one set, and nothing checked that a venue kept
+        # them different.
+        #
+        # Found 2026-09-16 by asking the fakes the same three questions in order. Four of
+        # five answered that a second `subscribe/2` REPLACED the first — their `subscribe/2`
+        # and `update_symbols/2` were byte-for-byte the same line — while every real `Feed`
+        # in the family unions (`wanted: MapSet.union(state.wanted, MapSet.new(symbols))`,
+        # and `dp_exchange_robinhood`'s facade spells it `current ++ symbols`). So a
+        # consumer's tier-1 tests certified the opposite of what the venue does: subscribe
+        # twice, keep one symbol against the fake, keep both against the venue.
+        #
+        # `c:DpExchange.Core.Venue.subscribe/2`'s own doc does not say which it is, and this
+        # assertion does not need it to. The contract settles it by shape:
+        # `c:update_symbols/2` exists to "change a live subscription's symbol set" and
+        # `c:unsubscribe/2` to stop delivery for named symbols. Neither has any purpose if
+        # `subscribe/2` already replaces — a caller would just subscribe the new list. Two
+        # callbacks the contract distinguishes, implemented as one function, is the tell.
+        #
+        # **What this does not catch, stated plainly:** the real feed's own set arithmetic.
+        # The suite drives fakes; each venue's feed tests hold the real one. Assertion 25
+        # records the same division of labour for the same reason. What it does catch is the
+        # fake drifting from it, which is the half that reaches a consumer's test suite.
+        test "subscribe/2 adds to the set, update_symbols/2 replaces it, unsubscribe/2 removes" do
+          assert_subscription_set_semantics(@fake, @sample_pairs)
+        end
+      end
+    end
+  end
+
+  defp subscription_set_helpers do
+    quote location: :keep do
+      defp assert_subscription_set_semantics(fake, pairs) do
+        opts = arg_value(:opts, {:subscribe, 2})
+        covered = fn -> fake.coverage(opts) |> Map.keys() |> MapSet.new() end
+
+        # Needs two symbols the venue actually serves; with one, "added" and "replaced" are
+        # the same answer and this assertion could not fail — see
+        # `docs/reference/core/assertion-coverage.md`, "Third axis".
+        [first, second | _rest] = pairs
+
+        fake.update_symbols([], opts)
+        fake.subscribe([first], opts)
+        after_first = covered.()
+
+        assert MapSet.member?(after_first, first),
+               "the fake reported no coverage for #{inspect(first)} after subscribing it, so " <>
+                 "every comparison below is between empty sets and this assertion cannot " <>
+                 "fail. See assertion 14's message for the two things that cause this."
+
+        fake.subscribe([second], opts)
+        after_second = covered.()
+
+        assert MapSet.subset?(after_first, after_second),
+               "subscribe/2 dropped #{inspect(MapSet.to_list(MapSet.difference(after_first, after_second)))} " <>
+                 "when a second symbol was subscribed. It ADDS to the live set — every real " <>
+                 "Feed in this family unions — and a fake that replaces certifies consumer " <>
+                 "code that subscribes once per symbol and silently keeps only the last. If " <>
+                 "this fake's subscribe/2 and update_symbols/2 are the same line, that is why."
+
+        assert MapSet.member?(after_second, second),
+               "subscribe/2 did not add #{inspect(second)} to the live set"
+
+        fake.unsubscribe([first], opts)
+        after_unsub = covered.()
+
+        refute MapSet.member?(after_unsub, first),
+               "unsubscribe/2 left #{inspect(first)} covered — it stops delivery for the " <>
+                 "symbols it names"
+
+        assert MapSet.member?(after_unsub, second),
+               "unsubscribe/2 removed #{inspect(second)}, which it was not asked about"
+
+        fake.update_symbols([first], opts)
+        after_update = covered.()
+
+        assert MapSet.member?(after_update, first),
+               "update_symbols/2 did not take: #{inspect(first)} is not covered"
+
+        refute MapSet.member?(after_update, second),
+               "update_symbols/2 left #{inspect(second)} covered. It REPLACES the set — that " <>
+                 "is the whole difference between it and subscribe/2, and a venue where both " <>
+                 "add has one callback doing two jobs and the other doing none."
       end
     end
   end

@@ -766,7 +766,20 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def update_symbols(_symbols, _opts), do: :ok
+  def update_symbols(symbols, opts) do
+    # **It used to be `:ok` and nothing else**, which made it indistinguishable from a
+    # venue that had simply ignored the call — and left this reference implementing two of
+    # the contract's three subscription operations. `c:DpExchange.Core.Venue.update_symbols/2`
+    # REPLACES the live set, which is the whole difference between it and `subscribe/2`;
+    # a reference where one of them does nothing teaches the next venue author that the
+    # distinction does not matter.
+    #
+    # Caught by assertion 26 on the run that introduced it, the same way assertion 14
+    # caught `coverage/1` reporting a constant. Both had been sitting here for as long as
+    # nothing asked.
+    Process.put(@covered_key, MapSet.new())
+    subscribe(symbols, opts)
+  end
 
   @impl true
   def coverage(_opts) do
