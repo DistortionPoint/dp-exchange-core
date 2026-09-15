@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.29] - 2026-09-15
+
 ### Added
 
 - **Assertion 26 — subscription set semantics.** `subscribe/2` adds to the live set,
