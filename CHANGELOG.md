@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.25] - 2026-09-15
+
 ### Fixed
 
 - **`DefaultRateLimiter` accepted a `limit: 0` and then died on the first request.** `:limit`
