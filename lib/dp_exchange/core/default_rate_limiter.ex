@@ -244,6 +244,23 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   # ceiling (which is the obvious thing to do, and the shape that reads as correct), gets the
   # crash loop instead of an error.
   #
+  # The same two types disagree about `:limit` as well, and that one is worse, because what
+  # does not compose is not a missing key but a legal value. `Capabilities.ceiling` declares
+  # `:limit` as **non_neg_integer** and means it: `limit: 0` is the documented way a venue
+  # says the endpoint exists, the venue serves it, and this application's registration was
+  # granted none of it. Here `:limit` is the DIVISOR in `reserve/3`'s scaled arithmetic, so a
+  # zero arrived as `div(_, 0)` — `:badarith` raised inside this GenServer on the first
+  # request, which is precisely the crash loop described above, with one extra turn of the
+  # screw: `record/3` cannot fail by design, so it goes on answering `:ok` to a limiter that
+  # is no longer alive, and the bucket every ceiling is measured against silently stops being
+  # written. Two packages in this family had already floored the rate at 1 on their own — one
+  # on an order ceiling a host may register at zero, one on a sandbox ceiling it halves —
+  # each having met this from its own side and worked around it locally, while the shared
+  # module that actually performs the division went on accepting 0. It is refused here, once,
+  # so that no third package has to rediscover it. (Which packages those are is deliberately
+  # not named: this module holds no venue knowledge, and the test suite enforces that against
+  # this file's own text, comments included.)
+  #
   # Raising rather than defaulting `burst` to `limit` is deliberate, even though that is what
   # `@default_limit` itself does and what four of the five venues chose. Burst tolerance is
   # how far a caller may run ahead of the smooth rate; picking one silently would hand a
@@ -253,20 +270,15 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   defp validate_limits!(limits) when is_map(limits) do
     Enum.each(limits, fn {provider, limit} ->
       case limit do
+        %{limit: 0} ->
+          raise ArgumentError, zero_limit_message(provider)
+
         %{limit: l, per_ms: p, burst: b}
-        when is_integer(l) and l >= 0 and is_integer(p) and p > 0 and is_integer(b) and b >= 0 ->
+        when is_integer(l) and l > 0 and is_integer(p) and p > 0 and is_integer(b) and b >= 0 ->
           :ok
 
         other ->
-          raise ArgumentError,
-                "DpExchange.Core.DefaultRateLimiter: the limit for provider #{inspect(provider)} " <>
-                  "must be %{limit: non_neg_integer, per_ms: pos_integer, burst: non_neg_integer}, " <>
-                  "got #{inspect(other)}. `:burst` is required here and OPTIONAL in " <>
-                  "`Core.Capabilities.ceiling/0`, so a ceiling read straight off `capabilities/0` " <>
-                  "will not have it — add one. It is the tolerance a caller may run ahead of the " <>
-                  "smooth rate by; `burst: limit` is what this module's own default uses and what " <>
-                  "every venue in this family chose, but it is a throughput decision and not one " <>
-                  "this module will make on a caller's behalf."
+          raise ArgumentError, malformed_limit_message(provider, other)
       end
     end)
 
@@ -277,6 +289,33 @@ defmodule DpExchange.Core.DefaultRateLimiter do
     raise ArgumentError,
           "DpExchange.Core.DefaultRateLimiter: :limits must be a map of " <>
             "provider => %{limit:, per_ms:, burst:}, got #{inspect(other)}"
+  end
+
+  # Its own message rather than the malformed-shape one below, because the shape is not what
+  # is wrong: every key is present, every type is right, and `Capabilities` would accept this
+  # map without complaint. Told that it was "malformed", a reader would go looking at the keys
+  # and find nothing.
+  defp zero_limit_message(provider) do
+    "DpExchange.Core.DefaultRateLimiter: the limit for provider #{inspect(provider)} is " <>
+      "`limit: 0`, and this module cannot meter against it — `:limit` is the rate, and the " <>
+      "GCRA arithmetic divides by it. `0` IS legal in `Core.Capabilities.ceiling/0`, where it " <>
+      "means the venue serves the endpoint but this application's registration was granted " <>
+      "none of it. That is a statement about a registration, not a rate: a caller holding " <>
+      "none of an endpoint has nothing to pace, and should be declining to call it rather " <>
+      "than pacing against it. Pass a positive `:limit` for the throughput this limiter is " <>
+      "to enforce — `max(declared, 1)` is what the venues that met this chose — and leave " <>
+      "the zero in `capabilities/0`, which is where a consumer reads it."
+  end
+
+  defp malformed_limit_message(provider, other) do
+    "DpExchange.Core.DefaultRateLimiter: the limit for provider #{inspect(provider)} " <>
+      "must be %{limit: pos_integer, per_ms: pos_integer, burst: non_neg_integer}, " <>
+      "got #{inspect(other)}. `:burst` is required here and OPTIONAL in " <>
+      "`Core.Capabilities.ceiling/0`, so a ceiling read straight off `capabilities/0` " <>
+      "will not have it — add one. It is the tolerance a caller may run ahead of the " <>
+      "smooth rate by; `burst: limit` is what this module's own default uses and what " <>
+      "every venue in this family chose, but it is a throughput decision and not one " <>
+      "this module will make on a caller's behalf."
   end
 
   @impl GenServer

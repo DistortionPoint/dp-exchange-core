@@ -71,13 +71,47 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       assert {:error, {%ArgumentError{}, _stack}} = start_with_limits([])
     end
 
-    test "a well-formed limits map starts, and a zero limit is legal" do
-      # Zero is a real declaration — a registration that granted no throughput — and
-      # `dp_exchange_schwab` relies on it being expressible. It must not be confused with a
-      # missing value.
-      assert {:ok, pid} = start_with_limits(%{venue: %{limit: 0, per_ms: 60_000, burst: 0}})
+    test "a well-formed limits map starts" do
+      assert {:ok, pid} = start_with_limits(%{venue: %{limit: 12, per_ms: 60_000, burst: 12}})
       assert Process.alive?(pid)
       GenServer.stop(pid)
+    end
+
+    # This test used to assert the opposite — that `limit: 0` starts — on the reasoning that
+    # "zero is a real declaration, and `dp_exchange_schwab` relies on it being expressible".
+    # The first half is true and is why `Core.Capabilities` accepts it. The second half was
+    # false in the direction that mattered: schwab relies on it being expressible in
+    # `capabilities/0`, and deliberately does NOT hand it to this limiter — it passes
+    # `max(orders, 1)`, with a comment saying why. So the assertion defended a behaviour no
+    # caller in the family wanted, and it stopped one line short of the thing that mattered:
+    # the limiter accepted the zero and then died on the very first request, because `:limit`
+    # is the divisor in the GCRA arithmetic. `start_link` returning `{:ok, pid}` was the whole
+    # test, and `{:ok, pid}` was never the question.
+    test "a zero limit is refused at start — it is the GCRA divisor, and it used to crash" do
+      assert {:error, {%ArgumentError{message: message}, _stack}} =
+               start_with_limits(%{venue: %{limit: 0, per_ms: 60_000, burst: 0}})
+
+      assert message =~ ":venue"
+      assert message =~ "limit: 0"
+      # The message has to distinguish the two places zero means different things, or the
+      # reader's next move is to delete the zero from `capabilities/0`, where it is correct.
+      assert message =~ "Core.Capabilities.ceiling"
+    end
+
+    test "the zero that IS legal stays legal where it belongs — in the declaration" do
+      # The two statements are both true and they are about different things: a ceiling of
+      # zero says this application's registration was granted none of the endpoint; a limiter
+      # rate of zero says nothing at all, because there is no rate to divide by. Asserted
+      # together so that a later change cannot "make them consistent" by breaking the one
+      # that is right.
+      caps =
+        DpExchange.Core.Capabilities.new(
+          endpoints: %{},
+          supported_quotes: ~w(USD),
+          public_ceiling: %{limit: 0, per_ms: 60_000}
+        )
+
+      assert caps.public_ceiling.limit == 0
     end
   end
 

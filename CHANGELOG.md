@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`DefaultRateLimiter` accepted a `limit: 0` and then died on the first request.** `:limit`
+  is the divisor in the GCRA arithmetic, so a zero reached `div(_, 0)` and raised `:badarith`
+  **inside the limiter's `GenServer`, on the first call** — the exact crash loop that
+  `validate_limits!/1` exists to prevent, which it had been letting through because its guard
+  read `l >= 0`. Under a supervisor it restarts and crashes again on the next request; the
+  message names `reserve/3`, not the configuration that is wrong. And `record/3` cannot fail
+  by design, so it kept answering `:ok` to a limiter that was no longer alive: the bucket that
+  every ceiling is measured against silently stopped being written, which is the family's
+  recorded rate-limit failure — a venue answering 429 while the budget panel reads
+  comfortable.
+
+  Reachable, not hypothetical, and by the obvious route: `Capabilities.ceiling` declares
+  `:limit` as `non_neg_integer` and **means it** — `limit: 0` is the documented way to say the
+  venue serves the endpoint but this application's registration was granted none of it. Four
+  of the five venue packages wire a `capabilities/0` ceiling straight into this limiter. Two
+  packages had already hit the division from their own side and floored their own rate at 1
+  locally, while the shared module that performs the division went on accepting 0.
+
+  `start_link/1` now refuses a zero rate with a message that separates the two meanings, so a
+  reader does not "fix" it by deleting the zero from `capabilities/0`, where it is correct.
+  This is the second way `Core.Capabilities.ceiling/0` and `DefaultRateLimiter`'s `t:limit/0`
+  fail to compose — `:burst` optional-vs-required was the first — and both are now named in
+  the error a consumer actually sees.
+
+  The test that covered this asserted the opposite: that `limit: 0` *starts*, on the stated
+  reasoning that a venue package "relies on it being expressible". It relies on it being
+  expressible in `capabilities/0`; it deliberately does not hand it to the limiter. The
+  assertion stopped one line short of the question that mattered — `start_link` returning
+  `{:ok, pid}` was never in doubt — and defended the crash for as long as it stood.
+
 ## [0.3.24] - 2026-09-14
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

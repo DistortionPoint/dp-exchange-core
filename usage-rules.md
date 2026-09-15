@@ -123,6 +123,15 @@ no throughput on that path. The endpoint exists and the venue serves it — your
 cannot use it. That is a different problem from `:unsupported`, with a different remedy:
 one is a conversation with the venue, the other is not.
 
+**Do not pass that zero to a rate limiter.** `DefaultRateLimiter` requires a positive
+`:limit`, because `:limit` is the rate its arithmetic divides by; it refuses a zero at
+`start_link/1`. The zero is a statement about your registration, not a rate — a path you hold
+none of has nothing to pace, and the right response is to not call it. If you are deriving
+limiter configuration from `capabilities/0` mechanically, floor it (`max(limit, 1)`) and keep
+the real number where a reader finds it, in the declaration. Note also that `:burst` is
+**optional** on a `ceiling` and **required** by `DefaultRateLimiter`, so a ceiling handed over
+verbatim will not have it.
+
 ### Timeframes: nameable is wider than bucketable
 
 `Timeframe.known/0` is what Core can **bucket** — `aligned?/2` and `boundary/2` answer for
