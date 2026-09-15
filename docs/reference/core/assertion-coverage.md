@@ -532,3 +532,57 @@ assert this" and not only "does it run here". It is: *what would I change to mak
 If the answer is "nothing in the fixture can express the defect", the row is not covered —
 whatever the suite prints.
 
+### Third axis, applied 2026-09-15 — assertions 14 and 15
+
+The section above says the question to ask is *what would I change to make this fail?*
+Asking it of the two coverage assertions found something worse than a thin fixture: they
+were not reading a fixture at all.
+
+Both called the **real** venue module — `@venue.coverage([])` and
+`@venue.coverage_by_kind([])` — in a suite that starts no feed. `coverage/1` reports what is
+actually arriving, so with nothing subscribed it answers `%{}`. Measured on all five
+packages: `%{}` every time. Assertion 14's `for {_symbol, route} <- ...` therefore ran zero
+times, and assertion 15 compared `MapSet.new([])` to `MapSet.new([])`. **Neither had been
+able to fail on any venue since it was written.**
+
+`dp_exchange_robinhood` was the single exception, and only partly: its
+`coverage_by_kind([])` answers `%{top_of_book: %{}}` even when empty, so assertion 15's
+"names no kind the venue does not declare streamable" check was live there and inert on the
+other four.
+
+**The measurement**, breaking exactly what each assertion exists to catch, in
+`dp_exchange_coinbase`'s fake:
+
+| break | published contract | this change |
+|---|---|---|
+| `coverage/1` reports a route that is a claim (`:will_stream`) | **48 tests, 0 failures** | 48 tests, 1 failure |
+| `coverage_by_kind/1` names a symbol `coverage/1` does not | **48 tests, 0 failures** | 48 tests, 1 failure |
+
+**Closed by driving the fake and subscribing first.** Both assertions now call
+`subscribe/2` with the venue's own `sample_pairs` and then read the fake, which is what
+every other fake-driven assertion in the suite already did. Each also asserts that the
+coverage it got back is non-empty, because without that the pair of them slides straight
+back into passing for having looked at nothing — which is how they got here.
+
+The structural claim the old calls were implicitly making is kept, and is now stated as its
+own assertion rather than as a loop's silent precondition: with nothing subscribed,
+`coverage/1` must answer `%{}` and `coverage_by_kind/1` must carry no symbols under any
+kind. A venue reporting coverage for symbols nobody asked for is reporting a claim, which is
+the thing the callback exists not to do.
+
+Reproducing the old inert state on purpose — removing the `subscribe/2` call — now fails
+**2 tests on every one of the five packages**, where before it was silently green on all
+five.
+
+**What this does not catch, stated plainly:** the real feed's own coverage bookkeeping. The
+suite drives fakes; each venue's feed tests hold the real one. Assertion 25 records the same
+division of labour for the same reason.
+
+**It found a real bug on its first run.** `Core.ReferenceVenue.coverage/1` — the fixture Core
+runs this suite against, and the module every venue author reads as the worked example —
+returned `Map.new(@symbols, ...)`: every symbol it knows about, reported as covered whether or
+not anything had ever been subscribed. The comment above it claimed the opposite, in as many
+words: "this reference observes its own sends, so it reports what it actually delivered". It
+observed nothing; it was a constant. The new structural assertion failed on it immediately.
+That bug had sat there for as long as assertion 14 had been inert, which is the whole argument
+for asking the third-axis question rather than reading a green suite.

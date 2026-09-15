@@ -21,6 +21,66 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertions 14 and 15 had never been able to fail, on any venue.** Both read the **real**
+  venue module — `@venue.coverage([])` and `@venue.coverage_by_kind([])` — in a suite that
+  starts no feed. `coverage/1` reports what is actually arriving, so with nothing subscribed
+  it answers `%{}`; measured on all five packages, `%{}` every time. Assertion 14's
+  `for {_symbol, route} <- ...` ran zero times and assertion 15 compared `MapSet.new([])` to
+  `MapSet.new([])`.
+
+  This is a step past the "Third axis" case closed the same day, where one venue's fixture
+  was too thin to express the defect. Here no fixture was reached at all.
+
+  **The measurement**, breaking exactly what each assertion exists to catch, in
+  `dp_exchange_coinbase`'s fake:
+
+  | break | published 0.3.26 | this change |
+  | --- | --- | --- |
+  | `coverage/1` reports a route that is a claim (`:will_stream`) | **48 tests, 0 failures** | 48 tests, 1 failure |
+  | `coverage_by_kind/1` names a symbol `coverage/1` does not | **48 tests, 0 failures** | 48 tests, 1 failure |
+
+  Both now drive the **fake** and call `subscribe/2` with the venue's own `sample_pairs`
+  first, which is what every other fake-driven assertion in the suite already did. Each also
+  requires the coverage it reads back to be non-empty — without that the two slide straight
+  back into passing for having looked at nothing, which is how they got here. Reproducing the
+  old inert state on purpose, by removing the `subscribe/2` call, now fails 2 tests on every
+  one of the five packages.
+
+  The structural claim the old calls were implicitly making is kept, and is now stated as its
+  own assertion rather than as a loop's silent precondition: with nothing subscribed,
+  `coverage/1` must answer `%{}` and `coverage_by_kind/1` must carry no symbols under any
+  kind. A venue reporting coverage for symbols nobody asked for is reporting a claim, which
+  is the thing the callback exists not to do.
+
+  `dp_exchange_robinhood` was the one partial exception, and it is worth naming because it
+  shows how thin the accidental coverage was: its `coverage_by_kind([])` answers
+  `%{top_of_book: %{}}` even when empty, so assertion 15's "names no kind the venue does not
+  declare streamable" check was live there and inert on the other four.
+
+  **What this does not catch, stated plainly:** the real feed's own coverage bookkeeping. The
+  suite drives fakes; each venue's feed tests hold the real one. Assertion 25 records the
+  same division of labour for the same reason.
+
+- **`Core.ReferenceVenue.coverage/1` reported a claim, not an observation — and the new
+  assertion caught it on its first run.** It returned `Map.new(@symbols, ...)`: every symbol
+  the module knows about, reported as covered whether or not anything had ever been
+  subscribed. Its own comment, directly above, said "this reference observes its own sends,
+  so it reports what it actually delivered". It observed nothing. It was a constant.
+
+  That is exactly the substitution `c:DpExchange.Core.Venue.coverage/1` exists to forbid, in
+  the module every venue author reads as the worked example and the fixture Core runs its own
+  conformance suite against. `subscribe/2` now records which symbols actually got a send —
+  not which were asked for, so a symbol this reference refuses or does not list is not
+  counted — `unsubscribe/2` removes them, and `coverage/1` reports that. Process-scoped,
+  because the suite requires `async: true` safety and asserts process-scoped isolation in its
+  own assertion 13.
+
+  Worth stating as evidence rather than as a coincidence: this bug had sat in Core's own test
+  support for as long as assertion 14 had been inert, and it surfaced the moment that
+  assertion was able to fail.
+
 ## [0.3.26] - 2026-09-15
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

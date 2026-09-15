@@ -124,6 +124,7 @@ defmodule DpExchange.Core.AdapterContract do
       symbol_round_trip(opts),
       agreement(),
       both_endpoints(),
+      coverage_routes(),
       coverage_by_kind(),
       purity(),
       isolation(),
@@ -668,9 +669,64 @@ defmodule DpExchange.Core.AdapterContract do
                      "venue does not serve them at all: #{inspect(contradictions)}"
           end
         end
+      end
+    end
+  end
 
+  # Split out of `both_endpoints/0` rather than added to it. That block had grown past
+  # credo's `Avoid long quote blocks` ceiling, which this file already treats as the same
+  # "400-line block nobody reads" its groups exist to avoid — see `credential_gate_helpers/0`
+  # for the same split made for the same reason. Same assertion group, same number; only the
+  # quoted block is separate.
+  defp coverage_routes do
+    quote location: :keep do
+      describe "8. coverage/1 reports observed routes" do
         test "coverage/1 reports observed routes only" do
-          for {_symbol, route} <- @venue.coverage([]) do
+          # **This used to iterate `@venue.coverage([])`, which is `%{}` on every package in
+          # this family** — measured, all five, because nothing is subscribed and `coverage/1`
+          # reports what is actually arriving. The loop ran zero times and the test passed
+          # unconditionally, on every venue, from the day it was written.
+          #
+          # That is a step past the case `docs/reference/core/assertion-coverage.md` records
+          # under "Third axis", where one venue's fixture was too thin. Here no fixture was
+          # reached at all: the assertion called the REAL module, which cannot have coverage
+          # in a suite that starts no feed.
+          #
+          # The structural half is worth keeping, and is now stated as its own claim rather
+          # than as the silent precondition of a loop.
+          assert @venue.coverage([]) == %{},
+                 "coverage/1 must answer an empty map when nothing is subscribed — a venue " <>
+                   "reporting coverage for symbols no one asked for is reporting a claim, " <>
+                   "which is the thing this callback exists not to do"
+
+          # The behavioural half drives the FAKE, the way every other fake-driven assertion
+          # here does, and subscribes first so that there is something to report. The
+          # non-emptiness check is not decoration: without it, a fake that quietly stopped
+          # reporting coverage would put this test straight back to passing for having looked
+          # at nothing, which is exactly how it got here.
+          #
+          # **What this does not catch, stated plainly:** the real feed's own coverage
+          # bookkeeping. The suite drives fakes; each venue's feed tests hold the real one.
+          if @fake, do: assert_fake_coverage_routes(@fake, @sample_pairs)
+        end
+
+        # Guarded at the CALL SITE, not with a `nil` head here. `@fake` is a literal module in
+        # every package that names one, so a `nil` clause is unreachable code the compiler
+        # rejects under `--warnings-as-errors`.
+        defp assert_fake_coverage_routes(fake, pairs) do
+          opts = arg_value(:opts, {:subscribe, 2})
+          fake.subscribe(pairs, opts)
+          covered = fake.coverage(opts)
+
+          assert covered != %{},
+                 "the fake reported no coverage after subscribing #{inspect(pairs)}, so every " <>
+                   "route assertion below it executes zero times and this test passes for " <>
+                   "having checked nothing. Either `subscribe/2` did not take (the fake may " <>
+                   "need something `endpoint_opts:` should carry), or the sample pairs are " <>
+                   "symbols this venue does not serve — `dp_exchange_schwab` reports nothing " <>
+                   "for a crypto pair, and names equities in `sample_pairs:` for that reason."
+
+          for {_symbol, route} <- covered do
             assert route in [:stream, :internal_poll, :not_covered],
                    "coverage must report an observed route, never a claim"
           end
@@ -697,14 +753,47 @@ defmodule DpExchange.Core.AdapterContract do
                "names no kind the venue does not declare streamable" do
           Code.ensure_loaded?(@venue)
 
-          if function_exported?(@venue, :coverage_by_kind, 1) do
+          if function_exported?(@venue, :coverage_by_kind, 1) and @fake do
             # `apply/3` for the same reason as assertion 12's — an optional callback guarded
             # one line up is not knowable at compile time, and a direct call warns for every
             # package that does not implement it. This site had no mitigation at all.
             #
+            # **Driven against the FAKE, after a subscribe.** Both sides of the equality
+            # below used to read the real module with nothing subscribed, so both were `%{}`
+            # and `MapSet.new([]) == MapSet.new([])` held on every package — the assertion
+            # that exists to stop these two facts drifting could not observe them drift. The
+            # `undeclared` check further down was live on exactly one venue, whose fake
+            # happened to name a kind even when empty.
+            #
+            # The structural claim the old call made is kept as its own assertion first: with
+            # nothing subscribed the two real functions must agree that there is nothing.
+            #
+            # `apply/3` on both `coverage_by_kind/1` calls, and the reason is the one the
+            # original site already recorded: an optional callback guarded one line up is not
+            # knowable at compile time, and a direct call warns for every package that does
+            # not implement it — Core's own reference venue among them. Binding the module to
+            # a variable does NOT answer that; Elixir propagates the literal and warns anyway,
+            # which is worth writing down because it looks like it should work.
+            #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
-            by_kind = apply(@venue, :coverage_by_kind, [[]])
-            coverage_symbols = @venue.coverage([]) |> Map.keys() |> MapSet.new()
+            structural = apply(@venue, :coverage_by_kind, [[]])
+
+            assert structural |> Map.values() |> Enum.all?(&(&1 == %{})),
+                   "with nothing subscribed, coverage_by_kind/1 must report no symbols under " <>
+                     "any kind — a kind carrying symbols here is a claim, not an observation"
+
+            fake = @fake
+            opts = arg_value(:opts, {:subscribe, 2})
+            fake.subscribe(@sample_pairs, opts)
+
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            by_kind = apply(fake, :coverage_by_kind, [opts])
+            coverage_symbols = fake.coverage(opts) |> Map.keys() |> MapSet.new()
+
+            assert MapSet.size(coverage_symbols) > 0,
+                   "the fake reported no coverage after subscribing #{inspect(@sample_pairs)}, " <>
+                     "so the union equality below compares two empty sets and cannot fail. " <>
+                     "See assertion 14's own message for the two things that cause this."
 
             union =
               by_kind

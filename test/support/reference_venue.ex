@@ -59,6 +59,9 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @symbols ~w(BTC-USD BTC-USDC BTC-USDT BTC-BUSD ETH-USD ETH-EUR)
 
+  # What `subscribe/2` has actually delivered in THIS process — see `coverage/1`.
+  @covered_key {__MODULE__, :covered}
+
   # The reference venue does not stake — `has_staking: false` below, and these six
   # declared `:unsupported` so assertion 12 sees the declaration and the behaviour agree.
   @unsupported [
@@ -732,29 +735,62 @@ defmodule DpExchange.Core.ReferenceVenue do
 
     # Pushed immediately, which is what a REST-only venue's internal poll would do on its
     # first tick. A caller cannot tell the difference, and that is the point.
-    for symbol <- symbols, symbol in @symbols do
-      case get_price(symbol, []) do
-        {:ok, quote_struct} -> send(target, {:dp_exchange, runtime_id(), quote_struct})
-        _refused_or_error -> :ok
+    #
+    # The symbols that actually got a send are recorded, and they are what `coverage/1`
+    # reports. A symbol this reference refused, or does not list, is not added — so coverage
+    # stays a record of what was delivered rather than of what was asked for.
+    delivered =
+      for symbol <- symbols, symbol in @symbols, reduce: [] do
+        acc ->
+          case get_price(symbol, []) do
+            {:ok, quote_struct} ->
+              send(target, {:dp_exchange, runtime_id(), quote_struct})
+              [symbol | acc]
+
+            _refused_or_error ->
+              acc
+          end
       end
-    end
+
+    Process.put(@covered_key, MapSet.union(covered(), MapSet.new(delivered)))
 
     :ok
   end
 
   @impl true
-  def unsubscribe(_symbols, _opts), do: :ok
+  def unsubscribe(symbols, _opts) do
+    # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
+    Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
+
+    :ok
+  end
 
   @impl true
   def update_symbols(_symbols, _opts), do: :ok
 
   @impl true
   def coverage(_opts) do
-    # Observed, never intended. This reference observes its own sends, so it reports what
-    # it actually delivered — a venue that could not observe delivery would answer
-    # :not_covered rather than claiming success.
-    Map.new(@symbols, fn symbol -> {symbol, :internal_poll} end)
+    # **Observed, never intended — and it used to be neither.** This returned
+    # `Map.new(@symbols, ...)`: every symbol this module knows about, reported as covered
+    # whether or not anything had ever been subscribed, while the comment above it claimed
+    # "this reference observes its own sends, so it reports what it actually delivered". It
+    # observed nothing. It was a constant.
+    #
+    # That is the exact substitution `c:DpExchange.Core.Venue.coverage/1` exists to forbid —
+    # a claim wearing the shape of an observation — sitting in the module every venue author
+    # reads as the worked example, and in the fixture Core runs its own conformance suite
+    # against. `Core.AdapterContract`'s assertion 14 could not catch it, because until the
+    # same change that fixed this, that assertion iterated a map it never made non-empty and
+    # so had never been able to fail on anything.
+    #
+    # Now it is what `subscribe/2` actually sent, minus what `unsubscribe/2` took away.
+    Map.new(covered(), fn symbol -> {symbol, :internal_poll} end)
   end
+
+  # Process-scoped, because the suite requires `async: true` safety and asserts
+  # process-scoped isolation in its own assertion 13: two tests subscribing different
+  # symbols at the same time must not see each other's coverage.
+  defp covered, do: Process.get(@covered_key, MapSet.new())
 
   @impl true
   def subscribe_notices(opts) do
