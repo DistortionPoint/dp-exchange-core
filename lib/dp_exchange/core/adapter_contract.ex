@@ -1385,6 +1385,33 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_side_ordering(levels, direction, side, superlative) do
+        # **A fixture too thin to order cannot fail this assertion**, and an assertion that
+        # cannot fail is not coverage. A list of one is sorted under every comparator; a list
+        # of none is too. So the depth of the fake's book is not a detail of the fixture —
+        # it is the difference between this assertion checking the ordering contract and
+        # reporting green for having looked at nothing.
+        #
+        # Measured on `dp_exchange_gemini`, whose fake returned exactly one level a side.
+        # Its contract suite ran assertion 25, reached the behaviour, and passed — and no
+        # edit to that fake could have made it fail, because there was no pair of prices to
+        # put in the wrong order. Adding a second, deliberately misordered level turned it
+        # red at once: 48 tests, 1 failure. The assertion was never broken. It had nothing
+        # to work on, and nothing said so.
+        #
+        # This is a third axis on top of the two `docs/reference/core/assertion-coverage.md`
+        # already records. That file asks "does an assertion exist?" and then "does it run on
+        # every venue?". Both were yes here. The question it did not ask is whether an
+        # assertion that runs is **able to fail**, and the answer has to be checked against
+        # the fixture, not against the assertion.
+        assert length(levels) >= 2,
+               "the fake's #{side} carry #{length(levels)} level(s), and this assertion " <>
+                 "cannot fail on fewer than two — a list of one is sorted under every " <>
+                 "comparator, so the ordering contract is not being checked for this " <>
+                 "package at all. This is a requirement on the FAKE's fixture and not on " <>
+                 "the venue: give `Fake.get_order_book/2` at least two levels a side, in " <>
+                 "the order `Core.Types.OrderBook` requires, so that getting it wrong is " <>
+                 "something this assertion can see."
+
         for {price, _quantity} <- levels do
           assert match?(%Decimal{}, price),
                  "every #{side} level carries a real Decimal price — `Core.Types.OrderBook`'s " <>
@@ -1674,6 +1701,16 @@ defmodule DpExchange.Core.AdapterContract do
         if Capabilities.active?(venue.capabilities(), endpoint) and fake do
           case apply(fake, :get_balances, endpoint_args(:get_balances, 2)) do
             {:ok, balances} when is_list(balances) ->
+              # `Enum.each/2` over `[]` runs `assert_balance/1` zero times and reports green,
+              # which is the same inability-to-fail assertion 25's own depth check records —
+              # see `assert_side_ordering/4` for the measurement that found the axis. The
+              # fake's fixture is the thing under test here as much as the code is.
+              assert balances != [],
+                     "capabilities/0 declares get_balances/2 active and the fake answered " <>
+                       "`{:ok, []}`. Every per-balance assertion below then executes zero " <>
+                       "times, so this group passes without checking a single Balance. The " <>
+                       "fake's fixture must carry at least one."
+
               Enum.each(balances, &assert_balance/1)
 
             other ->

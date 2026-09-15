@@ -496,3 +496,39 @@ argument lists. Both happened to carry `credentials:`, so neither was among the 
 but hand-building is exactly what made 14 and 23 inert, so every fake call in the suite now
 goes through `endpoint_args/2`. A venue's `endpoint_opts` and `endpoint_symbols` reach all of
 them, and no call site can drift back out of the mechanism.
+
+## Third axis — an assertion that runs is not an assertion that can fail
+
+**Found 2026-09-15, by asking the previous section's question one step further.** The two
+axes above are "does an assertion exist?" and "does it execute on every venue?". Assertion
+25 — order book ordering — answered yes to both on `dp_exchange_gemini`, and was still
+incapable of failing there.
+
+Its fake returned **one level a side**. A list of one is sorted under every comparator, so
+there is no edit to that fake that could have made the assertion red. It ran, it reached the
+behaviour, it compared a one-element list to itself, and it reported green.
+
+**The measurement**, using this file's own method — break it on purpose and require red:
+
+| `dp_exchange_gemini` fake | contract suite |
+|---|---|
+| one level a side (as shipped) | **48 tests, 0 failures** — and no possible edit changes that |
+| a second, deliberately misordered level added | 48 tests, 1 failure |
+
+The assertion was never broken. It had nothing to work on, and nothing said so. The other
+four packages were fine by accident of fixture depth rather than by anything checking:
+`dp_exchange_coinbase` three levels, `dp_exchange_webull` two, and
+`dp_exchange_robinhood` / `dp_exchange_schwab` honestly skipped on `:unsupported`.
+
+**Closed from both ends.** `assert_side_ordering/4` now requires at least two levels a side
+before it will call a book checked, so a fixture too thin to order is a failure rather than a
+pass; and `dp_exchange_gemini`'s fake carries a three-level ladder with its own test pinning
+the depth, next to the fixture it constrains. The same inability-to-fail was closed in
+assertion 24 at the same time: `Enum.each(balances, &assert_balance/1)` over `{:ok, []}`
+executes zero per-balance assertions and reports green, so an empty list is now refused too.
+
+**For the next audit.** The question to ask of a **covered** row is not "does something
+assert this" and not only "does it run here". It is: *what would I change to make this fail?*
+If the answer is "nothing in the fixture can express the defect", the row is not covered —
+whatever the suite prints.
+

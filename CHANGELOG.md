@@ -25,6 +25,40 @@ an acceptable changelog line.
 
 ### Fixed
 
+- **Assertion 25 could not fail on a fake whose book was one level deep, and assertion 24
+  could not fail on an empty balance list.** Both ran, both reached the behaviour under test,
+  and neither was able to distinguish a pass from a failure.
+
+  `assert_side_ordering/4` compares a side's prices against those same prices sorted. Against
+  a one-element list that is a tautology — a list of one is sorted under every comparator —
+  so for `dp_exchange_gemini`, whose fake returned exactly one bid and one ask, **no edit to
+  that fake could have turned the assertion red.** Measured rather than argued, with this
+  repository's own method of breaking the thing on purpose:
+
+  | `dp_exchange_gemini` fake | contract suite |
+  | --- | --- |
+  | one level a side, as shipped | **48 tests, 0 failures** — and nothing can change that |
+  | a second, deliberately misordered level | 48 tests, 1 failure |
+
+  The other four were fine by accident of fixture depth rather than by anything checking it:
+  three levels on `dp_exchange_coinbase`, two on `dp_exchange_webull`, and an honest
+  `:unsupported` skip on the two venues that serve no REST book.
+
+  Assertion 24 has the same shape one step along: `Enum.each(balances, &assert_balance/1)`
+  over `{:ok, []}` executes zero per-balance assertions and reports green.
+
+  A book thinner than two levels a side, and an empty balance list, are now failures, with
+  messages saying that the fixture is what needs deepening and not the venue.
+
+  **This is a third axis on top of the two `docs/reference/core/assertion-coverage.md`
+  already records.** That file asks whether an assertion exists, then whether it runs on
+  every venue. Both were yes here. The question it had not asked is whether an assertion that
+  runs is *able to fail*, and that one is answered against the fixture rather than against
+  the assertion. Written up there as "Third axis", with the question for the next audit:
+  *what would I change to make this fail?*
+
+### Fixed
+
 - **`DefaultRateLimiter` accepted a `limit: 0` and then died on the first request.** `:limit`
   is the divisor in the GCRA arithmetic, so a zero reached `div(_, 0)` and raised `:badarith`
   **inside the limiter's `GenServer`, on the first call** — the exact crash loop that
