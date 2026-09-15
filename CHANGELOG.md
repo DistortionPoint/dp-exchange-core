@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.28] - 2026-09-15
+
 ### Fixed
 
 - **Assertions 16, 18 and 19 shared a single off switch: a `package_root` that matches no
