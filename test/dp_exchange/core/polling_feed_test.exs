@@ -303,6 +303,67 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert status.symbols == 1
       assert :counters.get(counter, 1) == 1
     end
+
+    test "a symbol removed and re-added gets ONE timer, not a second one" do
+      # The sibling of the test above, and the case its guard did not cover. That one asks
+      # about a symbol that STAYED in scope; `update_symbols/2` scheduled
+      # `wanted - state.symbols` and so left it alone, correctly. A symbol that LEFT and came
+      # back is absent from `state.symbols` at the moment it returns, so it counted as new —
+      # while its pending timer went on existing. Two timers, then, and `reschedule/2` re-arms
+      # both forever.
+      #
+      # Measured before the fix at a 200ms interval, three remove/re-add cycles: the churned
+      # symbol went from 5 fetches a second to 20 — x4, permanently — while an untouched
+      # control stayed at 5. Each cycle stacks another. That is the multiplier this module's
+      # own `update_symbols` comment says it exists to prevent, arriving through the one door
+      # the guard did not cover.
+      #
+      # Asserted as a RATIO against a control symbol rather than as an absolute count, so the
+      # test measures the defect rather than the speed of the machine it runs on: whatever
+      # the scheduler does to one symbol it does to the other, and only stacked timers move
+      # them apart.
+      counts = :counters.new(2, [])
+
+      slot = fn
+        "BTC-USD" -> 1
+        "ETH-USD" -> 2
+      end
+
+      pid =
+        start_feed(
+          fetch: fn symbol ->
+            :counters.add(counts, slot.(symbol), 1)
+            {:ok, event(symbol)}
+          end,
+          symbols: ~w(BTC-USD ETH-USD),
+          interval_ms: 50
+        )
+
+      assert_receive {:published, _event}, 500
+
+      for _cycle <- 1..3 do
+        PollingFeed.update_symbols(pid, ~w(ETH-USD))
+        PollingFeed.update_symbols(pid, ~w(BTC-USD ETH-USD))
+      end
+
+      # `update_symbols/2` is a cast and `status/1` is a call, so the reply is proof every
+      # cast above has been handled — the same argument the test before this one makes.
+      assert PollingFeed.status(pid).symbols == 2
+
+      churned_before = :counters.get(counts, 1)
+      control_before = :counters.get(counts, 2)
+      Process.sleep(500)
+      churned = :counters.get(counts, 1) - churned_before
+      control = :counters.get(counts, 2) - control_before
+
+      assert control > 0,
+             "the control symbol was not polled at all, so the comparison below proves nothing"
+
+      assert churned <= control,
+             "the churned symbol was fetched #{churned} times against the control's " <>
+               "#{control} in the same window. Removing and re-adding a symbol left its old " <>
+               "timer pending and set a second one, and every cycle stacks another."
+    end
   end
 
   describe "the boot delay" do

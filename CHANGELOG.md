@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A symbol removed and re-added stacked a second poll timer, permanently multiplying the
+  venue's request rate for it.** `handle_cast({:update_symbols, _})` scheduled
+  `wanted - state.symbols`, reasoning that a symbol already in scope already has a timer.
+  That is true for a symbol which stayed, and false for one that LEFT and came back: the
+  removal took it out of `state.symbols` while its pending timer went on existing, so the
+  re-add counted it as new and armed a second. `reschedule/2` then re-arms both, forever.
+
+  **Measured**, per-symbol mode at a 200ms interval, one symbol churned and one left alone
+  as a control:
+
+  | | before | after 3 remove/re-add cycles |
+  | --- | --- | --- |
+  | churned symbol | 5 fetches/s | **20 fetches/s (x4)** |
+  | control symbol | 5 fetches/s | 5 fetches/s |
+
+  Every cycle stacks another timer and none of them decay. This is exactly the multiplier
+  the `update_symbols` comment in this module says it exists to prevent — "stack a second
+  timer on each, doubling this venue's request rate every time the scope is touched" —
+  arriving through the one door the guard did not cover, and it is the defect class the
+  moduledoc names: "an unexamined multiplier on request volume is a defect class this family
+  has paid for more than once."
+
+  State now carries `:scheduled`, the symbols that already have a tick coming — timer
+  pending, job queued, or fetch in flight — and `update_symbols/2` subtracts that rather
+  than `state.symbols`. `reschedule/2` re-arms only a symbol still in scope and drops it from
+  the set otherwise, so a later re-add sees a clear field exactly once.
+
+  Reaches `dp_exchange_schwab`'s fallback poll, which runs per-symbol mode over precisely the
+  symbols the Streamer cannot hold — the set most likely to churn. `dp_exchange_robinhood`
+  uses `:fetch_all` and is unaffected. `PollingFeed` is public Core API, so any consumer in
+  per-symbol mode is in scope too.
+
+  The test beside the new one asks the sibling question — "an existing symbol is not
+  rescheduled a second time" — about a symbol that stayed. Nobody had asked it about one that
+  came back. The new test asserts the churned symbol's fetch count against an untouched
+  control rather than against an absolute number, so it measures the defect and not the speed
+  of the machine; break-verified at 39 against the control's 10, and stable over eight
+  separate runs.
+
 ## [0.3.29] - 2026-09-15
 
 ### Added

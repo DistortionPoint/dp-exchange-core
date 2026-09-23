@@ -324,7 +324,25 @@ defmodule DpExchange.Core.PollingFeed do
       in_flight: nil,
       # Ticks that arrived while a fetch was in flight, oldest first. This is the mailbox
       # queue the synchronous version had, made explicit — concurrency stays at one.
-      queue: []
+      queue: [],
+      # Per-symbol mode: the symbols that already have a tick coming — a timer pending, a
+      # job queued, or a fetch in flight. **This is the set `update_symbols/2` must consult,
+      # and `state.symbols` is not it.**
+      #
+      # `handle_cast({:update_symbols, _})` scheduled `wanted - state.symbols`, reasoning
+      # that a symbol already in scope already has a timer. True for a symbol that stayed;
+      # false for one that LEFT and came back, because the removal took it out of
+      # `state.symbols` while its pending timer went on existing. The re-add then counted it
+      # as new and set a second timer, and neither ever expires — `reschedule/2` re-arms both
+      # forever.
+      #
+      # Measured before the fix, per-symbol mode at a 200ms interval, one symbol churned and
+      # one left alone as a control: three remove/re-add cycles took the churned symbol from
+      # 5 fetches a second to 20 — **x4, permanently** — while the control stayed at 5. Each
+      # cycle stacks another timer. That is the multiplier this module's own
+      # `update_symbols` comment says it exists to prevent, arriving through the one door the
+      # guard did not cover.
+      scheduled: MapSet.new()
     }
 
     if is_nil(state.fetch) and is_nil(state.fetch_all) do
@@ -332,8 +350,7 @@ defmodule DpExchange.Core.PollingFeed do
       # which is indistinguishable from a quiet venue. Refuse to start instead.
       {:stop, :no_fetcher}
     else
-      start_polling(state)
-      {:ok, state}
+      {:ok, start_polling(state)}
     end
   end
 
@@ -368,12 +385,20 @@ defmodule DpExchange.Core.PollingFeed do
   def handle_cast({:update_symbols, symbols}, state) do
     wanted = MapSet.new(symbols)
 
-    # Only NEW symbols are scheduled, and only in per-symbol mode. Rescheduling
-    # the existing ones would stack a second timer on each, doubling this
-    # venue's request rate every time the scope is touched.
-    if is_nil(state.fetch_all) do
-      schedule_each(MapSet.difference(wanted, state.symbols), state.interval_ms)
-    end
+    # Only symbols with no tick already coming are scheduled, and only in per-symbol mode.
+    # Scheduling one that already has a timer stacks a second on it, doubling this venue's
+    # request rate every time the scope is touched.
+    #
+    # The set to subtract is `state.scheduled`, NOT `state.symbols` — see that field's own
+    # comment in `init/1` for the measurement. A symbol removed and re-added is absent from
+    # `state.symbols` and still very much present in the timer queue.
+    state =
+      if is_nil(state.fetch_all) do
+        scheduled = schedule_each(MapSet.difference(wanted, state.scheduled), state.interval_ms)
+        %{state | scheduled: MapSet.union(state.scheduled, scheduled)}
+      else
+        state
+      end
 
     {:noreply, %{state | symbols: wanted, last_ok: Map.take(state.last_ok, symbols)}}
   end
@@ -385,11 +410,14 @@ defmodule DpExchange.Core.PollingFeed do
 
   def handle_info({:poll, symbol}, state) do
     if MapSet.member?(state.symbols, symbol) do
+      # Stays in `scheduled`: the timer has fired, but this symbol still has a tick in the
+      # pipeline — queued now, in flight next, re-armed by `reschedule/2` after that. It
+      # leaves the set only where that chain actually ends, below and in `reschedule/2`.
       {:noreply, enqueue(state, {:one, symbol})}
     else
-      # Dropped from scope while a tick was in flight. Not rescheduling is what
-      # removes it.
-      {:noreply, state}
+      # Dropped from scope while a tick was pending. Not rescheduling is what removes it,
+      # and forgetting it here is what lets a later re-add schedule it again exactly once.
+      {:noreply, %{state | scheduled: MapSet.delete(state.scheduled, symbol)}}
     end
   end
 
@@ -480,8 +508,16 @@ defmodule DpExchange.Core.PollingFeed do
   end
 
   defp reschedule(state, {:one, symbol}) do
-    Process.send_after(self(), {:poll, symbol}, state.interval_ms)
-    state
+    # Only a symbol still in scope is re-armed. It used to re-arm unconditionally and let
+    # `handle_info({:poll, _})` drop the tick on arrival, which worked but left the symbol
+    # counted as scheduled for a further interval — long enough for a re-add to see a clear
+    # field and set a second timer.
+    if MapSet.member?(state.symbols, symbol) do
+      Process.send_after(self(), {:poll, symbol}, state.interval_ms)
+      %{state | scheduled: MapSet.put(state.scheduled, symbol)}
+    else
+      %{state | scheduled: MapSet.delete(state.scheduled, symbol)}
+    end
   end
 
   defp apply_result(state, :all, result) do
@@ -704,10 +740,15 @@ defmodule DpExchange.Core.PollingFeed do
     System.monotonic_time(:millisecond) - newest > @nothing_delivered_after_ms
   end
 
-  defp start_polling(%{fetch_all: nil} = state),
-    do: schedule_each(state.symbols, state.interval_ms, state.start_delay_ms)
+  defp start_polling(%{fetch_all: nil} = state) do
+    scheduled = schedule_each(state.symbols, state.interval_ms, state.start_delay_ms)
+    %{state | scheduled: MapSet.union(state.scheduled, scheduled)}
+  end
 
-  defp start_polling(state), do: Process.send_after(self(), :poll_all, state.start_delay_ms)
+  defp start_polling(state) do
+    Process.send_after(self(), :poll_all, state.start_delay_ms)
+    state
+  end
 
   # Start times spread across the interval, so the venue sees a flat request
   # rate instead of the whole symbol set arriving at once.
@@ -725,6 +766,12 @@ defmodule DpExchange.Core.PollingFeed do
   # boot and its normal rate thereafter.
   @first_sweep_ms 20_000
 
+  # Takes the symbol set and returns it, rather than taking and returning `state`. Threading
+  # the whole state through here is the obvious shape and Dialyzer rejects it: `state` now
+  # carries `:scheduled`, a `MapSet`, and passing a map with an opaque subterm as an argument
+  # trips `call_without_opaque`. It is the same PLT trap this module's sibling checks already
+  # record for `MapSet.member?/2` — see `Core.Notice`'s `@credential_keys` comment. Callers
+  # union the result into `:scheduled` themselves.
   defp schedule_each(symbols, interval_ms, start_delay_ms \\ 0) do
     count = max(MapSet.size(symbols), 1)
     spread = min(interval_ms, @first_sweep_ms)
@@ -735,5 +782,7 @@ defmodule DpExchange.Core.PollingFeed do
     |> Enum.each(fn {symbol, index} ->
       Process.send_after(self(), {:poll, symbol}, start_delay_ms + index * step)
     end)
+
+    symbols
   end
 end
