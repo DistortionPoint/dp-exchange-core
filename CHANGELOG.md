@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.32] - 2026-09-23
+
 ### Fixed
 
 - **`PollingFeed.start_link(sink: nil)` started, then crash-looped.** `:sink` is read with
