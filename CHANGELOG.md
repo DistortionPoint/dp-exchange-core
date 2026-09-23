@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.31] - 2026-09-23
+
 ### Added
 
 - **Assertion 27 — a forwarded nil is an absent option.** `subscribe/2` with `to: nil` must
