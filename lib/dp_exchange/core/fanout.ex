@@ -82,7 +82,7 @@ defmodule DpExchange.Core.Fanout do
   family has ever produced them at a rate that could bury a consumer.
   """
 
-  alias DpExchange.Core.Notice
+  alias DpExchange.Core.{Config, Notice}
 
   @typedoc """
   A subscriber as `subscribe/2` accepts one: a pid, or a registered name to resolve at
@@ -157,7 +157,20 @@ defmodule DpExchange.Core.Fanout do
   @spec deliver(Enumerable.t(), term(), MapSet.t(pid()), keyword()) ::
           {non_neg_integer(), MapSet.t(pid()), [transition()]}
   def deliver(subscribers, message, dropping, opts \\ []) do
-    max = Keyword.get(opts, :max_queue_len, default_max_queue_len())
+    # `Config.opt/3`, not `Keyword.get/3` — and deliberately NOT the same rule as
+    # `max_queue_len!/2` above, which refuses `nil` at `init/1`.
+    #
+    # Here a forwarded `max_queue_len: nil` got past `Keyword.get/3`'s default (it only
+    # substitutes for an ABSENT key) and became the bound itself. `queue_len >= nil` is always
+    # false under Erlang term ordering — an atom sorts above every integer — so no subscriber
+    # was ever found over its bound and **back-pressure switched itself off, silently**, on the
+    # hottest path in the family. Every venue passes its own validated bound so none has hit
+    # it; a direct caller of this public function could.
+    #
+    # The two answers differ because the costs do. At `init/1` a refusal is loud and costs a
+    # restart, so `max_queue_len!/2` refuses. Here, per message, the safe direction is the
+    # stated bound — an unbounded mailbox is the failure this module exists to prevent.
+    max = Config.opt(opts, :max_queue_len, default_max_queue_len())
 
     Enum.reduce(subscribers, {0, MapSet.new(), []}, fn subscriber, acc ->
       case delivery_pid(subscriber) do

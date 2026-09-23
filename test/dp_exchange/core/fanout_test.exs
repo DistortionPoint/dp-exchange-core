@@ -89,6 +89,25 @@ defmodule DpExchange.Core.FanoutTest do
     test "the default bound is stated, not implicit" do
       assert Fanout.default_max_queue_len() == 10_000
     end
+
+    test "a forwarded max_queue_len: nil keeps the default bound, not no bound at all" do
+      # `Keyword.get/3` substitutes its default only for an ABSENT key, so `max_queue_len: nil`
+      # became the bound itself, and `queue_len >= nil` is always false — an atom sorts above
+      # every integer. No subscriber was ever over its bound: back-pressure switched itself off
+      # without a word, on the path every venue's data flows through.
+      #
+      # `max_queue_len!/2` answers the same `nil` differently, by refusing at `init/1`, and the
+      # test above holds it to that. The costs differ: there a refusal is loud and costs a
+      # restart; here, per message, the safe direction is the stated bound.
+      subscriber = stalled_subscriber()
+      backlog(subscriber, Fanout.default_max_queue_len())
+
+      assert {0, dropping, [{^subscriber, :dropping, _len}]} =
+               Fanout.deliver([subscriber], :payload, MapSet.new(), max_queue_len: nil)
+
+      assert MapSet.member?(dropping, subscriber)
+      assert queue_len(subscriber) == Fanout.default_max_queue_len()
+    end
   end
 
   describe "transitions are reported once, not per dropped message" do

@@ -8,6 +8,21 @@
 defines what a venue package *is*, so a consumer can drive any venue through one identical
 facade and add a new one without editing anything outside its own repo.
 
+## A `nil` option means "not set", everywhere in the family
+
+Every package forwards `opts` unchanged through its layers, so if you build options with an
+explicit `nil` — `to: Application.get_env(:my_app, :recipient)` when nothing is configured —
+that `nil` arrives intact. It is treated as though the key were absent: `to: nil` delivers to
+the caller, `limiter: nil` means the venue's own limiter, and so on.
+
+It used to be read as the value itself, and `to: nil` was the worst of it: `subscribe/2`
+answered `:ok` and delivered to nobody, while the venue's fake raised instead.
+
+**Two exceptions, both deliberate.** `name: nil` keeps OTP's meaning — an unregistered
+process — because that is how you run several instances side by side. And
+`Fanout.max_queue_len!/2` refuses `max_queue_len: nil` at start rather than guessing a bound
+you may believe you configured.
+
 ## The one thing to understand first
 
 **Every venue package exposes the same facade, and nothing crosses it.** Transport, rate

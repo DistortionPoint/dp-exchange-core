@@ -48,7 +48,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @behaviour DpExchange.Core.Venue
 
-  alias DpExchange.Core.{CanonicalPair, Capabilities, Instrument, Notice, Types, Venue}
+  alias DpExchange.Core.{CanonicalPair, Capabilities, Config, Instrument, Notice, Types, Venue}
 
   # Longest-first, which is the whole point: reversed, `BTCUSDC` parses as `BTC-USD`.
   # Longest-first, and `BUSD` before `USD` is the ordering that matters: `BTCBUSD` ends
@@ -731,7 +731,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def subscribe(symbols, opts) do
-    target = Keyword.get(opts, :to, self())
+    target = Config.opt(opts, :to, self())
 
     # Pushed immediately, which is what a REST-only venue's internal poll would do on its
     # first tick. A caller cannot tell the difference, and that is the point.
@@ -807,7 +807,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def subscribe_notices(opts) do
-    target = Keyword.get(opts, :to, self())
+    target = Config.opt(opts, :to, self())
     send(target, {:dp_exchange, runtime_id(), Notice.new(:link_up, runtime_id())})
     :ok
   end

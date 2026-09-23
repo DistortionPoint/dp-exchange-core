@@ -21,6 +21,33 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 27 — a forwarded nil is an absent option.** `subscribe/2` with `to: nil` must
+  deliver to the caller: neither to nobody nor by raising. This family forwards `opts`
+  unchanged, so an option a caller's own caller never set arrives as `key: nil`, and
+  `Keyword.get/3` substitutes its default only for an absent key — the trap `Config.opt/3`'s
+  moduledoc says was closed "as a class". It had not closed everywhere.
+
+  Found on `:to` in all five venue packages at once, failing in OPPOSITE directions: the real
+  `Feed` put `nil` in its subscriber set and `Fanout.deliver/4` resolved it to nobody, so
+  `subscribe/2` answered `:ok` and data never arrived; the fakes raised on `send(nil, _)`. A
+  consumer's tier-1 tests could not have shown them the real behaviour even by accident.
+  Break-verified: reverting any of the four fakes that read `:to` fails it. Deliberately not
+  asserted for `:name`, where `nil` is OTP's own "do not register" rather than "unset".
+
+### Fixed
+
+- **`Fanout.deliver/4` with a forwarded `max_queue_len: nil` switched back-pressure off.**
+  `Keyword.get/3` handed `nil` on as the bound, and `queue_len >= nil` is always false — an
+  atom sorts above every integer — so no subscriber was ever over its bound, silently, on the
+  path every venue's data flows through. It now uses the stated default. `max_queue_len!/2`
+  deliberately still REFUSES `nil` at `init/1`, and its test holds it to that: there a
+  refusal is loud and costs a restart; here, per message, the safe direction is the bound.
+
+- **`ReferenceVenue.subscribe/2` raised on `to: nil`** — caught by assertion 27 on its first
+  run, the third time a new assertion has found a bug in Core's own worked example.
+
 ## [0.3.30] - 2026-09-23
 
 ### Fixed

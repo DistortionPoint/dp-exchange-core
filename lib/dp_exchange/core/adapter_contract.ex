@@ -113,7 +113,10 @@ defmodule DpExchange.Core.AdapterContract do
          "bid, and every level carries a real Decimal price"},
       {26,
        "subscription set semantics — subscribe/2 adds to the live set, update_symbols/2 " <>
-         "replaces it, unsubscribe/2 removes only what it names"}
+         "replaces it, unsubscribe/2 removes only what it names"},
+      {27,
+       "a forwarded nil is an absent option — subscribe/2 with `to: nil` delivers to the " <>
+         "caller, neither to nobody nor by raising"}
     ]
   end
 
@@ -141,6 +144,7 @@ defmodule DpExchange.Core.AdapterContract do
       balance_attribution(),
       order_book_ordering(),
       subscription_set_semantics(),
+      forwarded_nil(),
       helpers(),
       arg_helpers(),
       subscription_set_helpers(),
@@ -1845,6 +1849,62 @@ defmodule DpExchange.Core.AdapterContract do
                  "freshness is indistinguishable from a stale one"
 
         assert value.provider, "Balance.provider must say which venue answered"
+      end
+    end
+  end
+
+  defp forwarded_nil do
+    quote location: :keep do
+      # --- 27. a forwarded nil is an absent option -----------------------------
+
+      describe "27. a forwarded nil is an absent option" do
+        # This family forwards `opts` unchanged through every layer, by convention, so an
+        # option a caller's own caller never set arrives as `key: nil` rather than absent.
+        # `Keyword.get/3` substitutes its default only for an ABSENT key, and
+        # `DpExchange.Core.Config.opt/3` exists precisely because of that — its moduledoc
+        # records the trap closing "as a class". It had not closed everywhere.
+        #
+        # Found 2026-09-23 on `:to`, in all five packages at once, and the two halves failed
+        # in OPPOSITE directions. A real `Feed` put `nil` in its subscriber set, and
+        # `Core.Fanout.deliver/4` resolves `nil` the way it resolves any name nothing answers
+        # to — nobody — so `subscribe/2` answered `:ok` and data never arrived. The fakes
+        # called `send(nil, _)`, which raises. A consumer's tier-1 tests therefore could not
+        # have shown them the real behaviour, even by accident: the fake crashed where the
+        # venue went quiet.
+        #
+        # **What this does not catch, stated plainly:** the real feed. The suite drives
+        # fakes; each venue package holds a probe-based test of its own `Feed.subscribe/3`
+        # for the same line. This is the half that reaches a consumer's test suite.
+        #
+        # Deliberately NOT asserted for `:name`. There `nil` is not "unset" — it is OTP's own
+        # documented way to say "do not register this process", and every venue's test
+        # support starts unnamed feeds with it. The sweep that found `:to` converted `:name`
+        # too, and five test files went red at once; that is recorded so it is not tried
+        # again.
+        test "subscribe/2 with `to: nil` delivers to the caller, and does not raise" do
+          if @fake, do: assert_nil_recipient_is_the_caller(@fake, @sample_pairs)
+        end
+      end
+
+      defp assert_nil_recipient_is_the_caller(fake, pairs) do
+        opts = :opts |> arg_value({:subscribe, 2}) |> Keyword.put(:to, nil)
+
+        result =
+          try do
+            fake.subscribe(pairs, opts)
+          rescue
+            error -> {:raised, error}
+          end
+
+        refute match?({:raised, _error}, result),
+               "subscribe/2 raised on `to: nil`: #{inspect(result)}. A forwarded `nil` is a " <>
+                 "caller that said nothing, and nothing means the caller — resolve it with " <>
+                 "`DpExchange.Core.Config.opt/3`, not `Keyword.get/3`."
+
+        assert_receive {:dp_exchange, _venue, _payload},
+                       1_000,
+                       "subscribe/2 with `to: nil` delivered nothing to the caller. A `nil` " <>
+                         "subscriber is delivered to nobody, and answers `:ok` while doing it."
       end
     end
   end
