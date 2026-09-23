@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.30] - 2026-09-23
+
 ### Fixed
 
 - **A symbol removed and re-added stacked a second poll timer, permanently multiplying the
