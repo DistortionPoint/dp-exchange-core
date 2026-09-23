@@ -21,6 +21,21 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PollingFeed.start_link(sink: nil)` started, then crash-looped.** `:sink` is read with
+  `Keyword.fetch!/2`, which proves only that the key is present — `sink: nil` passes it. The
+  feed started cleanly and died with `{:badfun, nil}` on its first successful fetch, measured;
+  under a supervisor that restarts straight back into the same death, with a message naming
+  `apply_result/3` rather than the option that is wrong. It is the shape this module's
+  `init/1` already records for `:on_refusal`, arriving through the one required function the
+  `Config.opt/3` fix could not reach — a required option has no default to fall back to.
+
+  `init/1` now refuses a `:sink` that is not a one-arity function, and a `:fetch` or
+  `:fetch_all` that is present but not one, with `{:invalid_option, key, value}` — at start,
+  beside the existing `:no_fetcher` refusal. The existing test asked about an ABSENT sink; the
+  new ones ask about a present one.
+
 ## [0.3.31] - 2026-09-23
 
 ### Added

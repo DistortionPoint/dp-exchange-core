@@ -345,12 +345,31 @@ defmodule DpExchange.Core.PollingFeed do
       scheduled: MapSet.new()
     }
 
-    if is_nil(state.fetch) and is_nil(state.fetch_all) do
-      # Neither fetcher means a feed that would run forever delivering nothing,
-      # which is indistinguishable from a quiet venue. Refuse to start instead.
-      {:stop, :no_fetcher}
-    else
-      {:ok, start_polling(state)}
+    cond do
+      is_nil(state.fetch) and is_nil(state.fetch_all) ->
+        # Neither fetcher means a feed that would run forever delivering nothing,
+        # which is indistinguishable from a quiet venue. Refuse to start instead.
+        {:stop, :no_fetcher}
+
+      # **Checked here, at start, because the alternative was a crash loop.** `:sink` is
+      # read with `Keyword.fetch!/2`, which proves only that the KEY is present — `sink: nil`
+      # passes it. The feed then started cleanly and died with `{:badfun, nil}` on its first
+      # successful fetch, measured; under a supervisor that restarts straight back into the
+      # same death, with a message naming `apply_result/3` rather than the option that is
+      # wrong. It is the shape this module's own `init/1` comment records for `:on_refusal`,
+      # arriving through the one required function the `Config.opt/3` fix could not reach —
+      # a required option has no default to fall back to.
+      not is_function(state.sink, 1) ->
+        {:stop, {:invalid_option, :sink, state.sink}}
+
+      not (is_nil(state.fetch) or is_function(state.fetch, 1)) ->
+        {:stop, {:invalid_option, :fetch, state.fetch}}
+
+      not (is_nil(state.fetch_all) or is_function(state.fetch_all, 1)) ->
+        {:stop, {:invalid_option, :fetch_all, state.fetch_all}}
+
+      true ->
+        {:ok, start_polling(state)}
     end
   end
 

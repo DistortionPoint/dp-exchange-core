@@ -38,6 +38,32 @@ defmodule DpExchange.Core.PollingFeedTest do
       Process.flag(:trap_exit, true)
       assert {:error, {%KeyError{key: :sink}, _stack}} = PollingFeed.start_link(fetch: & &1)
     end
+
+    test "a PRESENT but nil sink is refused at start, not at the first delivery" do
+      # The test above asks about an ABSENT sink, and `Keyword.fetch!/2` catches that. It
+      # does not catch `sink: nil`, which is what a forwarded option its caller never set
+      # looks like — the key is present. The feed started cleanly and then died with
+      # `{:badfun, nil}` on its first successful fetch: measured, and under a supervisor a
+      # restart loop straight back into the same death, naming `apply_result/3` instead of
+      # the option that is wrong.
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:invalid_option, :sink, nil}} =
+               PollingFeed.start_link(sink: nil, fetch: & &1, symbols: ["A"])
+
+      assert {:error, {:invalid_option, :sink, :not_a_function}} =
+               PollingFeed.start_link(sink: :not_a_function, fetch: & &1)
+    end
+
+    test "a fetcher that is present but not a one-arity function is refused at start" do
+      Process.flag(:trap_exit, true)
+
+      assert {:error, {:invalid_option, :fetch, "nope"}} =
+               PollingFeed.start_link(sink: sink_to_self(), fetch: "nope")
+
+      assert {:error, {:invalid_option, :fetch_all, _two_arity}} =
+               PollingFeed.start_link(sink: sink_to_self(), fetch_all: fn _a, _b -> :ok end)
+    end
   end
 
   describe "bulk mode (:fetch_all)" do
