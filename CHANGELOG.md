@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.33] - 2026-09-24
+
 ### Added
 
 - **Assertion 5 has a check of its own.** It was listed — "return types — Core.Types.* with
