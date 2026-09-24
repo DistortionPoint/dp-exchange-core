@@ -228,7 +228,27 @@ defmodule DpExchange.Core.ReferenceVenue do
         {:error, {:unsupported_timeframe, timeframe}}
 
       true ->
-        {:ok, [elem(get_price(symbol, []), 1)]}
+        # **A `Candle`, not a `Quote`.** This returned `[elem(get_price(symbol, []), 1)]` — a
+        # one-element list holding a `Types.Quote` — from a callback `Core.Venue` types as
+        # `result([Types.Candle.t()])`. A consumer reading `bar.open` or `bar.opened_at` off
+        # the worked example every venue author copies got a struct that has neither. Caught
+        # by assertion 5 on its first run, once 5 had a check of its own.
+        {:ok, %Types.Quote{price: price, venue_time: at}} = get_price(symbol, [])
+
+        {:ok,
+         [
+           %Types.Candle{
+             symbol: symbol,
+             timeframe: timeframe,
+             opened_at: at,
+             open: price,
+             high: price,
+             low: price,
+             close: price,
+             volume: nil,
+             provider: runtime_id()
+           }
+         ]}
     end
   end
 

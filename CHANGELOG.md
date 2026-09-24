@@ -21,6 +21,32 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Assertion 5 has a check of its own.** It was listed — "return types — Core.Types.* with
+  Decimal numerics and DateTime timestamps" — and described as cross-cutting, and the parts
+  other groups checked were real: Decimal prices in 14, DateTime times in 23, an attributed
+  Balance in 24. Nothing asked what 5 actually states: does an active endpoint answer with
+  the `Core.Types` struct its `Core.Venue` callback promises?
+
+  Found in `dp_exchange_schwab`, whose `get_order/3` and `get_orders/2` — typed
+  `result(Types.Order.t())` — returned the venue's raw JSON map. So did its fake, which is the
+  only thing this suite drives, so nothing here could see it.
+
+  **The expectation is read from `Core.Venue`'s own `@callback` specs** by the new public
+  `promised_types/0`, using `Code.Typespec.fetch_callbacks/1` — not written as a table, so a
+  callback added later is checked the day it is added and the list cannot drift from the
+  contract it restates. 44 of the 88 callbacks promise a `Core.Types` struct. A success of the
+  wrong kind fails: a raw map, or a list holding anything but the promised struct. Refusals
+  are left to assertions 6 and 12. Break-verified: putting schwab's fake back to a raw map
+  fails it, by name. Verified against all five venue packages on a path dep.
+
+### Fixed
+
+- **`ReferenceVenue.get_historical_prices/4` returned a `Quote`, not a `Candle`** — caught by
+  assertion 5 on its first run, the fourth time a new assertion has found a bug in Core's own
+  worked example.
+
 ## [0.3.32] - 2026-09-23
 
 ### Fixed

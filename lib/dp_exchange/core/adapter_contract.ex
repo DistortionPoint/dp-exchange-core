@@ -120,6 +120,40 @@ defmodule DpExchange.Core.AdapterContract do
     ]
   end
 
+  @doc """
+  The `Core.Types` struct(s) each `Core.Venue` callback's success is typed as, read from the
+  behaviour's own `@callback` specs.
+
+  Returns `%{{name, arity} => [module]}` for every callback whose success type names a
+  `DpExchange.Core.Types.*` struct, and omits the rest. Read from the compiled specs rather
+  than written as a table, so it cannot drift from the contract it restates. Used by
+  assertion 5.
+  """
+  @spec promised_types() :: %{{atom(), non_neg_integer()} => [module()]}
+  def promised_types do
+    {:ok, callbacks} = Code.Typespec.fetch_callbacks(DpExchange.Core.Venue)
+
+    for {{name, arity}, [{:type, _line, :fun, [_args, result]} | _rest]} <- callbacks,
+        modules = core_types_in(result),
+        modules != [],
+        into: %{},
+        do: {{name, arity}, modules}
+  end
+
+  defp core_types_in(
+         {:remote_type, _line, [{:atom, _module_line, module}, {:atom, _t_line, :t}, []]}
+       ) do
+    if String.starts_with?(inspect(module), "DpExchange.Core.Types."), do: [module], else: []
+  end
+
+  defp core_types_in(ast) when is_tuple(ast),
+    do: ast |> Tuple.to_list() |> core_types_in() |> Enum.uniq()
+
+  defp core_types_in(ast) when is_list(ast),
+    do: ast |> Enum.flat_map(&core_types_in/1) |> Enum.uniq()
+
+  defp core_types_in(_leaf), do: []
+
   @doc false
   defmacro __using__(opts) do
     [
@@ -145,6 +179,7 @@ defmodule DpExchange.Core.AdapterContract do
       order_book_ordering(),
       subscription_set_semantics(),
       forwarded_nil(),
+      return_types(),
       helpers(),
       arg_helpers(),
       subscription_set_helpers(),
@@ -1850,6 +1885,73 @@ defmodule DpExchange.Core.AdapterContract do
 
         assert value.provider, "Balance.provider must say which venue answered"
       end
+    end
+  end
+
+  defp return_types do
+    quote location: :keep do
+      # --- 5. return types -----------------------------------------------------
+
+      describe "5. return types" do
+        # **Assertion 5 was listed and had no check of its own.** `assertions/0` described it
+        # as cross-cutting — "several groups each check part of" it — and they did check
+        # parts: prices are Decimals in 14, times are DateTimes in 23, a Balance names its
+        # asset in 24. Nothing asked the question the entry actually states: does an active
+        # endpoint answer with the `Core.Types` struct its `Core.Venue` callback promises?
+        #
+        # Found 2026-09-24 in `dp_exchange_schwab`: `get_order/3` and `get_orders/2`, typed
+        # `result(Types.Order.t())`, returned the venue's raw JSON map — and so did its fake,
+        # which is the only thing this suite drives, so no assertion here could see it. Two
+        # of that package's own tests had pinned the raw map.
+        #
+        # **The expectation comes from `Core.Venue`'s own `@callback` specs**, read with
+        # `Code.Typespec.fetch_callbacks/1`, not from a table here — so a callback added later
+        # is checked the day it is added, and a table cannot drift from the contract it
+        # restates. Of the 88 callbacks, those whose success type names a `Core.Types` struct
+        # are checked; an answer that is not `{:ok, _}` is left to the assertions that own
+        # refusals (6 and 12). What fails is a success of the wrong kind: a raw map, or a list
+        # holding anything but the promised struct.
+        #
+        # **What this does not catch, stated plainly:** the real venue. The suite drives
+        # fakes; a fake that decodes through the same function as its real facade — the fix
+        # `dp_exchange_schwab` made — is what carries the guarantee across.
+        test "an active endpoint answers with the Core.Types struct its callback promises" do
+          if @fake, do: assert_promised_types(@fake, @venue)
+        end
+      end
+
+      defp assert_promised_types(fake, venue) do
+        caps = venue.capabilities()
+
+        violations =
+          for {{name, arity}, modules} <- DpExchange.Core.AdapterContract.promised_types(),
+              Capabilities.active?(caps, {name, arity}),
+              result = call_on(fake, {name, arity}, endpoint_args(name, arity)),
+              violation = wrong_type(result, modules),
+              violation != nil do
+            "  #{name}/#{arity} promises #{inspect(modules)} and answered #{violation}"
+          end
+
+        assert violations == [],
+               "success answers that are not the Core.Types struct Core.Venue promises — a " <>
+                 "consumer matching the struct, or reading its fields, breaks on this venue " <>
+                 "only:\n" <> Enum.join(violations, "\n")
+      end
+
+      defp wrong_type({:ok, %module{}}, modules),
+        do: if(module in modules, do: nil, else: inspect(module))
+
+      defp wrong_type({:ok, list}, modules) when is_list(list) do
+        Enum.find_value(list, fn
+          %module{} -> if module in modules, do: nil, else: "a list containing #{inspect(module)}"
+          other -> "a list containing #{other |> inspect() |> String.slice(0, 60)}"
+        end)
+      end
+
+      defp wrong_type({:ok, %{} = raw}, _modules),
+        do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
+
+      defp wrong_type(_not_a_success, _modules), do: nil
     end
   end
 

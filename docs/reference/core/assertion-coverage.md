@@ -629,3 +629,16 @@ capability-derived collection the suite iterates is non-empty on every venue
 `Core.Config`'s own process-scoped overrides, which fail the moment that mechanism does.
 Recording the negative result so the next audit does not re-run these thirty experiments.
 
+### A listed assertion with no check — assertion 5, 2026-09-23
+
+A fourth failure shape, after "exists", "runs" and "can fail": **listed and never checked.**
+Assertion 5 sat in `assertions/0`, and the meta-test pinning which listed groups have no
+describe of their own called it cross-cutting — "several groups each check part of" it. The
+parts were real. The claim the entry states was checked nowhere, and
+`dp_exchange_schwab`'s `get_order/3` returned raw JSON maps, fake included, under a
+callback typed `result(Types.Order.t())`.
+
+It now has its own describe, and reads the promise from `Core.Venue`'s `@callback` specs
+rather than from a table. The lesson for this file: "cross-cutting" is a claim like any other.
+Before accepting it for a listed group, find the check that states what the entry states.
+

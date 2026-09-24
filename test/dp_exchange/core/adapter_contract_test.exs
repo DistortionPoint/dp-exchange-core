@@ -63,17 +63,25 @@ defmodule DpExchange.Core.AdapterContractTest do
                inspect(numbers)
     end
 
-    test "a listed group without its own describe is deliberate, and these are the four" do
+    test "a listed group without its own describe is deliberate, and these are the three" do
       # The reverse direction is NOT asserted, because the mapping is deliberately not 1:1
       # and pinning it would make the list harder to write honestly rather than easier.
       #
-      #   * 5 (return types) and 9 (fake fidelity) are cross-cutting: several groups each
-      #     check part of them, and no single describe owns either.
+      #   * 9 (fake fidelity) is cross-cutting: several groups each check part of it, and no
+      #     single describe owns it.
+      #
+      # **5 (return types) was on this list, and that was the gap.** It was called
+      # cross-cutting too — and the parts other groups checked were real, but none asked what
+      # 5 states: does an endpoint answer with the `Core.Types` struct its callback promises?
+      # `dp_exchange_schwab`'s `get_order/3` and `get_orders/2` returned raw JSON maps, fake
+      # included, and nothing here could see it. 5 now has its own describe, reading the
+      # promise from `Core.Venue`'s `@callback` specs. A group on this list is one whose
+      # check lives elsewhere; "cross-cutting" is worth checking is actually true.
       #   * 6 (error discipline) is checked inside group 12's describe — `{:error,
       #     :not_supported}` as the atom, in both directions against `capabilities/0`.
       #   * 10 (facade completeness and exclusivity) is checked inside group 1's.
       #
-      # Pinned so that if one of the four later grows its own describe, or stops being
+      # Pinned so that if one of the three later grows its own describe, or stops being
       # covered where it is, this test is where the next reader finds out what was intended.
       listed = DpExchange.Core.AdapterContract.assertions() |> Enum.map(&elem(&1, 0))
 
@@ -88,7 +96,7 @@ defmodule DpExchange.Core.AdapterContractTest do
           end
         end)
 
-      assert Enum.sort(listed -- Enum.uniq(running)) == [5, 6, 9, 10]
+      assert Enum.sort(listed -- Enum.uniq(running)) == [6, 9, 10]
     end
   end
 end
