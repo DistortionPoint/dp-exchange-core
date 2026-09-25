@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.35] - 2026-09-25
+
 ### Documentation
 
 - **`get_trades` and `get_trade_history` are documented as oldest first, by
