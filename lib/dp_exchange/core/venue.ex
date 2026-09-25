@@ -202,6 +202,12 @@ defmodule DpExchange.Core.Venue do
   The venue rejects a timeframe it does not serve rather than substituting the nearest
   one. A missing granularity silently becoming the closest one mislabels every candle it
   touches, and every value stays plausible.
+
+  **Oldest first, ordered by each candle's own `opened_at`**, never by the order the venue's
+  rows arrived in. Venues disagree on the order they send, and several do not document it at
+  all. A series read in the wrong order still yields plausible returns and indicators, just
+  wrong ones. A venue that has only one candle, or none, satisfies this trivially, which
+  is why the conformance suite does not check it against a fake that answers with one.
   """
   @callback get_historical_prices(symbol(), String.t(), keyword(), keyword()) ::
               result([Types.Candle.t()])

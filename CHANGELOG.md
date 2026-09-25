@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`get_historical_prices` is documented as oldest first, by `opened_at`.** Every venue
+  that serves candles already sorted this way except Schwab, which does from
+  `dp_exchange_schwab` 0.2.53. It is stated in the callback's doc and not added as a
+  conformance assertion, because the venue fakes answer with at most one candle, which
+  satisfies any ordering. That check would run without being able to fail.
+
 ## [0.3.33] - 2026-09-24
 
 ### Added
