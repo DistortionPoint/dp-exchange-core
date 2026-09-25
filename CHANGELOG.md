@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.34] - 2026-09-25
+
 ### Documentation
 
 - **`get_historical_prices` is documented as oldest first, by `opened_at`.** Every venue
