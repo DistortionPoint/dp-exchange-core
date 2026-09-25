@@ -638,6 +638,11 @@ defmodule DpExchange.Core.Venue do
 
   `opts[:since]` and `opts[:limit]` narrow the window where a venue supports them, and go
   to the venue rather than being applied to the page it returned.
+
+  **Oldest first, by each trade's own `:timestamp`**, as `get_historical_prices` is, and
+  for the same reason. Venues send the tape newest first, oldest first, or without saying,
+  and `List.last/1` meaning "the latest print" on one venue and "the oldest" on another is
+  a wrong answer that raises nothing. Trades with the same timestamp keep the venue's order.
   """
   @callback get_trades(symbol(), keyword()) :: result([Types.Trade.t()])
 
@@ -853,7 +858,11 @@ defmodule DpExchange.Core.Venue do
   @doc "Orders visible to the credential."
   @callback get_orders(credentials(), keyword()) :: result([Types.Order.t()])
 
-  @doc "Past fills for the credential."
+  @doc """
+  Past fills for the credential.
+
+  **Oldest first, by each fill's own `:timestamp`**, as `get_trades/2` is.
+  """
   @callback get_trade_history(credentials(), keyword()) :: result([Types.Fill.t()])
 
   @doc """

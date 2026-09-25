@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`get_trades` and `get_trade_history` are documented as oldest first, by
+  `:timestamp`**, as `get_historical_prices` is. No venue ordered them before.
+  `dp_exchange_coinbase` 0.3.50, `dp_exchange_gemini` 0.2.55 and `dp_exchange_webull`
+  0.4.68 now sort them, keeping the venue's own order for equal timestamps. As with the
+  candle rule, there is no conformance assertion, because the fakes answer with one trade
+  at most.
+
 ## [0.3.34] - 2026-09-25
 
 ### Documentation
