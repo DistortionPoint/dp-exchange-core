@@ -340,8 +340,6 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   the assertion. Written up there as "Third axis", with the question for the next audit:
   *what would I change to make this fail?*
 
-### Fixed
-
 - **`DefaultRateLimiter` accepted a `limit: 0` and then died on the first request.** `:limit`
   is the divisor in the GCRA arithmetic, so a zero reached `div(_, 0)` and raised `:badarith`
   **inside the limiter's `GenServer`, on the first call** — the exact crash loop that
@@ -402,8 +400,6 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
 
   **The spec widens to `Decimal.t() | nil`.** Valid input is unchanged. Nobody can have been
   relying on the raise, and `nil` in place of a NaN rate is both detectable and correct.
-
-### Fixed
 
 - **`CanonicalPair.to_exchange/2` appended the venue's separator to a symbol that had no
   quote part.** `"AAPL"` came back `"AAPL-"`, and `""` came back `"-"`. It built
@@ -1331,7 +1327,6 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   Also in `usage-rules/adapter.md`, since a venue author reads that before writing a
   declaration.
 
-
 ## [0.2.3] - 2026-09-10
 
 ### Fixed
@@ -1367,7 +1362,6 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   The issue measured five packages, from their `deps/`. `dp_exchange_schwab` has the same
   defect and is not one of their dependencies, so it could not appear in their table: six
   instances, all fixed here.
-
 
 ## [0.2.2] and earlier - 2026-09-10
 
@@ -3270,6 +3264,7 @@ the last block that will ever need a range.
 ## [0.1.11] - 2026-08-31
 
 ### Fixed
+
 - **The conformance suite refused `1w` and `1M` too.** `Capabilities.validate_history!/1`
   was fixed in 0.1.10 to check `Timeframe.nameable/0`, but `AdapterContract`'s assertion 2
   still checked `known/0` — so a venue serving weekly or monthly candles built its
@@ -3280,6 +3275,7 @@ the last block that will ever need a range.
 ## [0.1.10] - 2026-08-31
 
 ### Added
+
 - `Timeframe.nameable/0` and `Timeframe.nameable?/1` — the widths Core can read as a
   **label**, which is deliberately wider than `known/0`, the widths it can **bucket**.
   `1w` and `1M` are nameable and have no boundary rule, and never will: a weekly bar's
@@ -3295,6 +3291,7 @@ the last block that will ever need a range.
   `supports_margin: false`, which is false, or to invent a multiplier.
 
 ### Fixed
+
 - `Capabilities` no longer refuses a venue that serves weekly or monthly candles.
   `validate_history!/1` checked `historical_timeframes` against `Timeframe.known()`,
   which is the set Core can *bucket* — so declaring `1w` raised, even though
@@ -3316,6 +3313,7 @@ the last block that will ever need a range.
 ## [0.1.9] - 2026-08-28
 
 ### Fixed
+
 - `HttpClient.request/5`'s spec no longer advertises `{:error, :rate_limited,
   retry_after: seconds}`. **It never returned it.** Both rate-limit paths convert to a
   two-element error before returning, each deliberately and for a recorded reason — a
@@ -3327,6 +3325,7 @@ the last block that will ever need a range.
   a caller's correct handling of the advertised shape as unreachable dead code.
 
 ### Added
+
 - `HttpClient` accepts `raw_status: true`, returning `{:ok, response}` for a 4xx instead
   of flattening status and body into a message string. The contract makes
   `{:refused, reason}` permanent and `{:error, reason}` possibly transient, and a venue
@@ -3347,3 +3346,4 @@ the last block that will ever need a range.
   lets anything through.
 - Repo foundation: toolchain pin, `.gitignore`, formatter, credo, license, `mix.exs`,
   config layout, CI workflow, design-docs scaffolding.
+
