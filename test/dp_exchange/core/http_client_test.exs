@@ -205,6 +205,23 @@ defmodule DpExchange.Core.HttpClientTest do
                ])
     end
 
+    test "a negative reset is nil, and answers at once rather than hanging" do
+      # Every value at or below one year used to be treated as a delta and handed to
+      # `DateTime.add/3`, negatives included. `DateTime.add/3` computes a date for any
+      # offset, and for one this large that took longer than 4 seconds in the calling
+      # process, on a request that had already succeeded.
+      task =
+        Task.async(fn ->
+          HttpClient.parse_rate_limit_headers([
+            {"X-RateLimit-Limit", "100"},
+            {"X-RateLimit-Remaining", "37"},
+            {"X-RateLimit-Reset", "-99999999999999999999999"}
+          ])
+        end)
+
+      assert {:ok, %{limit: 100, remaining: 37, reset_time: nil}} = Task.yield(task, 1_000)
+    end
+
     test "a reset value outside the representable range is nil, not a raise" do
       # `DateTime.from_unix!/1` RAISES on an out-of-range value, and this ran on every
       # response. A venue moving its reset header from seconds to milliseconds — ordinary

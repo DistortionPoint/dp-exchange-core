@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A negative `x-ratelimit-reset` header no longer stalls the calling process.**
+  `parse_rate_limit_headers/1` runs on every response. It treated any value at or below
+  one year as a delta in seconds, negatives included, and passed it to `DateTime.add/3`.
+  That function computes a date for any offset, and for an extreme one it took longer
+  than 4 seconds (measured 2026-09-27 at 10^20, 10^22 and 10^24 seconds). A negative reset
+  now answers `reset_time: nil`, the same answer an unreadable reset already gives.
+
 ## [0.3.36] - 2026-09-27
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

@@ -326,10 +326,19 @@ defmodule DpExchange.Core.HttpClient do
   # timestamp, and nothing in the header says which. A value below one year of seconds
   # cannot be a plausible unix timestamp, so it is a delta. An unparseable value returns
   # `nil` rather than a guessed instant.
+  #
+  # **A negative value is not a delta either.** Everything at or below one year used to go to
+  # `DateTime.add/3`, and that included any negative number. `DateTime.add/3` does not refuse
+  # an offset outside the calendar's range: it computes the date. Past about 10^20 seconds
+  # that took longer than 4 seconds (measured 2026-09-27, three offsets, each killed at the
+  # 4-second limit). So one header such as `x-ratelimit-reset: -99999999999999999999999`
+  # stalled the calling process on a request that had already succeeded. A reset in the past
+  # says nothing a caller can wait for, so it is `nil`.
   defp parse_reset(headers) do
     case fetch_integer(headers, "x-ratelimit-reset") do
       {:ok, value} when value > 31_536_000 -> absolute_reset(value)
-      {:ok, value} -> DateTime.add(DateTime.utc_now(), value, :second)
+      {:ok, value} when value >= 0 -> DateTime.add(DateTime.utc_now(), value, :second)
+      {:ok, _negative} -> nil
       :error -> nil
     end
   end
