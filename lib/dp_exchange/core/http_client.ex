@@ -106,7 +106,8 @@ defmodule DpExchange.Core.HttpClient do
   - `opts`: Additional options including rate limiting context
 
   ## Options
-  - `:timeout` - Request timeout in milliseconds (default: 30_000)
+  - `:timeout` - Request timeout in milliseconds (default: 30_000). It bounds the whole
+    response, not each chunk, and it applies to each attempt when `:retry_attempts` retries.
   - `:retry_attempts` - Number of retry attempts (default: 3)
   - `:retry_delay` - Base delay between retries in milliseconds (default: 1000)
   - `:log_requests` - Whether to log requests (default: true)
@@ -518,7 +519,15 @@ defmodule DpExchange.Core.HttpClient do
 
     request_opts =
       [
+        # `:timeout` is documented as the REQUEST timeout, and `receive_timeout` alone is not
+        # one. It is Finch's per-chunk timer: every chunk that arrives restarts it. A response
+        # that trickles in, whether from a venue, a proxy or a degraded link, kept a facade
+        # call running without limit. A test measured it: a 300 ms request fed one byte every
+        # 100 ms was still running at 3 s (2026-09-27). `request_timeout` is Finch's
+        # whole-response timer, and it defaults to `:infinity`. Finch documents it as
+        # best-effort and HTTP/1-only, and every venue here is reached over HTTP/1.
         receive_timeout: timeout,
+        request_timeout: timeout,
         connect_options: [timeout: timeout],
         # Retry is this module's job, not Req's — it needs the venue's `Retry-After`
         # and the rate-limit context, neither of which Req has.

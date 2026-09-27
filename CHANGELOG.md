@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`:timeout` now bounds the whole request, as its doc always said.** It was passed only
+  as Finch's `receive_timeout`, which restarts on every chunk. A response that trickled in,
+  from a slow venue, a proxy or a degraded link, kept a facade call running without limit.
+  A test measured it: a request with a 300 ms timeout, fed one byte every 100 ms, was
+  still running at 3 s. `:timeout` is now also passed as Finch's `request_timeout`, the
+  whole-response timer, which defaulted to `:infinity`. Every venue package reaches its
+  venue through this client, so this covers all of them.
+
 ## [0.3.37] - 2026-09-27
 
 ### Fixed

@@ -676,4 +676,50 @@ defmodule DpExchange.Core.HttpClientTest do
       assert message =~ "Request"
     end
   end
+
+  describe ":timeout bounds the whole request, not each chunk" do
+    # A local socket on 127.0.0.1 that answers with headers promising a body, then drips one
+    # byte of it every 100 ms. `receive_timeout` is Finch's per-chunk timer, so each byte
+    # restarted it and a request "bounded" at 300 ms never finished. Finch's
+    # `request_timeout` is the whole-response timer, and it defaults to `:infinity`.
+    test "a response that trickles in is cut off at :timeout" do
+      use_stub()
+      {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listener)
+
+      server =
+        spawn_link(fn ->
+          {:ok, socket} = :gen_tcp.accept(listener)
+          {:ok, _request} = :gen_tcp.recv(socket, 0)
+          :ok = :gen_tcp.send(socket, "HTTP/1.1 200 OK\r\ncontent-length: 10000\r\n\r\n")
+          drip = fn drip -> :gen_tcp.send(socket, "x") && Process.sleep(100) && drip.(drip) end
+
+          try do
+            drip.(drip)
+          catch
+            _kind, _reason -> :ok
+          end
+        end)
+
+      started = System.monotonic_time(:millisecond)
+
+      task =
+        Task.async(fn ->
+          HttpClient.request(:get, "http://127.0.0.1:#{port}/", [], nil,
+            provider: "test",
+            timeout: 300,
+            retry_attempts: 1
+          )
+        end)
+
+      assert {:ok, {:error, _reason}} =
+               Task.yield(task, 3_000) || Task.shutdown(task, :brutal_kill)
+
+      assert System.monotonic_time(:millisecond) - started < 2_000
+
+      Process.unlink(server)
+      Process.exit(server, :kill)
+      :gen_tcp.close(listener)
+    end
+  end
 end
