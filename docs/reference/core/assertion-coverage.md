@@ -642,3 +642,24 @@ It now has its own describe, and reads the promise from `Core.Venue`'s `@callbac
 rather than from a table. The lesson for this file: "cross-cutting" is a claim like any other.
 Before accepting it for a listed group, find the check that states what the entry states.
 
+
+### Assertion 28 — the real facade, down the one path that is safe at tier 1, 2026-09-27
+
+Every other streaming assertion drives the fake, and the fake has no feed to be missing. So
+nothing in the suite could see a facade that exits the caller when its feed is not running,
+and three of five did. Each sent `subscribe/2`, `unsubscribe/2`, `update_symbols/2` and
+`subscribe_notices/1` into `Feed` with a bare `GenServer.call/3`. `dp_exchange_schwab` and
+`dp_exchange_robinhood` already answered `{:error, :feed_not_started}`.
+
+The no-feed path is the one place the real facade can be called at tier 1: it starts nothing
+and sends nothing. Assertion 28 calls it with `absent_feed_opts:` (default
+`feed: :dp_exchange_contract_absent_feed`) and requires a value back.
+
+**Can it fail?** Yes, measured. `dp_exchange_coinbase`'s contract test, with this suite
+dropped into its `deps/`: 1 failure on the facade before its fix, 0 after.
+
+**What it does not reach:** a busy feed's `:timeout`, which needs a whole call budget to
+observe, and the real `Feed`'s set arithmetic behind assertion 26. The same day found
+`dp_exchange_robinhood`'s facade rebuilding its polled set from `coverage/1`, so a second
+`subscribe/2` dropped symbols not yet delivering. That needs a running feed, and stays in
+that package's own tests.

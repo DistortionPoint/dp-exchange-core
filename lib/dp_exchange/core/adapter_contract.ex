@@ -116,7 +116,11 @@ defmodule DpExchange.Core.AdapterContract do
          "replaces it, unsubscribe/2 removes only what it names"},
       {27,
        "a forwarded nil is an absent option — subscribe/2 with `to: nil` delivers to the " <>
-         "caller, neither to nobody nor by raising"}
+         "caller, neither to nobody nor by raising"},
+      {28,
+       "a streaming call answers when no feed is running — subscribe/2, unsubscribe/2, " <>
+         "update_symbols/2, subscribe_notices/1 and coverage/1 return a value, never an " <>
+         "exit in the caller"}
     ]
   end
 
@@ -179,6 +183,7 @@ defmodule DpExchange.Core.AdapterContract do
       order_book_ordering(),
       subscription_set_semantics(),
       forwarded_nil(),
+      feed_absent(),
       return_types(),
       helpers(),
       arg_helpers(),
@@ -228,6 +233,15 @@ defmodule DpExchange.Core.AdapterContract do
       # facts, and a lookup table of them here would be exactly the venue-specific knowledge
       # this contract is built to keep out of Core. The venue declares its own.
       @endpoint_opts Keyword.get(opts, :endpoint_opts, %{})
+
+      # The options that point the venue's streaming calls at a feed nothing registered.
+      # Assertion 28 drives the REAL facade with them, not the fake, and only down the
+      # no-feed path, so nothing starts and nothing reaches the network. `:feed` is the key
+      # all five packages read when this was written. A venue that names its feed another
+      # way passes its own.
+      @absent_feed_opts Keyword.get(opts, :absent_feed_opts,
+                          feed: :dp_exchange_contract_absent_feed
+                        )
 
       # Per-endpoint sample symbol, as `%{{name, arity} => symbol}`, for the endpoint whose
       # coverage is narrower than `sample_pairs:`. Empty for a venue where one symbol suits
@@ -1952,6 +1966,54 @@ defmodule DpExchange.Core.AdapterContract do
         do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
 
       defp wrong_type(_not_a_success, _modules), do: nil
+    end
+  end
+
+  defp feed_absent do
+    quote location: :keep do
+      # --- 28. a streaming call answers when no feed is running ------------------------
+
+      describe "28. a streaming call answers when no feed is running" do
+        # Every streaming callback is specified to return a value: `:ok | {:error, term()}`,
+        # or a map. Found 2026-09-27: three of five venues sent these calls into their feed
+        # with a bare `GenServer.call/3`, which EXITS the caller, with `:noproc` when no feed
+        # is running and with `:timeout` when a feed is too busy. The other two answered
+        # `{:error, :feed_not_started}`, so the same consumer code survived on two venues and
+        # crashed on three. That is the drift this suite exists to catch.
+        #
+        # **Unlike every other streaming assertion here, this drives the real facade.** The
+        # fake has no feed to be missing. The no-feed path starts nothing and sends nothing,
+        # so it is safe at tier 1. **What this does not catch:** a busy feed's `:timeout`,
+        # which needs a feed's whole call budget to observe. Each venue's own facade test
+        # holds a feed that dies mid-call, which goes through the same `catch`.
+        test "with no feed running, every streaming call returns a value" do
+          for {name, arity, call} <- [
+                {:subscribe, 2, fn -> @venue.subscribe(@sample_pairs, @absent_feed_opts) end},
+                {:unsubscribe, 2, fn -> @venue.unsubscribe(@sample_pairs, @absent_feed_opts) end},
+                {:update_symbols, 2,
+                 fn -> @venue.update_symbols(@sample_pairs, @absent_feed_opts) end},
+                {:subscribe_notices, 1, fn -> @venue.subscribe_notices(@absent_feed_opts) end},
+                {:coverage, 1, fn -> @venue.coverage(@absent_feed_opts) end}
+              ],
+              function_exported?(@venue, name, arity) do
+            result =
+              try do
+                call.()
+              catch
+                kind, reason -> {:escaped, kind, reason}
+              end
+
+            refute match?({:escaped, _kind, _reason}, result),
+                   "#{name}/#{arity} with no feed running #{inspect(result)}. A streaming " <>
+                     "call returns a value; wrap the call into the feed and answer " <>
+                     "`{:error, :feed_not_started}` rather than exiting the caller."
+
+            assert result == :ok or match?({:error, _reason}, result) or is_map(result),
+                   "#{name}/#{arity} with no feed running answered #{inspect(result)}, " <>
+                     "which is not a value its callback allows."
+          end
+        end
+      end
     end
   end
 

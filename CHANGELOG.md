@@ -21,6 +21,18 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance assertion 28: a streaming call answers when no feed is running.**
+  `subscribe/2`, `unsubscribe/2`, `update_symbols/2`, `subscribe_notices/1` and
+  `coverage/1` must return a value, never exit the caller. On 2026-09-27 three of five
+  venues exited `:noproc` there while two answered `{:error, :feed_not_started}`, so the
+  same consumer code survived on two venues and crashed on three. Unlike the other
+  streaming assertions, this drives the real facade, down the no-feed path only, so it
+  starts nothing and reaches no network. A venue that does not select its feed with
+  `:feed` passes its own `absent_feed_opts:`. Checked against `dp_exchange_coinbase`: it
+  fails on the facade before the fix and passes after.
+
 ## [0.3.39] - 2026-09-27
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._
