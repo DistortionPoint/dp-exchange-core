@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.37] - 2026-09-27
+
 ### Fixed
 
 - **A negative `x-ratelimit-reset` header no longer stalls the calling process.**
