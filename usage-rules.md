@@ -272,6 +272,12 @@ name** rather than sending a request the venue will reject less clearly.
 An option a package does not recognise is ignored, not an error — a consumer moving between
 venues carries options only one of them reads.
 
+**`timeout:` bounds a whole response, per attempt.** Every package makes its HTTP calls
+through `DpExchange.Core.HttpClient`, where `:timeout` (default 30 s) now caps the entire
+response, not each chunk of it (since 0.3.38). Before that, a response that trickled in
+never timed out. With retries on, a call can take up to `retry_attempts` times this, plus
+backoff.
+
 ## Money movement is its own subject
 
 One group of callbacks moves funds, one of them cannot be undone by anyone, and none of it is
