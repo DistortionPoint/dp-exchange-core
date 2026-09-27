@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.38] - 2026-09-27
+
 ### Fixed
 
 - **`:timeout` now bounds the whole request, as its doc always said.** It was passed only
