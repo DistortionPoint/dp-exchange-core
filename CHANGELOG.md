@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.40] - 2026-09-27
+
 ### Added
 
 - **Conformance assertion 28: a streaming call answers when no feed is running.**
