@@ -77,7 +77,13 @@ defmodule DpExchangeCore.MixProject do
       # not `optional: true`. Transport is venue-owned (D12, D20); Core has no
       # socket to open, and an optional dep would still advertise transport on
       # the package page.
-      {:req, "~> 0.5"},
+      # `~> 0.7`, not `~> 0.5`: `HttpClient` passes `:request_timeout`, which Req added in
+      # 0.7.0. Under `~> 0.5` a consumer resolving Req 0.5.x or 0.6.x had EVERY request fail
+      # with `unknown option :request_timeout` from 0.3.38 on. `script/check_dependency_floor.sh`
+      # found it on 2026-09-27: 29 failures at Req 0.5.0. Query strings are built into the
+      # URL here, never passed as `params:`, so Req 0.7.0-0.7.3's duplicate-param regression
+      # does not reach this package.
+      {:req, "~> 0.7"},
       {:jason, "~> 1.4"},
       # `or ~> 3.0` since 2026-09-27. Decimal 3 makes the CVE-2026-32686 limits the default
       # (parsing `1e1000000000` no longer materialises it), and `~> 2.0` alone stopped a

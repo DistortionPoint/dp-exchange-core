@@ -21,6 +21,22 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`req` is now required at `~> 0.7`, because every request failed on Req 0.5 and 0.6
+  from 0.3.38 on.** 0.3.38 made `HttpClient` pass `:request_timeout` so that `:timeout`
+  bounds the whole response. Req added that option in 0.7.0, and the requirement still
+  said `~> 0.5`. So a consumer that resolved Req 0.5.x or 0.6.x, which the requirement
+  allowed, got `unknown option :request_timeout` from every call. This package's own lock
+  was on 0.7.4, so nothing here saw it. `script/check_dependency_floor.sh` found it
+  (29 failures at Req 0.5.0). The suite passes at the new floor, Req 0.7.0. **0.3.38
+  through 0.3.41 carry the wrong requirement.** A consumer on Req 0.5 or 0.6 should not
+  use them.
+- **The dependency floor check now tests an `or` requirement at its first clause.**
+  `"~> 2.0 or ~> 3.0"` (decimal, since 0.3.41) matched neither of the script's patterns,
+  so it resolved the newest 3.x and the 2.0 floor went untested. It now pins
+  `== 2.0.0`, and the suite passes there.
+
 ## [0.3.41] - 2026-09-28
 
 ### Changed
