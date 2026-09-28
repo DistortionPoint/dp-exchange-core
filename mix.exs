@@ -79,7 +79,12 @@ defmodule DpExchangeCore.MixProject do
       # the package page.
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
-      {:decimal, "~> 2.0"},
+      # `or ~> 3.0` since 2026-09-27. Decimal 3 makes the CVE-2026-32686 limits the default
+      # (parsing `1e1000000000` no longer materialises it), and `~> 2.0` alone stopped a
+      # consumer from taking that. The full suite passes on 3.1.1. 3.x also refuses to parse
+      # more than 34 digits, which a venue number never approaches; the venue packages were
+      # fuzzed on 3.1.1 before they widened too.
+      {:decimal, "~> 2.0 or ~> 3.0"},
       {:telemetry, "~> 1.0"},
 
       # Dev/Test. `plug` is here so the request pipeline can be exercised through

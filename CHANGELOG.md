@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`decimal` may now resolve to 3.x** (`~> 2.0 or ~> 3.0`). Decimal 3.0 makes the
+  mitigations for CVE-2026-32686 the default: an input such as `1e1000000000` is
+  rejected rather than materialised. `~> 2.0` stopped a consumer from taking that
+  version. The full suite passes on 3.1.1. Under 3.x, `Decimal.parse/1` refuses more than
+  34 digits and `Decimal.to_string/2` raises past 6,178 characters, so the venue packages
+  were fuzzed on 3.1.1 before widening their own constraint.
+
 ## [0.3.40] - 2026-09-27
 
 ### Added
