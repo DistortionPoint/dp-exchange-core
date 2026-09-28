@@ -56,6 +56,13 @@ defmodule DpExchange.Core.HttpClient do
 
   @type http_method :: :get | :post | :put | :delete
   @type headers :: [{String.t(), String.t()}]
+
+  @typedoc """
+  Headers, or a function producing them that is called again for every attempt. Use the
+  function form for a signature that expires or carries a one-time nonce, so a retry is
+  signed afresh rather than replayed. See `request/5`.
+  """
+  @type signed_headers :: headers() | (-> headers() | {:ok, headers()} | {:error, term()})
   @type body :: String.t() | nil
   @type options :: keyword()
   @type provider :: String.t()
@@ -101,7 +108,9 @@ defmodule DpExchange.Core.HttpClient do
   ## Parameters
   - `method`: HTTP method (:get, :post, :put, :delete)
   - `url`: Full URL for the request
-  - `headers`: List of HTTP headers
+  - `headers`: List of HTTP headers, or a zero-arity function returning them (or
+    `{:ok, list}` / `{:error, reason}`) that is called again before every attempt, so a
+    signed request is re-signed on retry rather than replayed
   - `body`: Request body (for POST/PUT requests)
   - `opts`: Additional options including rate limiting context
 
@@ -156,7 +165,13 @@ defmodule DpExchange.Core.HttpClient do
   """
   @type request_error :: String.t() | {:exchange_error, provider(), term()}
 
-  @spec request(http_method(), String.t(), headers(), body(), rate_limited_request_options()) ::
+  @spec request(
+          http_method(),
+          String.t(),
+          signed_headers(),
+          body(),
+          rate_limited_request_options()
+        ) ::
           {:ok, http_response()}
           | {:error, request_error()}
   def request(method, url, headers \\ [], body \\ nil, opts \\ []) do
@@ -376,11 +391,39 @@ defmodule DpExchange.Core.HttpClient do
     params |> Map.to_list() |> build_query_string()
   end
 
-  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left) do
+  # **Headers may be a function, called again for every attempt.** A venue that signs with
+  # a timestamp or a one-time nonce cannot have its request retried byte for byte:
+  # `dp_exchange_robinhood`'s signature is accepted for about 30 seconds, and
+  # `dp_exchange_gemini` and `dp_exchange_webull` sign a nonce the venue refuses to see
+  # twice. A retry after a timed-out first attempt re-sent the SAME signed headers, which
+  # meant a stale or replayed signature. So the retry of a read could never succeed, and the
+  # venue refused it as unauthorised, a credential problem the caller does not have. A zero-arity
+  # function here is resolved per attempt, so every attempt carries a fresh signature. It
+  # may return a header list, `{:ok, list}`, or `{:error, reason}`. An error is returned at
+  # once and never retried: a request that cannot be signed will not sign on a second try.
+  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left)
+       when is_function(headers, 0) do
+    case headers.() do
+      {:ok, resolved} when is_list(resolved) ->
+        attempt(method, url, headers, resolved, body, opts, attempts_left)
+
+      {:error, _reason} = error ->
+        error
+
+      resolved when is_list(resolved) ->
+        attempt(method, url, headers, resolved, body, opts, attempts_left)
+    end
+  end
+
+  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left),
+    do: attempt(method, url, headers, headers, body, opts, attempts_left)
+
+  # `headers` is what the next attempt resolves again; `resolved` is what this one sends.
+  defp attempt(method, url, headers, resolved, body, opts, attempts_left) do
     # Check rate limits before making the request
     case check_rate_limits(opts) do
       :ok ->
-        response = make_http_request(method, url, headers, body, opts)
+        response = make_http_request(method, url, resolved, body, opts)
 
         # Recorded for every outcome, not only `{:ok, _}` — a 5xx that gets retried below
         # and a 429 (`handle_rate_limit/3`) both actually left this process and actually

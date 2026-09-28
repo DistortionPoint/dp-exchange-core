@@ -21,6 +21,18 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`HttpClient.request/5` accepts `headers` as a function, called again for every
+  attempt.** A venue that signs with a timestamp or a one-time nonce could not be retried
+  byte for byte. Robinhood's signature is accepted for about 30 seconds, and Gemini and
+  Webull sign a nonce the venue refuses to see twice. A retry after a timed-out first
+  attempt re-sent the same signed headers, so it was either stale or a replay. The venue
+  refused it as unauthorised, a credential problem the caller does not have. The function
+  may return a header list, `{:ok, list}` or `{:error, reason}`. An error is returned at
+  once and never retried. Venue packages opt in at their signing call sites. See the
+  `signed_headers` type.
+
 ## [0.3.45] - 2026-09-28
 
 ### Added

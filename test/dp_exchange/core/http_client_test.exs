@@ -722,4 +722,56 @@ defmodule DpExchange.Core.HttpClientTest do
       :gen_tcp.close(listener)
     end
   end
+
+  describe "headers as a function are resolved again for every attempt" do
+    # A signature that expires, or carries a one-time nonce, cannot be retried byte for
+    # byte. Re-sending the first attempt's headers meant a stale or replayed signature,
+    # which the venue refuses as unauthorised.
+    test "a retry carries a fresh signature, not the first attempt's" do
+      use_stub()
+      counter = :counters.new(1, [])
+      test_pid = self()
+
+      signer = fn ->
+        :counters.add(counter, 1, 1)
+        {:ok, [{"x-signature", "sig-#{:counters.get(counter, 1)}"}]}
+      end
+
+      plug = fn conn ->
+        [signature] = Plug.Conn.get_req_header(conn, "x-signature")
+        send(test_pid, {:sent, signature})
+
+        if signature == "sig-1",
+          do: Plug.Conn.resp(conn, 503, "busy"),
+          else: Req.Test.json(conn, %{"ok" => true})
+      end
+
+      assert {:ok, %{status: 200}} =
+               HttpClient.request(:get, "https://venue.test/x", signer, nil,
+                 provider: "v",
+                 plug: plug,
+                 retry_attempts: 2,
+                 retry_delay: 1
+               )
+
+      assert_received {:sent, "sig-1"}
+      assert_received {:sent, "sig-2"}
+    end
+
+    test "a signer that fails is returned at once, never retried" do
+      use_stub()
+      test_pid = self()
+      signer = fn -> send(test_pid, :signed) && {:error, :missing_credentials} end
+
+      assert {:error, :missing_credentials} =
+               HttpClient.request(:get, "https://venue.test/x", signer, nil,
+                 provider: "v",
+                 plug: fn _conn -> raise "must not be sent" end,
+                 retry_attempts: 3
+               )
+
+      assert_received :signed
+      refute_received :signed
+    end
+  end
 end
