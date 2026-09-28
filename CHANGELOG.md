@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.46] - 2026-09-28
+
 ### Added
 
 - **`HttpClient.request/5` accepts `headers` as a function, called again for every
