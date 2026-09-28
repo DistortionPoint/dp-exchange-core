@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.42] - 2026-09-28
+
 ### Fixed
 
 - **`req` is now required at `~> 0.7`, because every request failed on Req 0.5 and 0.6
