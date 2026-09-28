@@ -663,3 +663,13 @@ observe, and the real `Feed`'s set arithmetic behind assertion 26. The same day 
 `dp_exchange_robinhood`'s facade rebuilding its polled set from `coverage/1`, so a second
 `subscribe/2` dropped symbols not yet delivering. That needs a running feed, and stays in
 that package's own tests.
+
+### Assertion 29 — the fake follows the real facade's case handling, 2026-09-28
+
+The real facades began upper-casing subscribed symbols on 2026-09-28. A `Feed` now drops a
+payload for a symbol it does not want, and the venue delivers the canonical form, so a
+`btc-usd` subscription had gone silent. Every fake still took symbols as given, so a
+consumer's tier-1 tests showed silence where the venue delivered. That is fake drift, the
+failure this suite is built to catch, and 29 now catches it. **Can it fail?** Yes:
+`dp_exchange_coinbase`'s contract test with this suite in its `deps/` gave 1 failure on the
+fake before its fix and 0 after.

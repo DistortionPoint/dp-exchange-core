@@ -751,6 +751,8 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def subscribe(symbols, opts) do
+    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
+    symbols = Enum.map(symbols, &String.upcase/1)
     target = Config.opt(opts, :to, self())
 
     # Pushed immediately, which is what a REST-only venue's internal poll would do on its
@@ -779,6 +781,8 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def unsubscribe(symbols, _opts) do
+    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
+    symbols = Enum.map(symbols, &String.upcase/1)
     # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
     Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
 
@@ -787,6 +791,8 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def update_symbols(symbols, opts) do
+    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
+    symbols = Enum.map(symbols, &String.upcase/1)
     # **It used to be `:ok` and nothing else**, which made it indistinguishable from a
     # venue that had simply ignored the call — and left this reference implementing two of
     # the contract's three subscription operations. `c:DpExchange.Core.Venue.update_symbols/2`

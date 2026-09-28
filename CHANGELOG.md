@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance assertion 29: a lower-case subscription is delivered under the canonical
+  symbol.** Every venue's real facade upper-cases subscribed symbols, because its `Feed`
+  drops a payload for a symbol it does not want. Every fake took them as given, so
+  `btc-usd` delivered nothing against the fake while the real package delivered `BTC-USD`.
+  The assertion subscribes each fake to its first sample pair in lower case and requires
+  delivery under the canonical symbol. Checked against `dp_exchange_coinbase`: it fails on
+  that fake before its fix and passes after. `ReferenceVenue` upper-cases too.
+
 ## [0.3.44] - 2026-09-28
 
 ### Fixed

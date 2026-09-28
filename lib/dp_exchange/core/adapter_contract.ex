@@ -120,7 +120,10 @@ defmodule DpExchange.Core.AdapterContract do
       {28,
        "a streaming call answers when no feed is running — subscribe/2, unsubscribe/2, " <>
          "update_symbols/2, subscribe_notices/1 and coverage/1 return a value, never an " <>
-         "exit in the caller"}
+         "exit in the caller"},
+      {29,
+       "a lower-case subscription is delivered under the canonical symbol — the fake " <>
+         "upper-cases subscribed symbols as the real facade does"}
     ]
   end
 
@@ -184,6 +187,7 @@ defmodule DpExchange.Core.AdapterContract do
       subscription_set_semantics(),
       forwarded_nil(),
       feed_absent(),
+      lower_case_subscription(),
       return_types(),
       helpers(),
       arg_helpers(),
@@ -1966,6 +1970,40 @@ defmodule DpExchange.Core.AdapterContract do
         do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
 
       defp wrong_type(_not_a_success, _modules), do: nil
+    end
+  end
+
+  defp lower_case_subscription do
+    quote location: :keep do
+      # --- 29. a lower-case subscription is delivered under the canonical symbol ----------
+
+      describe "29. a lower-case subscription is delivered under the canonical symbol" do
+        # Found 2026-09-28. Every venue's real facade upper-cases subscribed symbols,
+        # because its `Feed` drops a payload for a symbol it does not want and the venue
+        # delivers the canonical form. Every fake took the symbols as given, so `btc-usd`
+        # delivered nothing against the fake while the real package delivered `BTC-USD`. A
+        # consumer's tier-1 tests certified silence where the venue delivers: the fake
+        # drifting from the real facade, which is the half of the contract this suite
+        # exists to keep honest. The real facade's half is each package's own test.
+        test "subscribe/2 with a lower-case sample pair delivers under the canonical symbol" do
+          if @fake, do: assert_lower_case_delivered(@fake, @sample_pairs)
+        end
+      end
+
+      defp assert_lower_case_delivered(fake, pairs) do
+        for pair <- Enum.take(pairs, 1), do: assert_lower_case_delivered_one(fake, pair)
+      end
+
+      defp assert_lower_case_delivered_one(fake, pair) do
+        opts = :opts |> arg_value({:subscribe, 2}) |> Keyword.put(:to, self())
+        fake.subscribe([String.downcase(pair)], opts)
+
+        assert_receive {:dp_exchange, _venue, %{symbol: ^pair}},
+                       1_000,
+                       "subscribe/2 with #{inspect(String.downcase(pair))} delivered nothing " <>
+                         "under #{inspect(pair)}. The real facade upper-cases subscribed " <>
+                         "symbols; the fake must too, or it certifies silence."
+      end
     end
   end
 
