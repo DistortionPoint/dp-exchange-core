@@ -21,6 +21,19 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PollingFeed` no longer delivers or counts a symbol that is no longer wanted.** A fetch
+  runs in a task, and `update_symbols/2` can remove its symbol while it is in flight. The
+  result that came back afterwards still reached the sink, which delivered to a consumer
+  that had just unsubscribed, and went into `last_ok`. So `coverage/1` answered
+  `:internal_poll` for a symbol nobody wanted. Results are now applied only for symbols in
+  the current set. A bulk answer in which no event names a wanted symbol is recorded as
+  `{:unrequested_symbols, names}` rather than dropped silently, because that is how a venue
+  whose event symbols are spelled differently from the requested ones would otherwise look:
+  exactly like a quiet market. `dp_exchange_robinhood` and `dp_exchange_schwab`, the two
+  packages that run a `PollingFeed`, pass their full suites against it.
+
 ## [0.3.43] - 2026-09-28
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

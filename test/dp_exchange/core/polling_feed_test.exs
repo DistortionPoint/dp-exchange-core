@@ -392,6 +392,71 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
   end
 
+  describe "a result for a symbol no longer wanted is not delivered or counted" do
+    # A fetch already in flight when `update_symbols/2` removes a symbol still came back
+    # with it. The result went to the sink, which is delivery to a consumer that had just
+    # unsubscribed, and into `last_ok`, so `coverage/1` answered `:internal_poll` for a
+    # symbol nobody wanted and kept the entry until the next `update_symbols/2`.
+    defp gated_fetch_all(test) do
+      fn symbols ->
+        send(test, {:fetching, self()})
+        receive(do: (:release -> {:ok, Enum.map(symbols, &event/1)}))
+      end
+    end
+
+    test "bulk mode drops a removed symbol from an in-flight result" do
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD ETH-USD),
+          fetch_all: gated_fetch_all(self()),
+          interval_ms: 60_000
+        )
+
+      assert_receive {:fetching, task}
+
+      PollingFeed.update_symbols(pid, ~w(BTC-USD))
+      _sync = PollingFeed.status(pid)
+      send(task, :release)
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}
+      refute_receive {:published, %{symbol: "ETH-USD"}}, 100
+      assert Map.keys(PollingFeed.coverage(pid)) == ["BTC-USD"]
+    end
+
+    test "per-symbol mode drops a removed symbol's in-flight result" do
+      test = self()
+
+      fetch = fn symbol ->
+        send(test, {:fetching, self()})
+        receive(do: (:release -> {:ok, event(symbol)}))
+      end
+
+      pid = start_feed(symbols: ~w(ETH-USD), fetch: fetch, interval_ms: 60_000)
+      assert_receive {:fetching, task}
+
+      PollingFeed.update_symbols(pid, [])
+      _sync = PollingFeed.status(pid)
+      send(task, :release)
+
+      refute_receive {:published, _event}, 100
+      assert PollingFeed.coverage(pid) == %{}
+    end
+
+    test "a bulk answer naming only symbols nobody asked for is a failure, not silence" do
+      # Dropping every event would otherwise look exactly like a quiet venue. A venue
+      # whose symbols do not match the ones asked for must say so.
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD),
+          fetch_all: fn _symbols -> {:ok, [event("btcusd")]} end,
+          interval_ms: 60_000
+        )
+
+      refute_receive {:published, _event}, 100
+      assert %{last_error: {:unrequested_symbols, ["btcusd"]}} = PollingFeed.status(pid)
+    end
+  end
+
   describe "the boot delay" do
     test "nothing is fetched during the start delay" do
       # The delay exists because a feed starts as soon as its supervisor does,

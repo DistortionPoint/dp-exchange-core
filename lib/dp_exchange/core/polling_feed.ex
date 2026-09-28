@@ -566,13 +566,18 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
+  # **A result is applied only for a symbol still wanted.** A fetch runs in a task, and
+  # `update_symbols/2` can remove its symbol while it is in flight. The result that came back
+  # afterwards used to reach the sink, which delivered to a consumer that had just
+  # unsubscribed, and went into `last_ok`. So `coverage/1` answered `:internal_poll` for a
+  # symbol nobody wanted, until the next `update_symbols/2` pruned it. Found 2026-09-27 by
+  # reading the path; the tests under "a result for a symbol no longer wanted" pin it.
   defp apply_result(state, {:one, symbol}, result) do
     case result do
       {:ok, event} ->
-        %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
-        |> tap(fn _state -> state.sink.(event) end)
-        |> tap(fn _state -> report_delivery(state, event) end)
-        |> record_success()
+        if MapSet.member?(state.symbols, symbol),
+          do: deliver_one(state, symbol, event),
+          else: state
 
       # The venue says it does not carry this symbol. Reported outward — a
       # consumer drops it from its collection scope — rather than retried every
@@ -589,7 +594,31 @@ defmodule DpExchange.Core.PollingFeed do
     end
   end
 
+  defp deliver_one(state, symbol, event) do
+    %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
+    |> tap(fn _state -> state.sink.(event) end)
+    |> tap(fn _state -> report_delivery(state, event) end)
+    |> record_success()
+  end
+
+  # Only events for symbols still wanted are delivered and counted; see `apply_result/3`.
+  # One that is not wanted is either a symbol removed while this fetch was in flight, or
+  # one the venue answered that nobody asked for. If EVERY event is unwanted, the drop would
+  # look exactly like a quiet venue, and the likeliest cause is a venue whose event symbols
+  # are not spelled the way they were asked for. So that case is a failure, named, and
+  # reaches `delivering_nothing?/2` like any other.
   defp publish_and_record(state, events) do
+    case Enum.split_with(events, &MapSet.member?(state.symbols, &1.symbol)) do
+      {[], [_first | _rest] = unwanted} ->
+        names = unwanted |> Enum.map(& &1.symbol) |> Enum.uniq() |> Enum.take(5)
+        record_failure(state, "bulk fetch", {:unrequested_symbols, names})
+
+      {wanted, _unwanted} ->
+        publish_wanted(state, wanted)
+    end
+  end
+
+  defp publish_wanted(state, events) do
     now = System.monotonic_time(:millisecond)
 
     # Coverage is recorded from what came BACK, not what was asked for. A
