@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.44] - 2026-09-28
+
 ### Fixed
 
 - **`PollingFeed` no longer delivers or counts a symbol that is no longer wanted.** A fetch
