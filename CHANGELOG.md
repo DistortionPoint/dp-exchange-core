@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.41] - 2026-09-28
+
 ### Changed
 
 - **`decimal` may now resolve to 3.x** (`~> 2.0 or ~> 3.0`). Decimal 3.0 makes the
