@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.45] - 2026-09-28
+
 ### Added
 
 - **Conformance assertion 29: a lower-case subscription is delivered under the canonical
