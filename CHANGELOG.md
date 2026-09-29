@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.48] - 2026-09-29
+
 ### Fixed
 
 - A bulk `PollingFeed` with no symbols no longer fetches, or records a failure. Each tick
