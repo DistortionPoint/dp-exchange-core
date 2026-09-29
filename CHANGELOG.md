@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.47] - 2026-09-29
+
 ### Fixed
 
 - An error message no longer carries a venue's whole response body. A 5xx body, often a
