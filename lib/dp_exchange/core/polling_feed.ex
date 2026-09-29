@@ -425,7 +425,17 @@ defmodule DpExchange.Core.PollingFeed do
   def handle_cast(_other, state), do: {:noreply, state}
 
   @impl true
-  def handle_info(:poll_all, state), do: {:noreply, enqueue(state, :all)}
+  # **A bulk tick with nothing wanted asks nothing.** It used to run the fetch with `[]`, and a
+  # venue answering an empty ask with `{:ok, []}`, the only honest answer, was recorded as
+  # `:empty_response`, a failure. So a feed started before its consumer subscribed, or left
+  # idle after the last unsubscribe, escalated to "delivering nothing" and warned every
+  # interval about symbols nobody had asked for. The clock keeps running, so the next tick
+  # after `update_symbols/2` adds one fetches it, on the one timer chain there is.
+  def handle_info(:poll_all, state) do
+    if MapSet.size(state.symbols) == 0,
+      do: {:noreply, reschedule(state, :all)},
+      else: {:noreply, enqueue(state, :all)}
+  end
 
   def handle_info({:poll, symbol}, state) do
     if MapSet.member?(state.symbols, symbol) do

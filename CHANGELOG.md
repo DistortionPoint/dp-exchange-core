@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- A bulk `PollingFeed` with no symbols no longer fetches, or records a failure. Each tick
+  ran the fetch with `[]`, and the venue's honest `{:ok, []}` was recorded as
+  `:empty_response`, so a feed started before its consumer subscribed, or left idle after the
+  last unsubscribe, escalated to "delivering nothing" and warned every interval. The tick
+  now reschedules without asking, and the first tick after `update_symbols/2` fetches.
+
 ## [0.3.47] - 2026-09-29
 
 ### Fixed

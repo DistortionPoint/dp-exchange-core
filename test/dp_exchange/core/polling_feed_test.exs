@@ -137,6 +137,30 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert PollingFeed.coverage(pid) == %{}
     end
 
+    test "a feed with no symbols asks nothing and records no failure, then fetches once given one" do
+      # An empty ask answered `{:ok, []}` used to count as `:empty_response`, so an idle feed
+      # warned "delivering nothing" every interval about symbols nobody wanted.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch_all: fn symbols ->
+            send(test, {:fetched, symbols})
+            {:ok, Enum.map(symbols, &event/1)}
+          end,
+          symbols: [],
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      refute_receive {:fetched, _symbols}, 200
+      refute_received {:notice, _notice}
+      assert PollingFeed.status(pid).failures_since_ok == 0
+
+      PollingFeed.update_symbols(pid, ["BTC-USD"])
+      assert_receive {:fetched, ["BTC-USD"]}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+    end
+
     test "a successful call with zero events counts toward delivering nothing" do
       # `{:ok, []}` succeeds at the transport layer but delivers nothing — a bad
       # credential filtered to an empty result set server-side is indistinguishable, from
