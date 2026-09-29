@@ -796,10 +796,15 @@ defmodule DpExchange.Core.HttpClient do
 
   defp parse_retry_after_header(headers) do
     case fetch_integer(normalise_headers(headers), "retry-after") do
-      {:ok, seconds} -> seconds
+      {:ok, seconds} when seconds >= 0 -> seconds
       # The venue said it is limiting us but not for how long. Five seconds is a
       # deliberate floor rather than a measurement, and retrying immediately — which
       # is what a 0 default would mean — is how a 429 becomes a 429 storm.
+      #
+      # A negative value is the same case. It is not a wait, and it used to pass straight
+      # through: the caller was told to "retry after -30s", and `[:dp_exchange, :rate_limit,
+      # :hit]` carried a negative `retry_after_ms` that a panel summing waits would subtract.
+      {:ok, _negative} -> 5
       :error -> 5
     end
   end
@@ -836,8 +841,33 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
-  # Format response body for error messages (handles both strings and maps)
+  # Format response body for error messages (handles both strings and maps).
+  #
+  # **Capped.** The whole body used to go into the message, and from there into a warning on
+  # every retry and into whatever the caller logs. A venue's 5xx is often a proxy's HTML
+  # error page, and nothing bounds its size: a 1 MB page retried three times wrote megabytes
+  # of log for one failed call, and the same bytes sat in every caller's error tuple. Nothing
+  # in the family reads the body back out of this message — venues match the status in its
+  # prefix, and a venue that needs the body passes `raw_status: true` and gets it whole.
+  # The cut is marked with the full size, so a truncated message never reads as complete.
+  @body_excerpt_bytes 2_048
+
+  defp format_body(body) when is_binary(body) and byte_size(body) > @body_excerpt_bytes,
+    do: excerpt(body) <> "… (#{byte_size(body)} bytes)"
+
   defp format_body(body) when is_binary(body), do: body
-  defp format_body(body) when is_map(body) or is_list(body), do: inspect(body)
-  defp format_body(body), do: inspect(body)
+
+  defp format_body(body),
+    do: inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)
+
+  # A byte prefix, trimmed back to a whole UTF-8 character so the message stays valid text.
+  # Bounded at three trims: a UTF-8 character is at most four bytes, so a prefix still
+  # invalid after that was never UTF-8 and is returned as cut.
+  defp excerpt(body), do: trim_to_valid(binary_part(body, 0, @body_excerpt_bytes), 3)
+
+  defp trim_to_valid(prefix, trims_left) do
+    if String.valid?(prefix) or trims_left == 0,
+      do: prefix,
+      else: trim_to_valid(binary_part(prefix, 0, byte_size(prefix) - 1), trims_left - 1)
+  end
 end

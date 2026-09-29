@@ -386,6 +386,33 @@ defmodule DpExchange.Core.HttpClientTest do
       assert message =~ "retry after 42s"
     end
 
+    test "a negative Retry-After is not a wait, and falls back to the floor" do
+      plug = responding(429, %{}, [{"retry-after", "-30"}])
+      assert {:error, message} = get(plug: plug)
+      assert message =~ "retry after 5s"
+    end
+
+    test "a large error body is excerpted in the message, and says how large it was" do
+      # Odd-offset multi-byte text, so the cut lands inside a character.
+      page = "a" <> String.duplicate("é", 600_000)
+
+      plug = fn conn ->
+        conn |> Plug.Conn.put_resp_content_type("text/html") |> Plug.Conn.resp(503, page)
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: 1)
+      assert message =~ "Server error (503)"
+      assert message =~ "(#{byte_size(page)} bytes)"
+      assert byte_size(message) < 2_200
+      assert String.valid?(message)
+    end
+
+    test "a small error body is carried whole" do
+      assert {:error, message} = get(plug: responding(500, %{"reason" => "down"}))
+      assert message =~ ~s("reason" => "down")
+      refute message =~ "bytes)"
+    end
+
     test "the venue's Retry-After is read, whichever header shape it arrives in" do
       # Req returns headers as `%{"name" => ["value"]}` while the pair form is the
       # other convention. Handling only pairs made every `Retry-After` a venue sent

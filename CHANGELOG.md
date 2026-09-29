@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- An error message no longer carries a venue's whole response body. A 5xx body, often a
+  proxy's HTML page of any size, went into the message, into a warning on every retry and
+  into every caller's error tuple. It is now excerpted at 2 KB, cut on a character
+  boundary and marked with the full size. `raw_status: true` still hands a 4xx back whole.
+- A negative `Retry-After` is no longer passed on as a wait. The caller was told to "retry
+  after -30s" and the rate-limit telemetry carried a negative `retry_after_ms`. It now falls
+  back to the same 5-second floor as a missing header.
+
 ## [0.3.46] - 2026-09-28
 
 ### Added
