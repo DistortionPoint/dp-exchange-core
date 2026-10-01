@@ -242,4 +242,29 @@ defmodule DpExchange.Core.NoticeTest do
       assert notice.details.status == :delisted
     end
   end
+
+  describe "a notice always carries a message" do
+    # dp-exchange-core issues #33 and #41, then the same gap on several venues' link
+    # notices: a notice built without `message` was rendered "(no message)" while its reason
+    # sat in `details`.
+    test "with no message given, one is built from provider, kind and reason" do
+      notice = Notice.new(:link_down, :coinbase, details: %{reason: "{:remote, :closed}"})
+      assert notice.message == "coinbase link down: {:remote, :closed}"
+    end
+
+    test "a non-string reason is inspected" do
+      notice = Notice.new(:data_quality, :webull, details: %{reason: {:tick, :undecodable}})
+      assert notice.message == "webull data quality: {:tick, :undecodable}"
+    end
+
+    test "without a reason, the provider and kind still say what happened" do
+      assert Notice.new(:link_up, :gemini).message == "gemini link up"
+    end
+
+    test "a message the caller gives is kept, and an explicit nil stays nil" do
+      assert Notice.new(:link_up, :gemini, message: "back").message == "back"
+      # A venue passes nil on purpose for "the venue sent no text" (issue #33).
+      assert Notice.new(:link_up, :gemini, message: nil).message == nil
+    end
+  end
 end

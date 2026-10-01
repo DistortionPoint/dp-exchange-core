@@ -240,9 +240,37 @@ defmodule DpExchange.Core.Notice do
       provider: provider,
       severity: severity,
       at: Config.opt(opts, :at, DateTime.utc_now()),
-      message: Keyword.get(opts, :message),
+      message: message(opts, kind, provider, details),
       details: details
     }
+  end
+
+  # **A notice always says something.** `message` is the field a consumer renders, and a
+  # notice built without one was rendered as "(no message)": dp-exchange-core issues #33 and
+  # #41 were each a venue that held the reason in `details` while every log line read as
+  # empty, and the same gap was then found on several venues' `link_down` and `link_up` at
+  # once. Fixing callers one at a time is how it kept recurring, so the constructor fills it,
+  # from facts the notice already carries: its provider, its kind, and `details.reason` when
+  # there is one. Nothing is invented. A caller that sets `message:` is unaffected.
+  #
+  # **Only when `message` is ABSENT.** An explicit `message: nil` is kept: a venue passes it
+  # on purpose to say "the venue sent no text" (`dp_exchange_webull`'s notice-topic frames,
+  # issue #33), and filling that in would erase exactly the fact the `nil` records.
+  defp message(opts, kind, provider, details) do
+    case Keyword.fetch(opts, :message) do
+      {:ok, given} -> given
+      :error -> default_message(kind, provider, details)
+    end
+  end
+
+  defp default_message(kind, provider, details) do
+    base = "#{provider} #{kind |> Atom.to_string() |> String.replace("_", " ")}"
+
+    case Map.get(details, :reason) do
+      nil -> base
+      reason when is_binary(reason) -> "#{base}: #{reason}"
+      reason -> "#{base}: #{inspect(reason)}"
+    end
   end
 
   @doc """

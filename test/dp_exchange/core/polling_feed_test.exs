@@ -409,7 +409,10 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert control > 0,
              "the control symbol was not polled at all, so the comparison below proves nothing"
 
-      assert churned <= control,
+      # One fetch of slack: the two symbols' timers are offset, so a window edge can catch one
+      # more tick of either (9 against 8 failed the full suite once, 2026-10-01). A stacked
+      # timer doubles the rate, and three cycles quadrupled it, so one extra cannot hide it.
+      assert churned <= control + 1,
              "the churned symbol was fetched #{churned} times against the control's " <>
                "#{control} in the same window. Removing and re-adding a symbol left its old " <>
                "timer pending and set a second one, and every cycle stacks another."

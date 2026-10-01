@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `Notice` built without a `message` now carries one**, made from its provider, its kind
+  and `details.reason` when present, e.g. `"coinbase link down: {:remote, :closed}"`.
+  Several venues built `link_down`, `link_up` and other notices with no message, so a host
+  logged `link_down: (no message)` with the reason buried in `details`. dp-exchange-core
+  issues #33 and #41 were the same gap found one venue at a time. An explicit
+  `message: nil` is kept, since a venue passes it on purpose to say "the venue sent no
+  text".
+
 ## [0.3.48] - 2026-09-29
 
 ### Fixed
