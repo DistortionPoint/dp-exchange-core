@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.49] - 2026-10-01
+
 ### Fixed
 
 - **A `Notice` built without a `message` now carries one**, made from its provider, its kind
