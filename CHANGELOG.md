@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.50] - 2026-10-02
+
 ### Added
 
 - **`Quote.volume_window`** says what quantity `Quote.volume` is: `:print` (one trade's
