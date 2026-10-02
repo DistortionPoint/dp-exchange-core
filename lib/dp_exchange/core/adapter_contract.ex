@@ -56,6 +56,8 @@ defmodule DpExchange.Core.AdapterContract do
   a gap the next venue will reintroduce.
   """
 
+  alias DpExchange.Core.Types.Quote, as: ContractQuote
+
   @doc """
   The assertion groups, for documentation and for a venue package to report against.
   """
@@ -123,7 +125,11 @@ defmodule DpExchange.Core.AdapterContract do
          "exit in the caller"},
       {29,
        "a lower-case subscription is delivered under the canonical symbol — the fake " <>
-         "upper-cases subscribed symbols as the real facade does"}
+         "upper-cases subscribed symbols as the real facade does"},
+      {30,
+       "a quote's volume states its window — a Quote from get_price/2 carrying a volume " <>
+         "names it as one print, a running total or a rolling 24h total, and one carrying " <>
+         "none names no window"}
     ]
   end
 
@@ -174,6 +180,7 @@ defmodule DpExchange.Core.AdapterContract do
       coverage_routes(),
       coverage_by_kind(),
       purity(),
+      volume_window_stated(),
       isolation(),
       wiring(),
       link_safety(),
@@ -877,6 +884,53 @@ defmodule DpExchange.Core.AdapterContract do
                    "coverage_by_kind/1 reports #{inspect(MapSet.to_list(undeclared))}, which " <>
                      "capabilities().streamable does not declare — a venue reporting coverage " <>
                      "for a kind it does not claim to stream contradicts its own declaration"
+          end
+        end
+      end
+    end
+  end
+
+  # --- 30. a quote's volume states its window. dp-exchange-core issue #42 — its own block,
+  # because inside `purity/0` it pushed that block past the length and complexity limits.
+  defp volume_window_stated do
+    quote location: :keep do
+      describe "30. a quote's volume states its window" do
+        # dp-exchange-core issue #42. A volume with no stated window was summed into candles
+        # by a consumer that could not tell a rolling 24-hour total from one print, which put
+        # a pair's average volume about 1000× too high. See `Types.Quote`'s
+        # `:volume_window` section.
+        test "a Quote carrying a volume states what quantity it is" do
+          caps = @venue.capabilities()
+
+          if Capabilities.active?(caps, {:get_price, 2}) and @sample_pairs != [] do
+            assert @fake,
+                   "pass `fake:` to run this assertion — see the top-of-book assertion above"
+
+            # credo:disable-for-next-line Credo.Check.Refactor.Apply
+            case apply(@fake, :get_price, endpoint_args(:get_price, 2)) do
+              {:ok, %DpExchange.Core.Types.Quote{volume: nil} = quote_struct} ->
+                assert is_nil(quote_struct.volume_window),
+                       "a window describes a volume, and this quote carries none"
+
+              {:ok, %DpExchange.Core.Types.Quote{} = quote_struct} ->
+                assert quote_struct.volume_window in ContractQuote.volume_windows(),
+                       "get_price/2 returned volume #{inspect(quote_struct.volume)} with " <>
+                         "volume_window #{inspect(quote_struct.volume_window)}. State which " <>
+                         "quantity it is — one print, a running total, or a rolling 24h " <>
+                         "total — because a consumer aggregates each differently."
+
+              # The same refusal-is-not-a-pass rule as the assertion above.
+              other ->
+                flunk("""
+                capabilities/0 declares get_price/2 active, but the fake answered:
+
+                    #{inspect(other)}
+
+                Either the endpoint is not really active and capabilities/0 should say
+                `:unsupported`, or the fake needs something this call did not carry —
+                declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
+                """)
+            end
           end
         end
       end

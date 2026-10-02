@@ -202,6 +202,7 @@ defmodule DpExchange.Core.ReferenceVenue do
          symbol: symbol,
          price: Decimal.new("42000.50"),
          volume: Decimal.new("1234.5"),
+         volume_window: :running_total,
          # The caller's clock is never substituted for a venue's. Here there is no venue,
          # so this is the reference's own event time — stated, not disguised.
          venue_time: ~U[2026-08-27 12:00:00Z],

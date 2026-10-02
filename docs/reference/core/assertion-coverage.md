@@ -673,3 +673,17 @@ consumer's tier-1 tests showed silence where the venue delivered. That is fake d
 failure this suite is built to catch, and 29 now catches it. **Can it fail?** Yes:
 `dp_exchange_coinbase`'s contract test with this suite in its `deps/` gave 1 failure on the
 fake before its fix and 0 after.
+
+### Assertion 30 — a quote's volume states its window, 2026-10-02
+
+`Quote.volume` was three different quantities across the family: a rolling 24-hour total,
+a day's running total, and one print's size. Nothing in the type said which. A consumer
+summed every one of them as if it were a print, and a Coinbase pair's average volume read
+about 1000× too high (issue #42). 30 drives the venue's fake through `get_price/2`, and
+requires a `Quote` that carries a volume to name its `volume_window`, and one with none to
+name none. **Can it fail?** Yes: `dp_exchange_schwab`'s contract test with this suite in its
+`deps/` gave 1 failure on the fake before its fix (`volume 1000000 with volume_window nil`)
+and 0 after.
+
+**What it does not reach:** the streamed `Quote`. Each venue's own socket tests pin its
+window, because the fake's stream is not the real decoder.

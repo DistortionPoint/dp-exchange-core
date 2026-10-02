@@ -21,6 +21,19 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`Quote.volume_window`** says what quantity `Quote.volume` is: `:print` (one trade's
+  size, to sum), `:running_total` (cumulative since the venue's own reset, to difference),
+  or `:rolling_24h` (a trailing day, which no interval's volume can be derived from). It is
+  `nil` when `volume` is `nil`. `volume` used to be all three, depending on the venue.
+  dp_crypto_management summed Coinbase's rolling 24-hour total into candles as if it were
+  one print, and a pair's 15-minute average volume read about 1000× too high (issue #42).
+  `Quote.new/1` refuses an unknown window, and refuses a window on a quote with no volume.
+  `Quote.volume_windows/0` lists the values.
+- **Conformance assertion 30**: a `Quote` from a venue's `get_price/2` that carries a
+  volume must name its window. Measured on `dp_exchange_schwab` before its fix: 1 failure.
+
 ## [0.3.49] - 2026-10-01
 
 ### Fixed

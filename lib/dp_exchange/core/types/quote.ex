@@ -63,17 +63,47 @@ defmodule DpExchange.Core.Types.Quote do
 
   Never `0`. A venue that reports no volume and a venue reporting a genuinely flat period
   are different facts, and `0` claims the second.
+
+  ## `:volume_window` says what quantity `:volume` is
+
+  `:volume` used to say only that it was a volume, and the family filled it with three
+  different quantities: Coinbase's stream a rolling 24-hour total, Schwab's stream one
+  print's size, Schwab's REST quote the day's running total. dp_crypto_management summed
+  the field into candles as if every value were one print. On 2026-10-02 that put a
+  Coinbase pair's 15-minute average volume about 1000× above what the venue trades in a
+  whole day (dp-exchange-core issue #42). The contract invited that mistake, so the window
+  is now stated on every quote that carries a volume:
+
+  * **`:print`** — the size of the one trade `:price` came from. Sum these for an interval's
+    volume.
+  * **`:running_total`** — a cumulative total that the venue resets at a boundary of its
+    own (a trading day, a session). **Difference consecutive values, never sum them**, and
+    treat a decrease as a reset.
+  * **`:rolling_24h`** — the trailing 24 hours, recomputed on every update. **It cannot be
+    turned into an interval's volume**: differencing it gives what traded minus what rolled
+    off a day ago. For per-interval volume, use the venue's trade stream (`:trades`) instead.
+
+  `nil` when `:volume` is `nil`. A quote carrying a volume with a `nil` window comes from a
+  package built before this field existed, and its volume must not be aggregated, because
+  nothing says which of the three it is. `new/1` refuses an unknown window, and refuses a
+  window on a quote with no volume.
   """
 
   alias DpExchange.Core.Types.Validate
 
+  @volume_windows [:print, :running_total, :rolling_24h]
+
   @enforce_keys [:symbol, :price, :observed_at, :provider]
-  defstruct [:symbol, :price, :volume, :venue_time, :observed_at, :provider]
+  defstruct [:symbol, :price, :volume, :volume_window, :venue_time, :observed_at, :provider]
+
+  @typedoc "What quantity `:volume` is. See the moduledoc's `:volume_window` section."
+  @type volume_window :: :print | :running_total | :rolling_24h
 
   @type t :: %__MODULE__{
           symbol: String.t(),
           price: Decimal.t(),
           volume: Decimal.t() | nil,
+          volume_window: volume_window() | nil,
           venue_time: DateTime.t() | nil,
           observed_at: DateTime.t(),
           provider: atom()
@@ -83,7 +113,38 @@ defmodule DpExchange.Core.Types.Quote do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  ## Raises
+
+  On a `:volume_window` outside `#{inspect(@volume_windows)}`, and on a `:volume_window`
+  given for a quote with no `:volume`. Both are a caller's mistake, and both would publish a
+  claim about a quantity that is not there.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+    validate_volume_window!(built)
+    built
+  end
+
+  @doc "Every value `:volume_window` may take when `:volume` is present."
+  @spec volume_windows() :: [volume_window()]
+  def volume_windows, do: @volume_windows
+
+  defp validate_volume_window!(%{volume_window: nil}), do: :ok
+
+  defp validate_volume_window!(%{volume: nil, volume_window: window}) do
+    raise ArgumentError,
+          "Quote :volume_window #{inspect(window)} given with no :volume — a window describes " <>
+            "a volume, and this quote carries none"
+  end
+
+  defp validate_volume_window!(%{volume_window: window}) when window in @volume_windows,
+    do: :ok
+
+  defp validate_volume_window!(%{volume_window: window}) do
+    raise ArgumentError,
+          "unknown Quote :volume_window #{inspect(window)} — must be one of " <>
+            inspect(@volume_windows)
+  end
 end

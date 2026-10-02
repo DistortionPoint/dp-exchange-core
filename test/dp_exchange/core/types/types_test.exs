@@ -184,6 +184,41 @@ defmodule DpExchange.Core.TypesTest do
     end
   end
 
+  describe "Quote :volume_window says what quantity :volume is (issue #42)" do
+    defp quote_attrs(extra) do
+      Keyword.merge(
+        [symbol: "BTC-USD", price: dec(1), observed_at: DateTime.utc_now(), provider: :v],
+        extra
+      )
+    end
+
+    test "each documented window is accepted with a volume" do
+      for window <- [:print, :running_total, :rolling_24h] do
+        built = Quote.new(quote_attrs(volume: dec(5), volume_window: window))
+        assert built.volume_window == window
+      end
+
+      assert Quote.volume_windows() == [:print, :running_total, :rolling_24h]
+    end
+
+    test "an unknown window is refused rather than passed through" do
+      assert_raise ArgumentError, ~r/unknown Quote :volume_window :daily/, fn ->
+        Quote.new(quote_attrs(volume: dec(5), volume_window: :daily))
+      end
+    end
+
+    test "a window with no volume is refused — it would describe nothing" do
+      assert_raise ArgumentError, ~r/given with no :volume/, fn ->
+        Quote.new(quote_attrs(volume_window: :print))
+      end
+    end
+
+    test "no volume and no window is an ordinary quote" do
+      built = Quote.new(quote_attrs([]))
+      assert built.volume == nil and built.volume_window == nil
+    end
+  end
+
   describe "OrderBook levels" do
     test "holds {price, quantity} tuples on both sides" do
       book = %OrderBook{
