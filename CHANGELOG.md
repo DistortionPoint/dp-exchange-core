@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.51] - 2026-10-02
+
 ### Fixed
 
 - **A blocking request is metered once, not twice.** With `rate_limit_blocking: true`,
