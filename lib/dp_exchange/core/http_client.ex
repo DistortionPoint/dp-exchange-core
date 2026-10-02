@@ -121,6 +121,10 @@ defmodule DpExchange.Core.HttpClient do
   - `:retry_delay` - Base delay between retries in milliseconds (default: 1000)
   - `:log_requests` - Whether to log requests (default: true)
   - `:provider` - Provider name for rate limiting (required for rate limiting)
+  - `:rate_limit_per_endpoint` - Also meter this request in a bucket of its own endpoint,
+    keyed `"<provider> <path>"`, beside the provider's (default: `false`). For a venue that
+    states a per-endpoint limit as well as a global one. The endpoint bucket takes the
+    limiter's `:default` limits unless the consumer names it.
   - `:account_id` - Account ID for account-aware rate limiting (optional)
   - `:user_id` - User ID for additional isolation (optional)
   - `:operation` - Operation type for fine-grained rate limiting (default: "default")
@@ -420,6 +424,11 @@ defmodule DpExchange.Core.HttpClient do
 
   # `headers` is what the next attempt resolves again; `resolved` is what this one sends.
   defp attempt(method, url, headers, resolved, body, opts, attempts_left) do
+    # The endpoint a `rate_limit_per_endpoint: true` request is metered under — see
+    # `rate_limit_keys/1`. The URL's path, never its query: `?symbol=BTCUSD` and
+    # `?symbol=ETHUSD` are the same endpoint to the venue's per-endpoint limit.
+    opts = Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path end)
+
     # Check rate limits before making the request
     case check_rate_limits(opts) do
       :ok ->
@@ -735,16 +744,44 @@ defmodule DpExchange.Core.HttpClient do
           | {:error, :rate_limit_timeout | :rate_limiter_unavailable}
           | {:error, :rate_limited, retry_after: integer()}
   defp check_rate_limits(opts) do
+    Enum.reduce_while(rate_limit_keys(opts), :ok, fn key, :ok ->
+      case check_rate_limit(key, opts) do
+        :ok -> {:cont, :ok}
+        refused -> {:halt, refused}
+      end
+    end)
+  end
+
+  defp check_rate_limit(key, opts) do
+    if blocking?(opts) do
+      key |> limiter().acquire(weight(opts), limiter_opts(opts)) |> normalise_acquire()
+    else
+      key |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check()
+    end
+  end
+
+  defp blocking?(opts), do: Config.opt(opts, :rate_limit_blocking, false)
+
+  # **The buckets one request must clear.** The provider's, always. With
+  # `rate_limit_per_endpoint: true`, also one for this endpoint alone, keyed
+  # `"<provider> <path>"`.
+  #
+  # Some venues state a limit per endpoint and a wider one across all of them.
+  # `dp_exchange_webull`'s endpoint pages say "1 request per second per App Key" and "Market
+  # Data Global Limit: 600 requests per minute". One shared bucket cannot express both. At
+  # 60/60s with a burst of 60, it let a backfill send a minute's budget to one endpoint in
+  # an instant, and the venue answered 429 to every request past the first in that second
+  # (measured in a consumer's log, 2026-10-02: 45 `retry_after=5s` on crypto bars). Read
+  # `:path` is the URL's path, filled in by `attempt/7` unless the caller set its own.
+  defp rate_limit_keys(opts) do
     case Keyword.get(opts, :provider) do
       nil ->
-        :ok
+        []
 
       provider ->
-        if Config.opt(opts, :rate_limit_blocking, false) do
-          provider |> limiter().acquire(weight(opts), limiter_opts(opts)) |> normalise_acquire()
-        else
-          provider |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check()
-        end
+        if Config.opt(opts, :rate_limit_per_endpoint, false) and Keyword.has_key?(opts, :path),
+          do: [provider, "#{provider} #{Keyword.fetch!(opts, :path)}"],
+          else: [provider]
     end
   end
 
@@ -769,10 +806,16 @@ defmodule DpExchange.Core.HttpClient do
   # reached `make_http_request/5` — success, retried 5xx, 429, or a permanent 4xx all put a
   # request on the wire and all consumed the venue's real quota. See the call site in
   # `do_request_with_rate_limiting/6`.
+  #
+  # **Not after `acquire/3`.** `acquire` has already reserved this request's tokens; recording
+  # them again counted every blocking request twice, so a venue whose feed paces itself with
+  # `rate_limit_blocking: true` ran at half its declared ceiling. `check/3` reserves nothing,
+  # which is why the non-blocking path must record here.
   defp record_request_sent(opts) do
-    case Keyword.get(opts, :provider) do
-      nil -> :ok
-      provider -> limiter().record(provider, weight(opts), limiter_opts(opts))
+    if blocking?(opts) do
+      :ok
+    else
+      Enum.each(rate_limit_keys(opts), &limiter().record(&1, weight(opts), limiter_opts(opts)))
     end
   end
 

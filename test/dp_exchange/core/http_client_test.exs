@@ -16,10 +16,10 @@ defmodule DpExchange.Core.HttpClientTest do
     alias DpExchange.Core.Config
 
     @impl true
-    def acquire(_provider, _weight, _opts), do: answer(:acquire)
+    def acquire(provider, _weight, _opts), do: answer(:acquire, provider)
 
     @impl true
-    def check(_provider, _weight, _opts), do: answer(:check)
+    def check(provider, _weight, _opts), do: answer(:check, provider)
 
     @impl true
     def record(provider, weight, _opts) do
@@ -27,7 +27,8 @@ defmodule DpExchange.Core.HttpClientTest do
       :ok
     end
 
-    defp answer(which) do
+    defp answer(which, key) do
+      report({which, :key, key})
       report({which, :called})
       Config.get(:dp_exchange_core, :stub_answer, :ok)
     end
@@ -108,6 +109,61 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert_received {:acquire, :called}
       refute_received {:check, :called}
+    end
+
+    test "a blocking request is metered once — acquire reserves, so nothing records again" do
+      # `acquire/3` commits the reservation. Recording the same request afterwards counted
+      # every blocking request twice, so a venue feed pacing itself with
+      # `rate_limit_blocking: true` ran at half its declared ceiling.
+      use_stub()
+      request(provider: "v", rate_limit_blocking: true)
+
+      assert_received {:acquire, :called}
+      refute_received {:recorded, _key, _weight}
+    end
+
+    test "a non-blocking request is recorded, because check reserves nothing" do
+      use_stub()
+      request(provider: "v")
+
+      assert_received {:check, :called}
+      assert_received {:recorded, "v", 1}
+    end
+
+    test "per-endpoint metering checks and records the provider AND the endpoint's own bucket" do
+      # A venue stating "1 request per second per App Key" beside a global per-minute cap
+      # needs both. The endpoint is the URL's path, never its query.
+      use_stub()
+
+      HttpClient.request(:get, "http://127.0.0.1:1/never?symbol=BTCUSD", [], nil,
+        provider: "v",
+        rate_limit_per_endpoint: true,
+        retry_attempts: 0
+      )
+
+      assert_received {:check, :key, "v"}
+      assert_received {:check, :key, "v /never"}
+      assert_received {:recorded, "v", 1}
+      assert_received {:recorded, "v /never", 1}
+    end
+
+    test "per-endpoint metering stops at the first bucket that refuses" do
+      use_stub({:rate_limited, 1_500})
+
+      assert {:error, {:exchange_error, "v", _message}} =
+               request(provider: "v", rate_limit_per_endpoint: true)
+
+      assert_received {:check, :key, "v"}
+      refute_received {:check, :key, "v /never"}
+      refute_received {:recorded, _key, _weight}
+    end
+
+    test "without the option only the provider's bucket is metered" do
+      use_stub()
+      request(provider: "v")
+
+      assert_received {:check, :key, "v"}
+      refute_received {:check, :key, "v /never"}
     end
 
     test "no provider means no metering at all" do

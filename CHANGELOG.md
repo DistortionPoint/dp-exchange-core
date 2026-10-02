@@ -21,6 +21,24 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A blocking request is metered once, not twice.** With `rate_limit_blocking: true`,
+  `HttpClient` acquired from the limiter, which reserves the request's tokens, then recorded
+  the same request again after sending it. Every venue feed that paces itself this way ran
+  at half its declared ceiling: Webull's at 30 requests a minute against a declared 60.
+  Only the non-blocking path records now, because `check/3` reserves nothing.
+
+### Added
+
+- **`rate_limit_per_endpoint: true`** also meters a request in a bucket of its own
+  endpoint, keyed `"<provider> <path>"`, beside the provider's bucket. The path is the
+  URL's, without its query. It is for venues that state a per-endpoint limit beside a
+  global one. Webull's pages say "1 request per second per App Key" and "600 requests per
+  minute", and one shared bucket at 60/60s with a burst of 60 let a backfill send a minute's
+  budget to one endpoint at once. A consumer's log on 2026-10-02 showed 45 `429`s with
+  `retry_after=5s` on Webull's crypto bars.
+
 ## [0.3.50] - 2026-10-02
 
 ### Added
