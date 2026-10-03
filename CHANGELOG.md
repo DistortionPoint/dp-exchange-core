@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.52] - 2026-10-03
+
 ### Fixed
 
 - **Concurrent non-blocking requests can no longer overspend a bucket.** The non-blocking
