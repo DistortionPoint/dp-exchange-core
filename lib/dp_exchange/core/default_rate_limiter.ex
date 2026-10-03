@@ -205,6 +205,21 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   end
 
   @doc """
+  Holds `provider`'s bucket closed for at least `ms` milliseconds — for a venue's own
+  `Retry-After`. See `c:DpExchange.Core.RateLimitBehaviour.penalize/3`.
+
+  Never shortens a hold already in place. **Cannot fail**, like `record/3`.
+  """
+  @impl DpExchange.Core.RateLimitBehaviour
+  @spec penalize(atom() | String.t(), non_neg_integer(), keyword()) :: :ok
+  def penalize(provider, ms, opts \\ []) when is_integer(ms) and ms >= 0 do
+    call(opts, {:penalize, provider, ms})
+    :ok
+  catch
+    :exit, _reason -> :ok
+  end
+
+  @doc """
   The limiter's current view of a provider, for tests and diagnostics.
 
   Returns `%{next_allowed_in_ms: non_neg_integer()}` — zero when the provider may
@@ -334,6 +349,17 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def handle_call({:check, provider, weight}, _from, state) do
     {wait_ms, _new_tat} = reserve(state, provider, weight)
     {:reply, {:ok, wait_ms}, state}
+  end
+
+  # Moves this provider's `tat` forward so the next request's `allowed_at` is no earlier
+  # than `now + ms`, whatever burst it carries: `reserve/3` subtracts `burst * per_ms`
+  # after adding one emission interval, so `tat` is placed `(burst - 1) * per_ms` past that
+  # instant. Never moved back: a hold already longer than this one stands.
+  def handle_call({:penalize, provider, ms}, _from, state) do
+    %{limit: limit, per_ms: per_ms, burst: burst} = limit_for(state, provider)
+    held_until = (System.monotonic_time(:millisecond) + ms) * limit + max(burst - 1, 0) * per_ms
+    current = Map.get(state.tat, provider, held_until)
+    {:reply, {:ok, 0}, put_in(state.tat[provider], max(current, held_until))}
   end
 
   def handle_call({:record, provider, weight}, _from, state) do

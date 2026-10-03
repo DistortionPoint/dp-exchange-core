@@ -383,4 +383,69 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       assert {:error, :unknown_call} = GenServer.call(opts[:limiter], :nonsense)
     end
   end
+
+  describe "penalize/3 — a venue's Retry-After holds the bucket" do
+    test "holds a bucket with room closed for the stated time" do
+      opts = start_limiter(fast())
+
+      :ok = Limiter.penalize("v", 2_000, opts)
+
+      assert {:rate_limited, wait_ms} = Limiter.check("v", 1, opts)
+      assert wait_ms > 1_900 and wait_ms <= 2_000
+    end
+
+    test "never shortens a hold already in place" do
+      opts = start_limiter(fast())
+
+      :ok = Limiter.penalize("v", 5_000, opts)
+      :ok = Limiter.penalize("v", 1_000, opts)
+
+      assert {:rate_limited, wait_ms} = Limiter.check("v", 1, opts)
+      assert wait_ms > 4_000
+    end
+
+    test "holds only the bucket it names" do
+      opts = start_limiter(fast())
+
+      :ok = Limiter.penalize("v /bars", 5_000, opts)
+
+      assert :ok = Limiter.check("v /snapshot", 1, opts)
+    end
+
+    test "cannot fail — a limiter that is not running is not the caller's problem" do
+      assert :ok = Limiter.penalize("v", 1_000, limiter: :no_such_limiter)
+    end
+  end
+
+  describe "HttpClient against this limiter: concurrent non-blocking requests" do
+    test "a 1/s bucket with a burst of 1 lets exactly one of eight simultaneous requests out" do
+      # The race this closes: `check` reserved nothing, so concurrent callers all passed it
+      # before any recorded. dp_exchange_webull, 2026-10-03: two requests 250 ms apart went
+      # through such a bucket and the venue answered 429.
+      opts = start_limiter(%{default: %{limit: 60, per_ms: 60_000, burst: 1}})
+      sent = :counters.new(1, [:atomics])
+
+      plug = fn conn ->
+        :counters.add(sent, 1, 1)
+        Req.Test.json(conn, %{})
+      end
+
+      results =
+        1..8
+        |> Enum.map(fn _n ->
+          Task.async(fn ->
+            DpExchange.Core.HttpClient.request(:get, "http://venue.test/x", [], nil,
+              plug: plug,
+              provider: "v",
+              retry_attempts: 1,
+              limiter: opts[:limiter]
+            )
+          end)
+        end)
+        |> Task.await_many()
+
+      assert :counters.get(sent, 1) == 1
+      assert Enum.count(results, &match?({:ok, _}, &1)) == 1
+    end
+  end
 end

@@ -21,6 +21,25 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Concurrent non-blocking requests can no longer overspend a bucket.** The non-blocking
+  path called `check/3`, which reserves nothing, then sent the request, then called
+  `record/3`. Concurrent callers all passed the check before any of them recorded. On
+  2026-10-03, a consumer fetching Webull bars in parallel per symbol sent two requests 250 ms
+  apart through a 1/s bucket with a burst of 1, and drew a 429. Both paths now reserve
+  atomically before sending. The non-blocking path uses `acquire/3` with a zero timeout,
+  which reserves only if there is room now and commits nothing otherwise; `check/3` is
+  asked only afterwards, for the wait to report. Nothing is recorded after a request,
+  because every attempt is already counted by its reservation. Measured with the real
+  limiter: one of eight simultaneous requests goes out, where before there were two.
+- **A venue's `Retry-After` now holds the whole bucket**, not only the request that drew
+  it. After one Webull 429 with `retry_after=5s`, requests paced at the bucket's own 1/s
+  drew 26 more in 31 s. `HttpClient` now holds the most specific bucket (the endpoint's,
+  under `rate_limit_per_endpoint`) for the stated time through the new optional
+  `RateLimitBehaviour.penalize/3`, which `DefaultRateLimiter` implements. A limiter
+  without it keeps working unchanged.
+
 ## [0.3.51] - 2026-10-02
 
 ### Fixed

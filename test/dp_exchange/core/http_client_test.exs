@@ -15,8 +15,23 @@ defmodule DpExchange.Core.HttpClientTest do
 
     alias DpExchange.Core.Config
 
+    # Modelled on `DefaultRateLimiter`'s contract, because `HttpClient` now relies on it:
+    # `acquire/3` RESERVES when it answers `:ok` (reported as `:counted`), and a bucket that
+    # is full refuses an acquire as `:rate_limit_timeout`, committing nothing.
     @impl true
-    def acquire(provider, _weight, _opts), do: answer(:acquire, provider)
+    def acquire(provider, weight, _opts) do
+      case answer(:acquire, provider) do
+        :ok ->
+          report({:counted, provider, weight})
+          :ok
+
+        {:rate_limited, _ms} ->
+          {:error, :rate_limit_timeout}
+
+        other ->
+          other
+      end
+    end
 
     @impl true
     def check(provider, _weight, _opts), do: answer(:check, provider)
@@ -24,6 +39,12 @@ defmodule DpExchange.Core.HttpClientTest do
     @impl true
     def record(provider, weight, _opts) do
       report({:recorded, provider, weight})
+      :ok
+    end
+
+    @impl true
+    def penalize(provider, ms, _opts) do
+      report({:penalized, provider, ms})
       :ok
     end
 
@@ -118,19 +139,25 @@ defmodule DpExchange.Core.HttpClientTest do
       use_stub()
       request(provider: "v", rate_limit_blocking: true)
 
-      assert_received {:acquire, :called}
+      assert_received {:counted, "v", 1}
+      refute_received {:counted, "v", 1}
       refute_received {:recorded, _key, _weight}
     end
 
-    test "a non-blocking request is recorded, because check reserves nothing" do
+    test "a non-blocking request reserves atomically — acquire with no wait — and records nothing" do
+      # It used to `check` (which reserves nothing), send, then `record`. Concurrent callers
+      # all passed the check before any recorded, so two requests 250 ms apart went through
+      # a 1/s bucket and drew a venue 429 (dp_exchange_webull, 2026-10-03).
       use_stub()
       request(provider: "v")
 
-      assert_received {:check, :called}
-      assert_received {:recorded, "v", 1}
+      assert_received {:acquire, :key, "v"}
+      assert_received {:counted, "v", 1}
+      refute_received {:check, :called}
+      refute_received {:recorded, _key, _weight}
     end
 
-    test "per-endpoint metering checks and records the provider AND the endpoint's own bucket" do
+    test "per-endpoint metering reserves in the provider's AND the endpoint's own bucket" do
       # A venue stating "1 request per second per App Key" beside a global per-minute cap
       # needs both. The endpoint is the URL's path, never its query.
       use_stub()
@@ -141,29 +168,45 @@ defmodule DpExchange.Core.HttpClientTest do
         retry_attempts: 0
       )
 
-      assert_received {:check, :key, "v"}
-      assert_received {:check, :key, "v /never"}
-      assert_received {:recorded, "v", 1}
-      assert_received {:recorded, "v /never", 1}
+      assert_received {:counted, "v", 1}
+      assert_received {:counted, "v /never", 1}
     end
 
-    test "per-endpoint metering stops at the first bucket that refuses" do
+    test "per-endpoint metering stops at the first bucket that refuses, and asks how long" do
       use_stub({:rate_limited, 1_500})
 
-      assert {:error, {:exchange_error, "v", _message}} =
+      assert {:error, {:exchange_error, "v", message}} =
                request(provider: "v", rate_limit_per_endpoint: true)
 
+      assert message =~ "retry after 2s"
+      assert_received {:acquire, :key, "v"}
       assert_received {:check, :key, "v"}
-      refute_received {:check, :key, "v /never"}
-      refute_received {:recorded, _key, _weight}
+      refute_received {:acquire, :key, "v /never"}
+      refute_received {:counted, _key, _weight}
     end
 
     test "without the option only the provider's bucket is metered" do
       use_stub()
       request(provider: "v")
 
-      assert_received {:check, :key, "v"}
-      refute_received {:check, :key, "v /never"}
+      assert_received {:acquire, :key, "v"}
+      refute_received {:acquire, :key, "v /never"}
+    end
+
+    test "a venue 429 holds the bucket for its Retry-After, not only the request that drew it" do
+      # After one 429 with `retry_after=5s`, requests paced at the bucket's own 1/s drew 26
+      # more in 31 s (dp_exchange_webull, 2026-10-03). The most specific bucket is held.
+      use_stub()
+
+      HttpClient.request(:get, "http://venue.test/bars?symbol=X", [], nil,
+        plug: responding(429, %{}),
+        provider: "v",
+        rate_limit_per_endpoint: true,
+        retry_attempts: 0
+      )
+
+      assert_received {:penalized, "v /bars", ms} when ms > 0
+      refute_received {:penalized, "v", _ms}
     end
 
     test "no provider means no metering at all" do
@@ -503,21 +546,21 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
-  describe "recording — nothing fills the bucket unless something reports what left" do
-    test "a successful request is recorded against the venue" do
+  describe "counting — nothing fills the bucket unless something reports what left" do
+    test "a successful request is counted against the venue" do
       # The incident: a venue acquired before every request and recorded none, so its
       # ceiling metered against a bucket nothing wrote to and every check passed.
       use_stub()
 
       assert {:ok, _response} = get(plug: responding(200, %{}), provider: "v")
-      assert_received {:recorded, "v", 1}
+      assert_received {:counted, "v", 1}
     end
 
-    test "weight is carried through to the record" do
+    test "weight is carried through to the reservation" do
       use_stub()
 
       assert {:ok, _response} = get(plug: responding(200, %{}), provider: "v", weight: 5)
-      assert_received {:recorded, "v", 5}
+      assert_received {:counted, "v", 5}
     end
 
     test "a request with no provider records nothing" do
@@ -699,8 +742,8 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
-  describe "C4 — every request actually put on the wire is recorded, not only 2xx" do
-    test "a retried 5xx is recorded once per attempt, not only on the eventual success" do
+  describe "C4 — every request actually put on the wire is counted, not only 2xx" do
+    test "a retried 5xx is counted once per attempt, not only on the eventual success" do
       # The same mechanism as this module's own moduledoc incident: a bucket that only
       # counts successes under-counts real usage. A 5xx that gets retried genuinely
       # reached the wire and genuinely consumed the venue's quota twice here, not once.
@@ -719,36 +762,36 @@ defmodule DpExchange.Core.HttpClientTest do
       assert {:ok, %{status: 200}} =
                get(plug: plug, provider: "v", retry_attempts: 3, retry_delay: 1)
 
-      assert_received {:recorded, "v", 1}
-      assert_received {:recorded, "v", 1}
-      refute_received {:recorded, "v", 1}
+      assert_received {:counted, "v", 1}
+      assert_received {:counted, "v", 1}
+      refute_received {:counted, "v", 1}
     end
 
-    test "a permanent 4xx that is never retried is still recorded — it reached the wire once" do
+    test "a permanent 4xx that is never retried is still counted — it reached the wire once" do
       use_stub()
 
       assert {:error, _message} = get(plug: responding(404, %{}), provider: "v")
 
-      assert_received {:recorded, "v", 1}
+      assert_received {:counted, "v", 1}
     end
 
-    test "a venue 429 is recorded — the request was sent and the quota was spent either way" do
+    test "a venue 429 is counted — the request was sent and the quota was spent either way" do
       use_stub()
 
       assert {:error, {:exchange_error, "v", _message}} =
                get(plug: responding(429, %{}), provider: "v")
 
-      assert_received {:recorded, "v", 1}
+      assert_received {:counted, "v", 1}
     end
 
-    test "a request refused by OUR OWN limiter before it left the process is not recorded" do
+    test "a request refused by OUR OWN limiter before it left the process is not counted" do
       # Nothing was put on the wire here, so nothing should be metered as if it had been.
       use_stub({:rate_limited, 1_000})
 
       assert {:error, {:exchange_error, "v", _message}} =
                get(plug: responding(200, %{}), provider: "v")
 
-      refute_received {:recorded, "v", _weight}
+      refute_received {:counted, "v", _weight}
     end
   end
 

@@ -73,13 +73,16 @@ defmodule DpExchange.Core.BehavioursTest do
   end
 
   describe "RateLimitBehaviour" do
-    test "declares acquire, check and record, none optional" do
+    test "declares acquire, check and record as required, and penalize as the one optional" do
       callbacks = RateLimitBehaviour.behaviour_info(:callbacks)
 
       assert {:acquire, 3} in callbacks
       assert {:check, 3} in callbacks
       assert {:record, 3} in callbacks
-      assert RateLimitBehaviour.behaviour_info(:optional_callbacks) == []
+      # `penalize/3` (a venue's Retry-After) is optional so a limiter written before it existed
+      # still implements the contract; `HttpClient` calls it only when exported.
+      assert {:penalize, 3} in callbacks
+      assert RateLimitBehaviour.behaviour_info(:optional_callbacks) == [penalize: 3]
     end
 
     test "defines no functions of its own — it is a pure contract" do

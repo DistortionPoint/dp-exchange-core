@@ -42,9 +42,9 @@ defmodule DpExchange.Core.HttpClient do
   venue's quota, and neither was recorded. The 312 calls missing from the 83/240 incident
   above were not a mystery once this was found: they were exactly the retried and
   rate-limited requests, the very shapes this branch skipped. Every outcome of
-  `make_http_request/5` — success, retry, 429, or a permanent 4xx — is now recorded once,
-  right after the request is actually made, before the result is inspected. See
-  `record_request_sent/1`.
+  `make_http_request/5` — success, retry, 429, or a permanent 4xx — is now counted once,
+  by the reservation each attempt makes before it is sent (an `acquire/3`, with a zero
+  timeout on the non-blocking path). See `check_rate_limit/2`.
   """
 
   require Logger
@@ -432,17 +432,13 @@ defmodule DpExchange.Core.HttpClient do
     # Check rate limits before making the request
     case check_rate_limits(opts) do
       :ok ->
+        # Every attempt reserved its tokens in `check_rate_limits/1` before it was sent, so
+        # every outcome is already counted: a 5xx retried below and a 429 consumed the
+        # venue's quota exactly as a 2xx did. Counting only successes is the incident this
+        # module's moduledoc records ("395 calls per 60s against a documented 300, while
+        # the budget panel read 83/240"). Nothing is recorded again afterwards, because a
+        # second count halves the ceiling.
         response = make_http_request(method, url, resolved, body, opts)
-
-        # Recorded for every outcome, not only `{:ok, _}` — a 5xx that gets retried below
-        # and a 429 (`handle_rate_limit/3`) both actually left this process and actually
-        # consumed the venue's quota, exactly as a 2xx did. Recording only success is the
-        # same mechanism as the incident this module's moduledoc already records: a venue
-        # package that acquired before every request and recorded only its successes had a
-        # bucket that under-counted real usage — "395 calls per 60s against a documented
-        # 300, while the budget panel read 83/240." The 312 unrecorded calls there were
-        # exactly the retried and rate-limited ones this now covers.
-        record_request_sent(opts)
 
         case response do
           {:ok, response} ->
@@ -457,6 +453,8 @@ defmodule DpExchange.Core.HttpClient do
           # cadence. Surface as a 2-tuple error so existing callers
           # (OrderbookCollector handle_fetch_error etc.) match it.
           {:error, :rate_limited, retry_after: seconds} ->
+            hold_for_retry_after(opts, seconds)
+
             wrap_exchange_error(
               opts,
               "Rate limited by the venue — retry after " <> to_string(seconds) <> "s"
@@ -752,11 +750,33 @@ defmodule DpExchange.Core.HttpClient do
     end)
   end
 
+  # **Both paths reserve, atomically, before the request is sent.** The non-blocking path used
+  # to `check/3` (which reserves nothing), send, then `record/3`. Concurrent callers all
+  # passed the check before any of them recorded, so N tasks spent N tokens from a bucket
+  # with room for one. Measured 2026-10-03 on `dp_exchange_webull`: a consumer fetching bars
+  # in parallel per symbol sent two requests 250 ms apart through a 1/s bucket with a burst of
+  # 1, and drew a 429. An `acquire/3` with a zero timeout reserves only when there is room
+  # now, and commits nothing otherwise. `check/3` is consulted only after a refusal, to say
+  # how long to wait.
   defp check_rate_limit(key, opts) do
     if blocking?(opts) do
       key |> limiter().acquire(weight(opts), limiter_opts(opts)) |> normalise_acquire()
     else
-      key |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check()
+      case limiter().acquire(key, weight(opts), Keyword.put(limiter_opts(opts), :timeout, 0)) do
+        :ok -> :ok
+        {:error, :rate_limit_timeout} -> key |> how_long(opts) |> normalise_check()
+        {:error, _reason} -> {:error, :rate_limiter_unavailable}
+      end
+    end
+  end
+
+  # A refusal whose wait has already elapsed by the time it is asked still refuses: the
+  # reservation was not made, and a second attempt here would be a retry the caller did not
+  # ask for. One second is the smallest wait `Retry-After` can state.
+  defp how_long(key, opts) do
+    case limiter().check(key, weight(opts), limiter_opts(opts)) do
+      :ok -> {:rate_limited, 1_000}
+      answer -> answer
     end
   end
 
@@ -771,7 +791,7 @@ defmodule DpExchange.Core.HttpClient do
   # Data Global Limit: 600 requests per minute". One shared bucket cannot express both. At
   # 60/60s with a burst of 60, it let a backfill send a minute's budget to one endpoint in
   # an instant, and the venue answered 429 to every request past the first in that second
-  # (measured in a consumer's log, 2026-10-02: 45 `retry_after=5s` on crypto bars). Read
+  # (measured in a consumer's log, 2026-10-02: 45 `retry_after=5s` on crypto bars).
   # `:path` is the URL's path, filled in by `attempt/7` unless the caller set its own.
   defp rate_limit_keys(opts) do
     case Keyword.get(opts, :provider) do
@@ -802,22 +822,23 @@ defmodule DpExchange.Core.HttpClient do
     {:error, :rate_limited, retry_after: ceil(retry_after_ms / 1000)}
   end
 
-  # Named for what actually happened, not for the outcome. Called once per attempt that
-  # reached `make_http_request/5` — success, retried 5xx, 429, or a permanent 4xx all put a
-  # request on the wire and all consumed the venue's real quota. See the call site in
-  # `do_request_with_rate_limiting/6`.
-  #
-  # **Not after `acquire/3`.** `acquire` has already reserved this request's tokens; recording
-  # them again counted every blocking request twice, so a venue whose feed paces itself with
-  # `rate_limit_blocking: true` ran at half its declared ceiling. `check/3` reserves nothing,
-  # which is why the non-blocking path must record here.
-  defp record_request_sent(opts) do
-    if blocking?(opts) do
-      :ok
-    else
-      Enum.each(rate_limit_keys(opts), &limiter().record(&1, weight(opts), limiter_opts(opts)))
+  # **A venue's `Retry-After` holds the bucket, not only the request that drew it.** The 429
+  # says the venue will refuse this bucket for that long. Honouring it for one request let
+  # every other caller keep sending into the penalty: on 2026-10-03, after one 429 with
+  # `retry_after=5s`, `dp_exchange_webull` sent at its bucket's own 1/s and drew 26 more in
+  # 31s. The most specific bucket is held, the endpoint's when there is one, because that is
+  # the limit the venue enforced. Optional on the limiter (`c:RateLimitBehaviour.penalize/3`).
+  defp hold_for_retry_after(opts, seconds) when is_integer(seconds) and seconds > 0 do
+    with [_first | _rest] = keys <- rate_limit_keys(opts),
+         limiter = limiter(),
+         true <- function_exported?(limiter, :penalize, 3) do
+      limiter.penalize(List.last(keys), seconds * 1_000, limiter_opts(opts))
     end
+
+    :ok
   end
+
+  defp hold_for_retry_after(_opts, _seconds), do: :ok
 
   # Resolved per call, never at compile time, and through `Config` rather than
   # `Application.get_env/3` so a consumer's async test can swap it for its own process

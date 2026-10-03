@@ -85,4 +85,19 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   does not happen; a missed record costs accuracy in the ceiling, not the request.
   """
   @callback record(provider(), weight(), opts()) :: :ok
+
+  @doc """
+  Holds `provider`'s bucket closed for at least `ms` milliseconds from now.
+
+  For a venue's own `Retry-After`. A 429 says the venue will refuse this bucket's requests
+  for that long, and a limiter that ignores it lets every other caller keep spending into
+  the penalty. Measured 2026-10-03 on `dp_exchange_webull`: after one 429 with
+  `retry_after=5s`, requests paced at the bucket's own 1/s drew 26 more 429s in 31s.
+
+  Optional. `HttpClient` calls it only when the limiter exports it, so a limiter written
+  before it existed keeps working. **Cannot fail**, for the reason `c:record/3` cannot.
+  """
+  @callback penalize(provider(), non_neg_integer(), opts()) :: :ok
+
+  @optional_callbacks penalize: 3
 end
