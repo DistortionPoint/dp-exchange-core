@@ -64,7 +64,10 @@ defmodule DpExchange.Core.Fanout do
 
   So the caller carries the set of subscribers currently being dropped, and `deliver/4`
   returns it back along with only the *transitions*: `:dropping` the first time a
-  subscriber is found over its bound, `:resumed` the first time it is found back under.
+  subscriber is found over its bound, `:resumed` the first time it has drained below
+  `resume_below/1`, half the bound. Not merely back under it: a consumer hovering at the
+  bound would otherwise flip on every message, and each flip is a notice into its full
+  mailbox (measured 2026-10-04, 5_700 notices in five minutes).
   Both are worth a notice — a consumer needs to know when data loss started, and it needs
   to know when it stopped, because those two instants bracket exactly what it has to
   reconcile from a pull endpoint.
@@ -361,28 +364,52 @@ defmodule DpExchange.Core.Fanout do
   defp delivery_pid(pid) when is_pid(pid), do: pid
   defp delivery_pid(name) when is_atom(name), do: Process.whereis(name)
 
+  # **Hysteresis: a subscriber being dropped resumes only below half the bound.** It used to
+  # resume the moment its queue was one under `max`. A consumer hovering at the bound then
+  # flipped on every message, `:dropping`, `:resumed`, `:dropping`, and each flip became a
+  # notice sent into the same mailbox that was already full. Measured 2026-10-04 in
+  # dp_crypto_management: queue lengths of 10_002, 10_000, 10_002 against a 10_000 bound, and
+  # 5_700 of these notices in five minutes across four venues, up to 2_062 a minute from one.
+  # The cure was feeding the disease, which this module's moduledoc names as the thing to
+  # avoid. Now a subscriber over the bound stays dropped, with no send and no transition,
+  # until it has drained to `resume_below/1`, so one stall costs one `:dropping` and one
+  # `:resumed`.
   defp deliver_one(pid, message, max, was_dropping, {sent, now_dropping, transitions}) do
+    dropping? = MapSet.member?(was_dropping, pid)
+
     case Process.info(pid, :message_queue_len) do
       {:message_queue_len, queue_len} when queue_len >= max ->
         transitions =
-          if MapSet.member?(was_dropping, pid),
+          if dropping?,
             do: transitions,
             else: [{pid, :dropping, queue_len} | transitions]
 
         {sent, MapSet.put(now_dropping, pid), transitions}
 
-      {:message_queue_len, queue_len} ->
+      {:message_queue_len, queue_len} when dropping? ->
+        if queue_len < resume_below(max) do
+          send(pid, message)
+          {sent + 1, now_dropping, [{pid, :resumed, queue_len} | transitions]}
+        else
+          {sent, MapSet.put(now_dropping, pid), transitions}
+        end
+
+      {:message_queue_len, _queue_len} ->
         send(pid, message)
-
-        transitions =
-          if MapSet.member?(was_dropping, pid),
-            do: [{pid, :resumed, queue_len} | transitions],
-            else: transitions
-
         {sent + 1, now_dropping, transitions}
 
       nil ->
         {sent, now_dropping, transitions}
     end
   end
+
+  @doc """
+  The queue length a subscriber being dropped must drain below before it is sent to again:
+  half the bound, and at least 1.
+
+  See `deliver/4`. Resuming one message under the bound made a consumer hovering there flip
+  on every message, each flip a notice into its full mailbox.
+  """
+  @spec resume_below(pos_integer()) :: pos_integer()
+  def resume_below(max) when is_integer(max) and max > 0, do: max(div(max, 2), 1)
 end

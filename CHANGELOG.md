@@ -21,6 +21,17 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A slow subscriber resumes only once it has drained below half the bound**
+  (`Fanout.resume_below/1`), not the moment it is one message under. A consumer hovering
+  at the bound flipped `:dropping`/`:resumed` on every message, and each flip was a
+  `:degraded` or `:info` notice sent into the same full mailbox. In dp_crypto_management on
+  2026-10-04 that meant queue lengths of 10_002, 10_000, 10_002 against a 10_000 bound,
+  and 5,700 notices in five minutes across four venues, up to 2,062 a minute from one.
+  One stall now costs one `:dropping` and one `:resumed`. Every venue's feed delivers
+  through `Fanout.deliver/4`, so this covers all five.
+
 ## [0.3.52] - 2026-10-03
 
 ### Fixed

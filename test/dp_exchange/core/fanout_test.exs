@@ -142,6 +142,50 @@ defmodule DpExchange.Core.FanoutTest do
       assert {1, _still_empty, []} = Fanout.deliver([subscriber], :c, resumed_set, opts)
     end
 
+    test "a subscriber hovering just under the bound stays dropped — no flip, no notice, no send" do
+      # dp_crypto_management, 2026-10-04: queues of 10_002, 10_000, 10_002 against a 10_000
+      # bound flipped `:dropping`/`:resumed` on every message, and 5_700 notices went into the
+      # very mailbox that was full.
+      subscriber = stalled_subscriber()
+      backlog(subscriber, 10)
+      opts = [max_queue_len: 10]
+
+      {0, dropping, [{^subscriber, :dropping, 10}]} =
+        Fanout.deliver([subscriber], :a, MapSet.new(), opts)
+
+      drain(subscriber)
+      backlog(subscriber, 9)
+
+      assert {0, ^dropping, []} = Fanout.deliver([subscriber], :b, dropping, opts)
+      assert queue_len(subscriber) == 9
+
+      drain(subscriber)
+      backlog(subscriber, Fanout.resume_below(10))
+
+      assert {0, ^dropping, []} = Fanout.deliver([subscriber], :c, dropping, opts)
+    end
+
+    test "below half the bound it resumes, once" do
+      subscriber = stalled_subscriber()
+      backlog(subscriber, 10)
+      opts = [max_queue_len: 10]
+
+      {0, dropping, _started} = Fanout.deliver([subscriber], :a, MapSet.new(), opts)
+      drain(subscriber)
+      backlog(subscriber, Fanout.resume_below(10) - 1)
+
+      assert {1, resumed_set, [{^subscriber, :resumed, 4}]} =
+               Fanout.deliver([subscriber], :b, dropping, opts)
+
+      assert Enum.empty?(resumed_set)
+    end
+
+    test "resume_below is half the bound, never below 1" do
+      assert Fanout.resume_below(10_000) == 5_000
+      assert Fanout.resume_below(3) == 1
+      assert Fanout.resume_below(1) == 1
+    end
+
     test "a subscriber that dies while dropping leaves the set without being pruned" do
       # The set is rebuilt from what was observed, never edited in place, so there is no
       # separate cleanup path that could be forgotten and leak pids for the life of a feed.
