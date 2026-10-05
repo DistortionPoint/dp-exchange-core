@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.53] - 2026-10-05
+
 ### Fixed
 
 - **A slow subscriber resumes only once it has drained below half the bound**
