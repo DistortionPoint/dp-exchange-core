@@ -197,6 +197,12 @@ defmodule DpExchange.Core.Fanout do
   considers gone.
   """
   @spec resolve(subscriber()) :: pid() | nil
+  # A pid on another node is returned as it is. `Process.alive?/1` raises `ArgumentError`
+  # for a non-local pid, so a remote subscriber used to crash the feed asking. A monitor is
+  # what reports a remote subscriber gone, and `watch/2` sets one. Found 2026-10-10 by
+  # reading the path.
+  def resolve(pid) when is_pid(pid) and node(pid) != node(), do: pid
+
   def resolve(pid) when is_pid(pid) do
     if Process.alive?(pid), do: pid
   end
@@ -378,6 +384,18 @@ defmodule DpExchange.Core.Fanout do
   # avoid. Now a subscriber over the bound stays dropped, with no send and no transition,
   # until it has drained to `resume_below/1`, so one stall costs one `:dropping` and one
   # `:resumed`.
+  #
+  # **A subscriber on another node is sent to without the bound.** `Process.info/2` raises
+  # `ArgumentError` for a non-local pid, so one remote subscriber crashed the venue's feed on
+  # its first fan-out and took every local subscriber down with it. Found 2026-10-10 by
+  # reading the path. A remote mailbox cannot be measured from here, and the distribution
+  # channel applies its own busy-port back-pressure, so the bound is a local guarantee.
+  defp deliver_one(pid, message, _max, _was_dropping, {sent, now_dropping, transitions})
+       when node(pid) != node() do
+    send(pid, message)
+    {sent + 1, now_dropping, transitions}
+  end
+
   defp deliver_one(pid, message, max, was_dropping, {sent, now_dropping, transitions}) do
     dropping? = MapSet.member?(was_dropping, pid)
 

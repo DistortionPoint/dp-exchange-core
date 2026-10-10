@@ -1055,4 +1055,96 @@ defmodule DpExchange.Core.PollingFeedTest do
       }
     end
   end
+
+  describe "found 2026-10-10" do
+    test "a symbol removed while queued and re-added is polled again" do
+      # The first fetch blocks so the other symbol's tick has to wait in the queue. Removing
+      # that symbol makes `start_next/1` skip it, and that skip used to leave it counted as
+      # scheduled, so the re-add set no timer and it was never asked again.
+      test = self()
+      first_call = :atomics.new(1, [])
+
+      feed =
+        start_feed(
+          symbols: ~w(A B),
+          interval_ms: 20,
+          fetch: fn symbol ->
+            send(test, {:fetching, symbol, self()})
+
+            if :atomics.compare_exchange(first_call, 1, 0, 1) == :ok do
+              receive do
+                :go -> :ok
+              end
+            end
+
+            {:ok, event(symbol)}
+          end
+        )
+
+      assert_receive {:fetching, first, task}, 1_000
+      [other] = ~w(A B) -- [first]
+
+      PollingFeed.update_symbols(feed, [first])
+      _status = PollingFeed.status(feed)
+      send(task, :go)
+      assert_receive {:published, %{symbol: ^first}}, 1_000
+
+      PollingFeed.update_symbols(feed, [first, other])
+      assert_receive {:fetching, ^other, _task}, 1_000
+    end
+
+    test "a per-symbol event for a different symbol is a failure, not a delivery" do
+      feed =
+        start_feed(
+          symbols: ["BTC-USD"],
+          fetch: fn _symbol -> {:ok, event("XBT-USD")} end
+        )
+
+      refute_receive {:published, _}, 200
+      assert PollingFeed.coverage(feed) == %{}
+      assert %{last_error: {:unrequested_symbols, ["XBT-USD"]}} = PollingFeed.status(feed)
+    end
+
+    test "an out-of-contract per-symbol result is recorded, and the feed survives" do
+      feed = start_feed(symbols: ["BTC-USD"], fetch: fn _symbol -> {:ok, nil} end)
+
+      Process.sleep(120)
+      assert Process.alive?(feed)
+      assert %{last_error: {:bad_fetch_result, {:ok, nil}}} = PollingFeed.status(feed)
+    end
+
+    test "an out-of-contract bulk result is recorded, and the feed survives" do
+      for answer <- [:ok, {:ok, nil}, {:ok, [:not_a_map]}] do
+        feed =
+          start_supervised!(
+            {PollingFeed,
+             sink: sink_to_self(),
+             start_delay_ms: 0,
+             interval_ms: 50,
+             symbols: ["BTC-USD"],
+             fetch_all: fn _symbols -> answer end},
+            id: make_ref()
+          )
+
+        Process.sleep(120)
+        assert Process.alive?(feed)
+        assert %{last_error: {:bad_fetch_result, _answer}} = PollingFeed.status(feed)
+      end
+    end
+
+    test "telemetry names the :provider, the same as the feed's notices" do
+      provider = :"poll_provider_#{System.unique_integer([:positive])}"
+      :ok = attach_link(provider)
+
+      start_feed(
+        label: "some-poll-label",
+        provider: provider,
+        symbols: ["BTC-USD"],
+        fetch: fn symbol -> {:ok, quote_for(symbol)} end
+      )
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _measurements, metadata}, 2_000
+      assert metadata.provider == provider
+    end
+  end
 end

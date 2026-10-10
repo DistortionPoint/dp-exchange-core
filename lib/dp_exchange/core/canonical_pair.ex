@@ -160,9 +160,24 @@ defmodule DpExchange.Core.CanonicalPair do
     end
   end
 
+  # **Two exchange codes for one canonical code are refused, not picked between.** This was
+  # `Enum.find_value/3` over the alias map, so `%{"XBT" => "BTC", "XXBT" => "BTC"}` sent
+  # whichever code map iteration order reached first, and the other was unreachable. The
+  # round-trip invariant cannot catch it, because `to_canonical/2` accepts both. Found
+  # 2026-10-10 by reading the path. A mapping that cannot say which code to send is a
+  # broken mapping, and raising names it at the first outbound symbol.
   defp reverse_alias(aliases, base) do
-    Enum.find_value(aliases, base, fn {ex_code, canon_code} ->
-      if canon_code == base, do: ex_code
-    end)
+    case for({ex_code, ^base} <- aliases, do: ex_code) do
+      [] ->
+        base
+
+      [ex_code] ->
+        ex_code
+
+      ex_codes ->
+        raise ArgumentError,
+              "asset_aliases maps #{inspect(Enum.sort(ex_codes))} all to #{inspect(base)} — " <>
+                "to_exchange/2 cannot choose which one to send"
+    end
   end
 end

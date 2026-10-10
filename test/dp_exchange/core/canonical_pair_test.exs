@@ -139,4 +139,18 @@ defmodule DpExchange.Core.CanonicalPairTest do
       end
     end
   end
+
+  describe "two exchange codes for one canonical code (found 2026-10-10)" do
+    test "to_exchange/2 refuses to choose between them" do
+      mapping = %{sep: "", quotes: ~w(USD), asset_aliases: %{"XBT" => "BTC", "XXBT" => "BTC"}}
+
+      assert_raise ArgumentError, ~r/cannot choose/, fn ->
+        CanonicalPair.to_exchange(mapping, "BTC-USD")
+      end
+
+      # Inbound is unaffected: both codes still read as the canonical one.
+      assert CanonicalPair.to_canonical(mapping, "XXBTUSD") == "BTC-USD"
+      assert CanonicalPair.to_canonical(mapping, "XBTUSD") == "BTC-USD"
+    end
+  end
 end

@@ -21,6 +21,31 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+All found 2026-10-10 by reading the code paths.
+
+- **`PollingFeed`: a symbol removed while its tick was queued, then re-added, was never polled
+  again.** Skipping the queued tick left the symbol counted as scheduled, so the re-add set no
+  timer. The skip now clears it, like every other exit from the chain.
+- **`PollingFeed`: a per-symbol event for a different symbol is a failure.** It was delivered
+  under the venue's spelling while `coverage/1` reported the requested symbol as delivered.
+  It is now recorded as `{:unrequested_symbols, [symbol]}`, matching the bulk path.
+- **`PollingFeed`: a fetch result outside the contract no longer crashes the feed.** `:ok`,
+  `nil`, `{:ok, nil}` or a bulk event that is not a map with a `:symbol` raised in the feed
+  process, and the restart lost runtime `update_symbols/2` scope. They are recorded as
+  `{:bad_fetch_result, _}`.
+- **`PollingFeed` telemetry names `:provider`, not `:label`**, the same as its notices.
+- **`Fanout` no longer raises on a subscriber pid on another node.** `Process.info/2` and
+  `Process.alive?/1` raise for a remote pid, so one remote subscriber crashed the feed for
+  every subscriber. A remote pid is sent to without the queue bound, which is local only.
+- **`Types.*.new/1` refuses NaN, infinity and `NaiveDateTime` inside lists and tuples too.**
+  The check was top-level only, so an `OrderBook` level `{NaN, qty}` built.
+- **`CanonicalPair.to_exchange/2` raises when two exchange codes alias one canonical code.** It
+  picked whichever map iteration reached first.
+- **Conformance: the two round-trip assertions fail on an empty `sample_pairs:` or
+  `supported_quotes`**, instead of looping zero times and passing.
+
 ## [0.3.60] - 2026-10-10
 
 ### Added

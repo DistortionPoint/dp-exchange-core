@@ -523,10 +523,16 @@ defmodule DpExchange.Core.PollingFeed do
   # an empty queue, or both — falls through to the catch-all and leaves the state alone.
   # A queued symbol unsubscribed before its turn is skipped, not fetched: its result would
   # be dropped by `apply_result/3` anyway, after spending a venue request.
+  #
+  # **Skipping it ends its chain, so it leaves `scheduled` here.** It used to stay in the set,
+  # and this was the one exit that forgot it: `{:poll, _}` and `reschedule/2` both delete. A
+  # symbol removed while queued and later re-added then looked already scheduled to
+  # `update_symbols/2`, got no timer, and was never polled again, with `coverage/1` silent
+  # about it. Found 2026-10-10 by reading the path.
   defp start_next(%{in_flight: nil, queue: [{:one, symbol} | rest]} = state) do
     if MapSet.member?(state.symbols, symbol),
       do: start_fetch(state, {:one, symbol}, rest),
-      else: start_next(%{state | queue: rest})
+      else: start_next(%{state | queue: rest, scheduled: MapSet.delete(state.scheduled, symbol)})
   end
 
   defp start_next(%{in_flight: nil, queue: [job | rest]} = state),
@@ -580,10 +586,12 @@ defmodule DpExchange.Core.PollingFeed do
         # this module's moduledoc promises for exactly this shape.
         record_failure(state, "bulk fetch", :empty_response)
 
-      {:ok, events} ->
-        publish_and_record(state, events)
+      {:ok, events} when is_list(events) ->
+        if Enum.all?(events, &(is_map(&1) and is_map_key(&1, :symbol))),
+          do: publish_and_record(state, events),
+          else: record_failure(state, "bulk fetch", {:bad_fetch_result, :event_without_symbol})
 
-      {:refused, refusals} ->
+      {:refused, refusals} when is_list(refusals) ->
         # See `t:fetch_all/0` — the batch analogue of `fetch`'s own `{:refused, reason}`.
         # Each named symbol is reported once, the same as the per-symbol path, rather than
         # silently retried forever as an ordinary `{:error, reason}` would be.
@@ -596,6 +604,15 @@ defmodule DpExchange.Core.PollingFeed do
 
       {:error, reason} ->
         record_failure(state, "bulk fetch", reason)
+
+      # **An answer outside `t:fetch_all/0` is a failure, not a crash.** There was no
+      # catch-all, so a fetch returning `:ok`, `nil` or `{:ok, nil}` raised `CaseClauseError`
+      # in this process, and an event that was not a map raised on `& &1.symbol`. Either way
+      # the restart lost every runtime `update_symbols/2` scope, the incident `safely/1`
+      # exists to prevent, reached through a return instead of a raise. Found 2026-10-10 by
+      # reading the path.
+      other ->
+        record_failure(state, "bulk fetch", {:bad_fetch_result, other})
     end
   end
 
@@ -607,9 +624,19 @@ defmodule DpExchange.Core.PollingFeed do
   # reading the path; the tests under "a result for a symbol no longer wanted" pin it.
   defp apply_result(state, {:one, symbol}, result) do
     case result do
-      {:ok, event} ->
+      # **The event must be for the symbol that was asked.** The bulk path refuses events
+      # nobody asked for (`{:unrequested_symbols, _}` below), and this path checked nothing:
+      # a venue answering `"BTC-USD"` with an event spelled `"XBT-USD"` reached the sink
+      # under that spelling while `coverage/1` reported `"BTC-USD"` as delivered. Found
+      # 2026-10-10 by reading the path.
+      {:ok, %{symbol: ^symbol} = event} ->
         if MapSet.member?(state.symbols, symbol),
           do: deliver_one(state, symbol, event),
+          else: state
+
+      {:ok, %{symbol: other}} ->
+        if MapSet.member?(state.symbols, symbol),
+          do: record_failure(state, symbol, {:unrequested_symbols, [other]}),
           else: state
 
       # The venue says it does not carry this symbol. Reported outward — a
@@ -625,6 +652,11 @@ defmodule DpExchange.Core.PollingFeed do
 
       {:error, reason} ->
         record_failure(state, symbol, reason)
+
+      # Outside `t:fetch/0`, including an event with no `:symbol` to check. See the bulk
+      # clause above: a failure, never a crash of the feed.
+      other ->
+        record_failure(state, symbol, {:bad_fetch_result, other})
     end
   end
 
@@ -750,7 +782,7 @@ defmodule DpExchange.Core.PollingFeed do
       )
 
     state.on_notice.(notice)
-    Telemetry.link_up(state.label)
+    Telemetry.link_up(state.provider)
     %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
   end
 
@@ -794,7 +826,7 @@ defmodule DpExchange.Core.PollingFeed do
       )
 
     state.on_notice.(notice)
-    Telemetry.link_down(state.label, inspect(reason))
+    Telemetry.link_down(state.provider, inspect(reason))
     %{state | notice_state: :dead}
   end
 
@@ -829,7 +861,7 @@ defmodule DpExchange.Core.PollingFeed do
   # confident zero. A consumer summing bytes across a mixed fleet then gets the throughput
   # of the streaming venues, correctly, instead of a total depressed by every polling venue.
   defp report_delivery(state, event) do
-    Telemetry.link_event(state.label, delivery_type(event))
+    Telemetry.link_event(state.provider, delivery_type(event))
     :ok
   end
 

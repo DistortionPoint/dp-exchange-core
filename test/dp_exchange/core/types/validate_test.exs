@@ -660,4 +660,34 @@ defmodule DpExchange.Core.Types.ValidateTest do
       end
     end
   end
+
+  describe "unrepresentable values inside a level (found 2026-10-10)" do
+    @book [symbol: "BTC-USD", asks: [], observed_at: @ts, provider: :reference]
+
+    test "a NaN price inside an OrderBook level is refused" do
+      bids = [{Decimal.new("100"), Decimal.new("1")}, {Decimal.new("NaN"), Decimal.new("1")}]
+
+      assert_raise ArgumentError, ~r/bids.*NaN/, fn ->
+        OrderBook.new(Keyword.put(@book, :bids, bids))
+      end
+    end
+
+    test "an infinite quantity inside an OrderBookDelta level is refused" do
+      levels = [{:ask, Decimal.new("100"), Decimal.new("Infinity")}]
+
+      assert_raise ArgumentError, ~r/levels.*inf/, fn ->
+        OrderBookDelta.new(
+          symbol: "BTC-USD",
+          levels: levels,
+          timestamp: @ts,
+          provider: :reference
+        )
+      end
+    end
+
+    test "finite levels still build" do
+      bids = [{Decimal.new("100"), Decimal.new("1")}]
+      assert %OrderBook{bids: ^bids} = OrderBook.new(Keyword.put(@book, :bids, bids))
+    end
+  end
 end

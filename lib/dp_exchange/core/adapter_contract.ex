@@ -429,6 +429,12 @@ defmodule DpExchange.Core.AdapterContract do
           end
 
           test "to_canonical(to_exchange(pair)) == pair for the sample pairs" do
+            # An empty `sample_pairs:` made this loop zero times and pass with nothing
+            # checked. Found 2026-10-10 by reading the suite.
+            assert @sample_pairs != [],
+                   "`sample_pairs:` is empty, so the round trip was checked for no pair — " <>
+                     "name at least one pair this venue lists"
+
             for pair <- @sample_pairs do
               round_tripped =
                 pair
@@ -445,6 +451,10 @@ defmodule DpExchange.Core.AdapterContract do
             # Generated rather than sampled: the sample pairs are the ones someone
             # thought of, and the bug this catches lives in the ones they did not.
             caps = @venue.capabilities()
+
+            assert caps.supported_quotes != [],
+                   "capabilities().supported_quotes is empty, so the round trip was checked " <>
+                     "over no quote — declare the quotes this venue trades against"
 
             for quote_asset <- caps.supported_quotes, base <- ~w(BTC ETH SOL) do
               pair = "#{base}-#{quote_asset}"

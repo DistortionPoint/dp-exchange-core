@@ -415,4 +415,27 @@ defmodule DpExchange.Core.FanoutTest do
     send(pid, {:drain, self()})
     assert_receive :drained, 1_000
   end
+
+  describe "a subscriber on another node (found 2026-10-10)" do
+    # Built from the external term format, NEW_PID_EXT, so no second node is needed. A send
+    # to it from a node that is not distributed is dropped by the runtime, which is fine:
+    # what is under test is that asking about it no longer raises in the feed.
+    defp remote_pid do
+      node = "remote@nowhere"
+
+      :erlang.binary_to_term(<<131, 88, 119, byte_size(node), node::binary, 1::32, 0::32, 1::32>>)
+    end
+
+    test "resolve/1 returns it rather than raising in Process.alive?/1" do
+      pid = remote_pid()
+      assert node(pid) != node()
+      assert Fanout.resolve(pid) == pid
+    end
+
+    test "deliver/4 sends to it without the bound and still reaches local subscribers" do
+      assert {2, dropping, []} = Fanout.deliver([remote_pid(), self()], :payload, MapSet.new())
+      assert Enum.empty?(dropping)
+      assert_received :payload
+    end
+  end
 end

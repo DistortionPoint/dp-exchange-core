@@ -224,6 +224,10 @@ does not emits `:venue` from its feed and `"some-label"` from its poll, **for th
 venue**, and a consumer matching only the atom quietly misses half its notices.
 `details.label` always names which feed spoke, whichever the provider is.
 
+The poll's `[:dp_exchange, :link, :up | :down | :event]` telemetry carries the same
+`provider` as its notices. Before 0.3.61 it carried the `label`, so a dashboard grouped by
+provider split one venue in two even when the venue wired `provider:` through.
+
 ## Credentials
 
 Passed as arguments, per call. A package never reads them from a vault, an environment

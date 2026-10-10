@@ -74,20 +74,33 @@ defmodule DpExchange.Core.Types.Validate do
   # consumer's process. And `observed_at: ~N[...]` built, a time with no zone where every
   # type in this family promises a `DateTime`. Neither is ever a legitimate value here: no
   # type has a field typed `NaiveDateTime`, and no quantity is infinite.
+  #
+  # **Inside lists and tuples too.** The scan was top-level only, so the `{price, quantity}`
+  # levels of an `OrderBook`, `OrderBookDelta` or `VolumeProfile` carried a NaN straight past
+  # it, which is the exact Decimal-raising value this check exists to stop, one container
+  # deeper. Found 2026-10-10 by reading the path. Structs other than these two are not
+  # descended into: a nested `Types.*` value was built by its own `new/1`.
   defp refuse_unrepresentable!(module, attrs_map) do
-    Enum.each(attrs_map, fn
-      {field, %Decimal{coef: coef}} when coef in [:NaN, :inf] ->
-        raise ArgumentError,
-              "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(coef)} — not a " <>
-                "number any field of this type can carry"
-
-      {field, %NaiveDateTime{}} ->
-        raise ArgumentError,
-              "#{inspect(module)}.new/1: field #{inspect(field)} is a NaiveDateTime — every " <>
-                "time in this family is a DateTime, and a time with no zone cannot be placed"
-
-      _fine ->
-        :ok
-    end)
+    Enum.each(attrs_map, fn {field, value} -> refuse_value!(module, field, value) end)
   end
+
+  defp refuse_value!(module, field, %Decimal{coef: coef}) when coef in [:NaN, :inf] do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(coef)} — not a " <>
+            "number any field of this type can carry"
+  end
+
+  defp refuse_value!(module, field, %NaiveDateTime{}) do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} is a NaiveDateTime — every " <>
+            "time in this family is a DateTime, and a time with no zone cannot be placed"
+  end
+
+  defp refuse_value!(module, field, values) when is_list(values),
+    do: Enum.each(values, &refuse_value!(module, field, &1))
+
+  defp refuse_value!(module, field, value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.each(&refuse_value!(module, field, &1))
+
+  defp refuse_value!(_module, _field, _value), do: :ok
 end
