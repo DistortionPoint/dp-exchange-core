@@ -37,6 +37,17 @@ defmodule DpExchange.Core.FanoutTest do
     len
   end
 
+  describe "one process is one subscriber" do
+    test "registered both as a pid and by name, it is sent each message once" do
+      subscriber = stalled_subscriber()
+      name = :"fanout_dedupe_#{System.unique_integer([:positive])}"
+      Process.register(subscriber, name)
+
+      assert {1, _dropping, []} = Fanout.deliver([subscriber, name], :payload, MapSet.new())
+      assert queue_len(subscriber) == 1
+    end
+  end
+
   describe "the bound" do
     test "a subscriber under the bound is sent to" do
       subscriber = stalled_subscriber()

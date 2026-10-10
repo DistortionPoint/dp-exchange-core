@@ -51,7 +51,12 @@ defmodule DpExchange.Core.HttpClientTest do
     defp answer(which, key) do
       report({which, :key, key})
       report({which, :called})
-      Config.get(:dp_exchange_core, :stub_answer, :ok)
+
+      # A map answers per key, so one bucket can refuse while another has room.
+      case Config.get(:dp_exchange_core, :stub_answer, :ok) do
+        %{} = per_key -> Map.get(per_key, key, :ok)
+        answer -> answer
+      end
     end
 
     defp report(message) do
@@ -179,9 +184,24 @@ defmodule DpExchange.Core.HttpClientTest do
                request(provider: "v", rate_limit_per_endpoint: true)
 
       assert message =~ "retry after 2s"
-      assert_received {:acquire, :key, "v"}
+      # Asked first, with nothing reserved: every bucket must have room before any is spent.
       assert_received {:check, :key, "v"}
+      refute_received {:acquire, :key, "v"}
       refute_received {:acquire, :key, "v /never"}
+      refute_received {:counted, _key, _weight}
+    end
+
+    test "an endpoint bucket that refuses does not spend the provider bucket's token" do
+      # The provider was reserved, then the endpoint refused, and the provider's token was
+      # gone for a request never sent.
+      use_stub(%{"v /never" => {:rate_limited, 1_500}})
+
+      assert {:error, {:exchange_error, "v", message}} =
+               request(provider: "v", rate_limit_per_endpoint: true)
+
+      assert message =~ "retry after 2s"
+      assert_received {:check, :key, "v"}
+      assert_received {:check, :key, "v /never"}
       refute_received {:counted, _key, _weight}
     end
 
@@ -489,6 +509,52 @@ defmodule DpExchange.Core.HttpClientTest do
       plug = responding(429, %{}, [{"retry-after", "-30"}])
       assert {:error, message} = get(plug: plug)
       assert message =~ "retry after 5s"
+    end
+
+    test "an HTTP-date Retry-After is read, and a date already past is one second" do
+      # RFC 9110 allows either form. Only the integer was read, so a date got the 5 s floor
+      # and the venue was re-hit inside its own penalty.
+      plug = responding(429, %{}, [{"retry-after", "Sun, 06 Nov 1994 08:49:37 GMT"}])
+      assert {:error, message} = get(plug: plug)
+      assert message =~ "retry after 1s"
+    end
+
+    test "a Retry-After past the ceiling is clamped to it, in either form" do
+      # Unbounded, `Retry-After: 86400` held the bucket through `penalize/3` for a day.
+      for value <- ["86400", "Thu, 01 Jan 2099 00:00:00 GMT"] do
+        assert {:error, message} = get(plug: responding(429, %{}, [{"retry-after", value}]))
+        assert message =~ "retry after 600s"
+      end
+
+      plug = responding(429, %{}, [{"retry-after", "86400"}])
+      assert {:error, message} = get(plug: plug, max_retry_after_s: 30)
+      assert message =~ "retry after 30s"
+    end
+
+    test "a 3xx is not retried — the same request gets the same redirect" do
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        responding(301, %{}).(conn)
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: 3, retry_delay: 1)
+      assert message =~ "Unexpected status (301)"
+      assert :counters.get(counter, 1) == 1
+    end
+
+    test "a 5xx whose body quotes a 4xx message is still retried" do
+      # `String.contains?/2` read "Client error (4" anywhere in the message, body included.
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        responding(503, %{"detail" => "upstream said Client error (404)"}).(conn)
+      end
+
+      assert {:error, _message} = get(plug: plug, retry_attempts: 3, retry_delay: 1)
+      assert :counters.get(counter, 1) == 3
     end
 
     test "a large error body is excerpted in the message, and says how large it was" do

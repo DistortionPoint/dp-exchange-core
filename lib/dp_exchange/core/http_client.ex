@@ -93,14 +93,15 @@ defmodule DpExchange.Core.HttpClient do
           body: term()
         }
 
-  @type rate_limited_request_options ::
-          keyword()
-          | %{
-              provider: provider(),
-              account_id: account_id(),
-              user_id: user_id(),
-              operation: String.t()
-            }
+  # A keyword list only. A map was in this type, and every reader of these options
+  # (`Keyword.put_new_lazy/3`, `Keyword.take/2`, `Config.opt/3`) raises on one.
+  @type rate_limited_request_options :: [
+          {:provider, provider()}
+          | {:account_id, account_id()}
+          | {:user_id, user_id()}
+          | {:operation, String.t()}
+          | {atom(), term()}
+        ]
 
   @doc """
   Make an HTTP request with provider-specific and account-aware rate limiting.
@@ -117,7 +118,13 @@ defmodule DpExchange.Core.HttpClient do
   ## Options
   - `:timeout` - Request timeout in milliseconds (default: 30_000). It bounds the whole
     response, not each chunk, and it applies to each attempt when `:retry_attempts` retries.
-  - `:retry_attempts` - Number of retry attempts (default: 3)
+  - `:retry_attempts` - Number of attempts in all (default: 3). **Applied to every method,
+    POST and DELETE included.** A transport failure or 5xx after a write may mean the write
+    took effect, and a retry repeats it. Whether that is safe depends on whether the venue
+    deduplicates the request, which only the venue package knows. So the venue decides per
+    call. A write with an idempotency key, such as a `client_order_id`, may keep the default.
+    A write without one is sent with `retry_attempts: 1`. Every venue in the family does this
+    for its money-moving writes.
   - `:retry_delay` - Base delay between retries in milliseconds (default: 1000)
   - `:log_requests` - Whether to log requests (default: true)
   - `:provider` - Provider name for rate limiting (required for rate limiting)
@@ -684,9 +691,16 @@ defmodule DpExchange.Core.HttpClient do
 
   defp telemetry_outcome({:error, _reason}, status), do: [status: status, result: :error]
 
+  # The longest venue `Retry-After` honoured, in seconds — see `parse_retry_after_header/2`.
+  @max_retry_after_s 600
+
   defp handle_rate_limit(response, method, url, opts) do
     # Parse rate limit headers to get more accurate retry timing
-    retry_after = parse_retry_after_header(response.headers)
+    retry_after =
+      response.headers
+      |> parse_retry_after_header(DateTime.utc_now())
+      |> min(Config.opt(opts, :max_retry_after_s, @max_retry_after_s))
+
     provider = Config.opt(opts, :provider, "unknown")
     short_url = Telemetry.endpoint(url) |> String.slice(0, 80)
 
@@ -742,7 +756,35 @@ defmodule DpExchange.Core.HttpClient do
           | {:error, :rate_limit_timeout | :rate_limiter_unavailable}
           | {:error, :rate_limited, retry_after: integer()}
   defp check_rate_limits(opts) do
-    Enum.reduce_while(rate_limit_keys(opts), :ok, fn key, :ok ->
+    keys = rate_limit_keys(opts)
+
+    with :ok <- precheck(keys, opts), do: reserve_all(keys, opts)
+  end
+
+  # **With two buckets, a refusal on the second used to spend the first.** The provider
+  # bucket was reserved, then the endpoint bucket refused, and the provider's token was gone
+  # for a request never sent — the partial-failure leak `DefaultRateLimiter`'s own moduledoc
+  # rules out for one bucket. On the non-blocking path every bucket is asked first with
+  # `check/3`, which reserves nothing, and nothing is reserved unless all have room. Two
+  # callers can still race between the check and the reservation; that narrows to the one
+  # case the atomic reservation exists for, not every endpoint refusal.
+  defp precheck([_first, _second | _rest] = keys, opts) do
+    if blocking?(opts) do
+      :ok
+    else
+      Enum.reduce_while(keys, :ok, fn key, :ok ->
+        case key |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check() do
+          :ok -> {:cont, :ok}
+          refused -> {:halt, refused}
+        end
+      end)
+    end
+  end
+
+  defp precheck(_one_or_none, _opts), do: :ok
+
+  defp reserve_all(keys, opts) do
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
       case check_rate_limit(key, opts) do
         :ok -> {:cont, :ok}
         refused -> {:halt, refused}
@@ -858,8 +900,16 @@ defmodule DpExchange.Core.HttpClient do
     Keyword.take(opts, [:account_id, :user_id, :operation, :timeout, :limiter])
   end
 
-  defp parse_retry_after_header(headers) do
-    case fetch_integer(normalise_headers(headers), "retry-after") do
+  # **Both forms RFC 9110 allows, and a ceiling.** `Retry-After` is delay-seconds OR an
+  # HTTP-date. Only the integer was read, so a venue saying "until 12:01:00 GMT" got the
+  # five-second fallback and was re-hit inside its own penalty. And nothing bounded the
+  # integer: `Retry-After: 86400`, or a malformed huge value, held the bucket through
+  # `penalize/3` for a day. Clamped to `:max_retry_after_s` (600 s by default,
+  # chosen, not measured) by the caller above; past it, the next 429 says wait again.
+  defp parse_retry_after_header(headers, now) do
+    normalised = normalise_headers(headers)
+
+    case fetch_integer(normalised, "retry-after") do
       {:ok, seconds} when seconds >= 0 -> seconds
       # The venue said it is limiting us but not for how long. Five seconds is a
       # deliberate floor rather than a measurement, and retrying immediately — which
@@ -869,9 +919,30 @@ defmodule DpExchange.Core.HttpClient do
       # through: the caller was told to "retry after -30s", and `[:dp_exchange, :rate_limit,
       # :hit]` carried a negative `retry_after_ms` that a panel summing waits would subtract.
       {:ok, _negative} -> 5
-      :error -> 5
+      :error -> normalised |> Map.get("retry-after") |> http_date_delay(now)
     end
   end
+
+  @months ~w(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec)
+
+  # IMF-fixdate, `Sun, 06 Nov 1994 08:49:37 GMT`, the form RFC 9110 requires senders to use.
+  # A date already past is no wait at all, which is still not zero: one second, the
+  # smallest wait the integer form can state. Anything unreadable is the five-second floor.
+  defp http_date_delay(value, now) when is_binary(value) do
+    with [_weekday, day, month, year, time, "GMT"] <- String.split(value, " ", trim: true),
+         month_number when is_integer(month_number) <-
+           Enum.find_index(@months, &(&1 == month)),
+         {:ok, at, 0} <-
+           DateTime.from_iso8601("#{year}-#{pad(month_number + 1)}-#{day}T#{time}Z") do
+      max(DateTime.diff(at, now, :second), 1)
+    else
+      _unreadable -> 5
+    end
+  end
+
+  defp http_date_delay(_absent, _now), do: 5
+
+  defp pad(number), do: number |> Integer.to_string() |> String.pad_leading(2, "0")
 
   # Normalises the two header shapes this pipeline sees. `Req` returns
   # `%{"name" => ["value"]}`; a list of `{name, value}` pairs is the other convention,
@@ -894,9 +965,15 @@ defmodule DpExchange.Core.HttpClient do
   # Returns `{:error, {:exchange_error, provider, reason}}` for provider-aware
   # callers, or plain `{:error, reason}` when no provider context exists.
   # 4xx HTTP errors are client mistakes (bad symbol, unauthorized, etc.) — permanent, don't retry
-  defp client_error?(reason) when is_binary(reason) do
-    String.contains?(reason, "Client error (4")
-  end
+  #
+  # A PREFIX match on the message this module itself builds, not `String.contains?/2`: a 5xx
+  # whose quoted body contained "Client error (4" was read as permanent and never retried.
+  # A 3xx (`redirect: false`) is permanent too: the same request gets the same redirect.
+  # Any reason that is not one of these strings, including a non-binary one, is retryable
+  # as before, rather than a `FunctionClauseError` in the caller.
+  defp client_error?("Client error (4" <> _rest), do: true
+  defp client_error?("Unexpected status (3" <> _rest), do: true
+  defp client_error?(_retryable), do: false
 
   defp wrap_exchange_error(opts, reason) do
     case Keyword.get(opts, :provider) do

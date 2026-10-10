@@ -93,7 +93,16 @@ defmodule DpExchange.Core.CanonicalPair do
 
   # --- internal ----------------------------------------------------------
 
-  defp aliases(mapping), do: Map.get(mapping, :asset_aliases, %{})
+  # Uppercased, like the input. A mapping written `%{"xbt" => "btc"}` or `quotes: ["usdt"]`
+  # was compared against uppercased symbols and silently never matched, and `to_canonical/2`
+  # handed the input back as if it were already canonical.
+  defp aliases(mapping) do
+    mapping
+    |> Map.get(:asset_aliases, %{})
+    |> Map.new(fn {exchange, canonical} ->
+      {String.upcase(exchange), String.upcase(canonical)}
+    end)
+  end
 
   # Split native into {base, quote}. Three cases:
   #   * a real separator ("-", "/") → split on it;
@@ -134,7 +143,7 @@ defmodule DpExchange.Core.CanonicalPair do
       # delivering one market's data under another market's name. Recorded here so the
       # next profile does not re-open it: the cost is known, it was weighed, and
       # correctness won.
-      quotes = Enum.sort_by(mapping.quotes, &byte_size/1, :desc)
+      quotes = mapping.quotes |> Enum.map(&String.upcase/1) |> Enum.sort_by(&byte_size/1, :desc)
 
       Enum.find_value(quotes, :nomatch, fn q ->
         if String.ends_with?(upper, q) and byte_size(upper) > byte_size(q) do

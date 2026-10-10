@@ -210,6 +210,51 @@ defmodule DpExchange.Core.PollingFeedTest do
       )
 
       assert_receive {:refused, "DOGE-USD", "not listed: DOGE-USD"}, 500
+      # Once, not once per cycle: at a 50 ms interval several more cycles refuse in this
+      # window, and each used to call `on_refusal` again.
+      refute_receive {:refused, "DOGE-USD", _reason}, 300
+    end
+
+    test "a refused symbol that starts delivering is reported again if refused later" do
+      test = self()
+      {:ok, answers} = Agent.start_link(fn -> [:refused, :ok, :refused] end)
+
+      fetch = fn symbol ->
+        case Agent.get_and_update(answers, fn
+               [next | rest] -> {next, rest}
+               [] -> {:ok, []}
+             end) do
+          :refused -> {:refused, :not_listed}
+          :ok -> {:ok, event(symbol)}
+        end
+      end
+
+      start_feed(
+        fetch: fetch,
+        symbols: ~w(DOGE-USD),
+        on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
+      )
+
+      assert_receive {:refused, "DOGE-USD", :not_listed}, 500
+      assert_receive {:published, %{symbol: "DOGE-USD"}}, 500
+      assert_receive {:refused, "DOGE-USD", :not_listed}, 500
+    end
+
+    test "a fetch that throws is a failed fetch, not a dead feed" do
+      # `safely/1` rescued exceptions and caught exits; a throw escaped, killed the task,
+      # and the link took the feed down with it.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn _symbol -> throw(:boom) end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, _notice}, 500
+      assert Process.alive?(pid)
+      assert PollingFeed.status(pid).last_error == {:throw, :boom}
     end
 
     test "a refusal defaults to a no-op rather than crashing the feed" do
@@ -310,6 +355,28 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert status.delivering
       assert status.covered == 1
       assert status.failures_since_ok == 0
+    end
+
+    test "a feed that delivered once and then went dark stops reporting delivering" do
+      # `delivering` read `last_ok` as ever-delivered, so one success at boot kept a feed
+      # dead for hours reporting `delivering: true` on the health check.
+      {:ok, up} = Agent.start_link(fn -> true end)
+
+      fetch = fn symbol ->
+        if Agent.get(up, & &1), do: {:ok, event(symbol)}, else: {:error, :down}
+      end
+
+      pid = start_feed(fetch: fetch, symbols: ~w(BTC-USD))
+      assert_receive {:published, _event}, 500
+      Agent.update(up, fn _up -> false end)
+
+      # Past the coverage window (2 intervals of 50 ms), measured from the last success.
+      Process.sleep(250)
+      status = PollingFeed.status(pid)
+
+      refute status.delivering
+      assert status.covered == 0
+      assert PollingFeed.coverage(pid) == %{}
     end
   end
 

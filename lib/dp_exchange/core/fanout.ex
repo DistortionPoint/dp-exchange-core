@@ -175,11 +175,15 @@ defmodule DpExchange.Core.Fanout do
     # stated bound — an unbounded mailbox is the failure this module exists to prevent.
     max = Config.opt(opts, :max_queue_len, default_max_queue_len())
 
-    Enum.reduce(subscribers, {0, MapSet.new(), []}, fn subscriber, acc ->
-      case delivery_pid(subscriber) do
-        nil -> acc
-        pid -> deliver_one(pid, message, max, dropping, acc)
-      end
+    # Resolved and deduplicated first. One process registered both as a pid and by name was
+    # two entries, so it got every message twice, and both iterations read the same old
+    # `dropping` set and reported its transition twice.
+    subscribers
+    |> Enum.map(&delivery_pid/1)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Enum.reduce({0, MapSet.new(), []}, fn pid, acc ->
+      deliver_one(pid, message, max, dropping, acc)
     end)
   end
 

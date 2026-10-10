@@ -30,6 +30,15 @@ defmodule DpExchange.Core.CanonicalPairTest do
       assert "BTC-USD" = CanonicalPair.to_canonical(@aliased, "XBTUSD")
     end
 
+    test "a mapping written in lowercase still matches the uppercased input" do
+      # Compared against uppercased symbols, a lowercase quote or alias never matched, and
+      # the input came back as if it were already canonical.
+      lower = %{sep: "", quotes: ~w(usdt usd), asset_aliases: %{"xbt" => "btc"}}
+
+      assert "BTC-USDT" = CanonicalPair.to_canonical(lower, "XBTUSDT")
+      assert "XBTUSD" = CanonicalPair.to_exchange(lower, "BTC-USD")
+    end
+
     test "unparseable input is uppercased, never dropped" do
       # Losing a symbol is worse than passing one through unrecognised: a dropped
       # symbol is invisible, a strange one is reviewable.

@@ -310,6 +310,9 @@ defmodule DpExchange.Core.PollingFeed do
       fetch_timeout_ms:
         Config.opt(opts, :fetch_timeout_ms, default_fetch_timeout_ms(interval_ms)),
       last_ok: %{},
+      # Symbols whose refusal has been reported and that have not delivered since. See
+      # `report_refusal/3`.
+      refused: MapSet.new(),
       failures_since_ok: 0,
       last_error: nil,
       # Latches to `:dead` the instant the feed crosses into delivering-nothing, and back
@@ -375,22 +378,21 @@ defmodule DpExchange.Core.PollingFeed do
 
   @impl true
   def handle_call(:coverage, _from, state) do
-    now = System.monotonic_time(:millisecond)
-    window = state.interval_ms * @coverage_grace
-
-    coverage =
-      state.last_ok
-      |> Enum.filter(fn {_symbol, at} -> now - at <= window end)
-      |> Map.new(fn {symbol, _at} -> {symbol, :internal_poll} end)
+    coverage = Map.new(fresh_symbols(state), &{&1, :internal_poll})
 
     {:reply, coverage, state}
   end
 
+  # Windowed like `coverage/1`. It used `last_ok` as ever-delivered, which is pruned only by
+  # `update_symbols/2`, so one success at boot kept `delivering: true` on a feed dead for
+  # hours — on the read the moduledoc offers as the health check.
   def handle_call(:status, _from, state) do
+    covered = length(fresh_symbols(state))
+
     status = %{
-      delivering: state.last_ok != %{},
+      delivering: covered > 0,
       symbols: MapSet.size(state.symbols),
-      covered: map_size(state.last_ok),
+      covered: covered,
       failures_since_ok: state.failures_since_ok,
       last_error: state.last_error
     }
@@ -419,7 +421,13 @@ defmodule DpExchange.Core.PollingFeed do
         state
       end
 
-    {:noreply, %{state | symbols: wanted, last_ok: Map.take(state.last_ok, symbols)}}
+    {:noreply,
+     %{
+       state
+       | symbols: wanted,
+         last_ok: Map.take(state.last_ok, symbols),
+         refused: MapSet.intersection(state.refused, wanted)
+     }}
   end
 
   def handle_cast(_other, state), do: {:noreply, state}
@@ -513,14 +521,25 @@ defmodule DpExchange.Core.PollingFeed do
   # Both conditions are in the head rather than in a guard: a fetch starts only when
   # nothing is in flight AND something is waiting. Anything else — a fetch already running,
   # an empty queue, or both — falls through to the catch-all and leaves the state alone.
-  defp start_next(%{in_flight: nil, queue: [job | rest]} = state) do
+  # A queued symbol unsubscribed before its turn is skipped, not fetched: its result would
+  # be dropped by `apply_result/3` anyway, after spending a venue request.
+  defp start_next(%{in_flight: nil, queue: [{:one, symbol} | rest]} = state) do
+    if MapSet.member?(state.symbols, symbol),
+      do: start_fetch(state, {:one, symbol}, rest),
+      else: start_next(%{state | queue: rest})
+  end
+
+  defp start_next(%{in_flight: nil, queue: [job | rest]} = state),
+    do: start_fetch(state, job, rest)
+
+  defp start_next(state), do: state
+
+  defp start_fetch(state, job, rest) do
     task = Task.async(fn -> safely(fetch_fun(state, job)) end)
     timer = Process.send_after(self(), {:fetch_timeout, task.ref}, state.fetch_timeout_ms)
 
     %{state | queue: rest, in_flight: %{ref: task.ref, task: task, job: job, timer: timer}}
   end
-
-  defp start_next(state), do: state
 
   # Built from the two values the fetch needs rather than by closing over `state`, so the
   # symbol list and `last_ok` map are not copied into every task.
@@ -568,7 +587,11 @@ defmodule DpExchange.Core.PollingFeed do
         # See `t:fetch_all/0` — the batch analogue of `fetch`'s own `{:refused, reason}`.
         # Each named symbol is reported once, the same as the per-symbol path, rather than
         # silently retried forever as an ordinary `{:error, reason}` would be.
-        Enum.each(refusals, fn {symbol, reason} -> state.on_refusal.(symbol, reason) end)
+        state =
+          Enum.reduce(refusals, state, fn {symbol, reason}, acc ->
+            report_refusal(acc, symbol, reason)
+          end)
+
         record_failure(state, "bulk fetch", {:refused, refusals})
 
       {:error, reason} ->
@@ -596,16 +619,35 @@ defmodule DpExchange.Core.PollingFeed do
       # refused pairs sat on the page as "never arrived", with nothing left to
       # notice them.
       {:refused, reason} ->
-        state.on_refusal.(symbol, reason)
-        record_failure(state, symbol, reason)
+        state
+        |> report_refusal(symbol, reason)
+        |> record_failure(symbol, reason)
 
       {:error, reason} ->
         record_failure(state, symbol, reason)
     end
   end
 
+  # **Reported once, as the typedoc says, and still asked.** `on_refusal` fired every cycle
+  # the venue refused, so a consumer got the same refusal every interval for as long as it
+  # kept the symbol. Now it fires once per refusal, and the latch clears the moment the
+  # symbol delivers again. The symbol stays polled, because a pair the venue lists later
+  # must be able to come back without the consumer re-adding it.
+  defp report_refusal(state, symbol, reason) do
+    if MapSet.member?(state.refused, symbol) do
+      state
+    else
+      state.on_refusal.(symbol, reason)
+      %{state | refused: MapSet.put(state.refused, symbol)}
+    end
+  end
+
   defp deliver_one(state, symbol, event) do
-    %{state | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond))}
+    %{
+      state
+      | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond)),
+        refused: MapSet.delete(state.refused, symbol)
+    }
     |> tap(fn _state -> state.sink.(event) end)
     |> tap(fn _state -> report_delivery(state, event) end)
     |> record_success()
@@ -641,7 +683,12 @@ defmodule DpExchange.Core.PollingFeed do
     end)
 
     seen = Map.new(events, fn event -> {event.symbol, now} end)
-    record_success(%{state | last_ok: Map.merge(state.last_ok, seen)})
+
+    record_success(%{
+      state
+      | last_ok: Map.merge(state.last_ok, seen),
+        refused: MapSet.difference(state.refused, MapSet.new(Map.keys(seen)))
+    })
   end
 
   # A fetch calls into HTTP and the venue's own parsing, and an exception there
@@ -662,6 +709,14 @@ defmodule DpExchange.Core.PollingFeed do
     exception -> {:error, Exception.message(exception)}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+    # A `throw` escaped: it killed the task, and through its link the feed itself.
+    :throw, value -> {:error, {:throw, value}}
+  end
+
+  defp fresh_symbols(state) do
+    now = System.monotonic_time(:millisecond)
+    window = state.interval_ms * @coverage_grace
+    for {symbol, at} <- state.last_ok, now - at <= window, do: symbol
   end
 
   # Recovery: this feed was latched `:dead` (see `notice_state` in `init/1`) and just

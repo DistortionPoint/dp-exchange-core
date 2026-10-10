@@ -449,3 +449,32 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     end
   end
 end
+
+defmodule DpExchange.Core.DefaultRateLimiterPruneTest do
+  use ExUnit.Case, async: true
+
+  alias DpExchange.Core.DefaultRateLimiter, as: Limiter
+
+  # Per-endpoint keys carry ids (`"venue /orders/<uuid>"`), one new key per request, and
+  # none was ever removed. A `tat` at or behind now is exactly an absent one, so the sweep
+  # drops only keys whose answer it cannot change.
+  test "an idle key is swept, a held one is kept, and answers are unchanged" do
+    name = :"limiter_prune_#{System.unique_integer([:positive])}"
+
+    pid =
+      start_supervised!(
+        {Limiter, name: name, limits: %{default: %{limit: 1_000, per_ms: 1_000, burst: 1_000}}}
+      )
+
+    assert :ok = Limiter.acquire("venue /orders/1", 1, limiter: name)
+    assert :ok = Limiter.penalize("venue /bars", 60_000, limiter: name)
+    Process.sleep(5)
+
+    send(pid, :prune)
+    tat = :sys.get_state(pid).tat
+
+    refute Map.has_key?(tat, "venue /orders/1")
+    assert Map.has_key?(tat, "venue /bars")
+    assert :ok = Limiter.acquire("venue /orders/1", 1, limiter: name)
+  end
+end

@@ -68,7 +68,15 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   @typedoc "Per-provider limits, or the `:default` used for any provider not listed."
   @type limits :: %{optional(atom() | String.t() | :default) => limit()}
 
-  @typedoc "`limit` requests per `per_ms`, tolerating `burst` above the smooth rate."
+  @typedoc """
+  `limit` requests per `per_ms`, of which `burst` may go back to back from an idle bucket.
+
+  `burst` counts requests, not extra ones above the smooth rate. `burst: 1` is strict pacing,
+  one request now and the next an emission interval later. `burst: 0` allows nothing at
+  once: even an idle bucket's first request waits one interval, which is what a test wants
+  for an "exhausted" limiter. A `weight` above `burst` never fits without waiting, so a
+  non-blocking caller (`acquire/3` with `timeout: 0`) is refused for it every time.
+  """
   @type limit :: %{limit: pos_integer(), per_ms: pos_integer(), burst: non_neg_integer()}
 
   @default_limit %{limit: 10, per_ms: 1_000, burst: 10}
@@ -236,6 +244,8 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   @impl GenServer
   def init(opts) do
+    schedule_prune()
+
     {:ok,
      %{
        limits: opts |> Config.opt(:limits, %{}) |> validate_limits!(),
@@ -243,6 +253,30 @@ defmodule DpExchange.Core.DefaultRateLimiter do
        tat: %{}
      }}
   end
+
+  # **Idle keys are dropped, because per-endpoint keys are unbounded.** With
+  # `rate_limit_per_endpoint: true` a key is `"<provider> <path>"`, and a path carrying an
+  # id (`/orders/<uuid>`) mints a new key per request that was never removed. A `tat` at or
+  # behind now is exactly an absent one (`reserve/3` takes `max(tat, now)`), so dropping it
+  # changes no answer this limiter gives.
+  @prune_interval_ms 60_000
+
+  defp schedule_prune, do: Process.send_after(self(), :prune, @prune_interval_ms)
+
+  @impl true
+  def handle_info(:prune, state) do
+    schedule_prune()
+    now = System.monotonic_time(:millisecond)
+
+    live =
+      Map.filter(state.tat, fn {provider, tat_scaled} ->
+        tat_scaled > now * limit_for(state, provider).limit
+      end)
+
+    {:noreply, %{state | tat: live}}
+  end
+
+  def handle_info(_other, state), do: {:noreply, state}
 
   # Validated HERE, at start, because the alternative is where it used to fail: `reserve/3`
   # destructures `%{limit: _, per_ms: _, burst: _}`, so a limits entry missing any of the

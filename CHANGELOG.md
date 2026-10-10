@@ -21,6 +21,48 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`HttpClient`: an endpoint bucket that refused spent the provider bucket's token.** With
+  `rate_limit_per_endpoint: true`, the provider was reserved before the endpoint refused, for
+  a request never sent. On the non-blocking path every bucket is now checked first, and none
+  is reserved unless all have room.
+- **`HttpClient`: `Retry-After` in HTTP-date form was ignored, and no value was bounded.** A
+  date got the 5 s floor, and the venue was re-hit inside its own penalty. `Retry-After: 86400`
+  held the bucket for a day. Both forms are read now. A date already past is 1 s, and every
+  value is clamped to `:max_retry_after_s` (600 by default, chosen rather than measured).
+- **`HttpClient`: retry classification matched the message anywhere.** A 5xx whose body quoted
+  "Client error (4" was treated as permanent. The match is now a prefix on the message this
+  module builds. A 3xx (`redirect: false`) is no longer retried, because the same request
+  gets the same redirect.
+- **`PollingFeed`: a `throw` in a fetch killed the feed.** `safely/1` caught exits and
+  rescued exceptions only. A throw is now a failed fetch, `{:throw, value}`.
+- **`PollingFeed.status/1` reported `delivering: true` for a feed dark for hours.** It read
+  `last_ok` as ever-delivered. It now uses the same window as `coverage/1`.
+- **`PollingFeed`: a refusal was reported every cycle.** The typedoc says once. `on_refusal`
+  now fires once per refusal and again only after the symbol has delivered in between. The
+  symbol stays polled, so a pair listed later comes back by itself.
+- **`PollingFeed`: a queued symbol unsubscribed before its turn was still fetched.** It cost a
+  venue request for a result that was then dropped. It is now skipped.
+- **`DefaultRateLimiter`: per-endpoint keys were never removed.** A path carrying an id minted
+  a key per request. Idle keys are now swept every minute. A `tat` at or behind now is
+  exactly an absent one, so no answer changes.
+- **`Fanout.deliver/4`: one process registered as a pid and by name got each message twice**,
+  and its transition was reported twice. Subscribers are now resolved and deduplicated first.
+- **`CanonicalPair`: a lowercase mapping never matched.** Quotes and alias keys are now
+  uppercased, like the input.
+- `HttpClient.rate_limited_request_options` is a keyword list only. A map was in the type,
+  and every reader of it raises on one.
+
+### Documentation
+
+- `:retry_attempts` applies to every method, POST and DELETE included, and the venue decides
+  per call whether a write may be repeated. The venues already do this: a write with an
+  idempotency key may retry, and one without is sent once.
+- `DefaultRateLimiter`'s `burst` is the count of back-to-back requests from an idle bucket.
+  `burst: 0` makes even the first request wait. A `weight` above `burst` never fits without
+  waiting.
+
 ## [0.3.53] - 2026-10-05
 
 ### Fixed
