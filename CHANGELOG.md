@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.60] - 2026-10-10
+
 ### Added
 
 - **`Types.Conversion` status `:cancelled`.** It means withdrawn before it settled. Coinbase
