@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.62] - 2026-10-10
+
 ### Fixed
 
 All found 2026-10-10 by reading the code paths.
