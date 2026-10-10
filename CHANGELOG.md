@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.58] - 2026-10-10
+
 ### Fixed
 
 - **Assertion 5 called `replace_order/4` with options in every position.** There was no
