@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.59] - 2026-10-10
+
 ### Changed
 
 - **`Venue.cancel_order/3` is typed `result(Order.t() | :cancelled)`.** It said `Order.t()`,
