@@ -23,13 +23,17 @@ end
 Both directions are required. A package shipping one fails the compiler's missing-callback
 check, which is deliberate: one-directional normalisation round-trips wrong silently.
 
-## Quotes must be ordered longest-first — and here is what that actually means
+## Quotes are sorted longest-first for you — and here is why that matters
 
-The rule is usually stated as "longest first", which is right but under-explains itself.
+`CanonicalPair` sorts `quotes` by length, descending, before it matches, so the order you
+list them in does not change the result. It used to trust the caller, and a wrong order
+mis-split silently.
 
 **The collision is a quote that *contains* a shorter quote.** `BUSD` ends with `USD`. So
-`BTCBUSD` matches `USD` before it matches `BUSD`, and a shortest-first list splits the base
-as `BTCB` — a pair that does not exist, carrying values that all look plausible.
+`BTCBUSD` matches `USD` before it matches `BUSD` if the shorter is tried first, and splits
+the base as `BTCB` — a pair that does not exist, carrying values that all look plausible.
+The round-trip invariant below cannot catch this, because concatenation round-trips
+whichever way the cut fell.
 
 Worth knowing what does **not** collide: `USD`, `USDT` and `USDC` round-trip correctly in
 either order, because none is a suffix of another. A fixture built only on those looks like

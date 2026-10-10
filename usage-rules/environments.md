@@ -9,7 +9,9 @@ a configuration-file question**, and this family is built for it.
 `Application.put_env/3` is node-wide. Flipping the node to demo mid-run redirects every
 other process on it, including whatever is trading with real money.
 
-So environment resolves through `DpExchange.Core.Config`, which reads in this order:
+So environment resolves through `DpExchange.Core.Config`. Core itself ships no environment
+module or `:environment` option; each venue package that has a demo environment implements
+the resolution below on top of `Core.Config`, in this order:
 
 1. an explicit `:environment` in the call's options — **wins always**
 2. `Core.Config` — the calling process, then its `$callers` ancestor chain, then

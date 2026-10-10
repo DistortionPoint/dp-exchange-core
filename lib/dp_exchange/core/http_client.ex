@@ -132,9 +132,14 @@ defmodule DpExchange.Core.HttpClient do
     keyed `"<provider> <path>"`, beside the provider's (default: `false`). For a venue that
     states a per-endpoint limit as well as a global one. The endpoint bucket takes the
     limiter's `:default` limits unless the consumer names it.
-  - `:account_id` - Account ID for account-aware rate limiting (optional)
-  - `:user_id` - User ID for additional isolation (optional)
-  - `:operation` - Operation type for fine-grained rate limiting (default: "default")
+  - `:rate_limit_blocking` - Wait for the limiter instead of failing when the bucket is
+    empty (default: `false`). The wait is bounded by `:timeout`.
+  - `:weight` - Tokens this request costs (default: 1)
+  - `:max_retry_after_s` - Ceiling, in seconds, on a venue's `Retry-After` that is
+    honoured (default: 600)
+  - `:account_id`, `:user_id`, `:operation` - Forwarded to the limiter, which may use them
+    (optional, no defaults). `DefaultRateLimiter` ignores all three: the ceiling is per
+    venue, never per key.
   - `:raw_status` - Return `{:ok, response}` for a 4xx instead of an error string
     (default: `false`). A venue package needs this to tell a **refusal** from an
     **error**: the contract makes `{:refused, reason}` permanent and `{:error, reason}`
@@ -149,8 +154,8 @@ defmodule DpExchange.Core.HttpClient do
   @typedoc """
   Why a request did not produce a response.
 
-  Three shapes, and the spec used to name only the first — which made dialyzer tell every
-  consumer that its handling of the other two was unreachable dead code.
+  Two shapes, and the spec used to name only the first — which made dialyzer tell every
+  consumer that its handling of the other was unreachable dead code.
 
     * `String.t()` — a plain message, when no `:provider` was given.
     * `{:exchange_error, provider, reason}` — the same message tagged with the venue,
@@ -262,10 +267,13 @@ defmodule DpExchange.Core.HttpClient do
   - `path`: API endpoint path
   - `body`: Request body
   - `credentials`: API credentials
-  - `auth_type`: Authentication type (:hmac_sha256, :basic, :bearer)
+  - `auth_type`: Authentication type: `:hmac_sha256`, `:basic`, `:bearer`, or a 4-arity
+    function `(method, path, body, credentials -> headers)` for a venue's own scheme
 
   ## Returns
-  - List of authentication headers
+  - List of authentication headers. An `auth_type` that is none of the above raises
+    `ArgumentError`. It used to yield `[]`, so a typo'd scheme (`:hmac_sha_256`) sent the
+    request **unauthenticated** — the opposite of failing closed.
   """
   @typedoc """
   How to authenticate: one of the generic schemes, or a venue's own builder.
@@ -300,8 +308,10 @@ defmodule DpExchange.Core.HttpClient do
       builder when is_function(builder, 4) ->
         builder.(method, path, body, credentials)
 
-      _unknown ->
-        []
+      unknown ->
+        raise ArgumentError,
+              "unknown auth_type #{inspect(unknown)}: expected :hmac_sha256, :basic, :bearer " <>
+                "or a 4-arity builder. Refused rather than sending the request unsigned."
     end
   end
 

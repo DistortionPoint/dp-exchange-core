@@ -33,8 +33,10 @@ no longer exists.
 
 ## Back-pressure is a bounded mailbox, and it is declared
 
-A venue pushing faster than you consume drops oldest beyond a stated bound and emits a
-`:degraded` notice saying so.
+A venue pushing faster than you consume stops sending to you once your mailbox passes a
+stated bound (10,000 messages by default), so the **newest** messages are the ones dropped
+— a sender cannot remove what is already in your mailbox. It emits a `:degraded` notice
+when dropping starts and another when you have drained to half the bound.
 
 Growing a mailbox silently until the node dies is the failure this avoids. Dropping
 silently is the failure the notice avoids.

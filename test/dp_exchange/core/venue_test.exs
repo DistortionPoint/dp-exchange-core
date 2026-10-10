@@ -199,11 +199,8 @@ defmodule DpExchange.Core.VenueTest do
     test "a rejected order is reported, not turned into a failed call" do
       # The venue answered, and some orders were already gone. An error here would tell a
       # caller nothing was cancelled when most of it was.
-      assert {:ok, %{cancelled: cancelled, rejected: rejected}} =
+      assert {:ok, %{cancelled: ["ref-order-1"], rejected: ["ref-order-2"]}} =
                ReferenceVenue.cancel_all_orders(%{}, scope: :session)
-
-      assert is_list(cancelled)
-      assert is_list(rejected)
     end
 
     test "convert/4 is not a shorthand for the two-step form, and both are callbacks" do

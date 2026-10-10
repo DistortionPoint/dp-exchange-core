@@ -62,8 +62,9 @@ defmodule DpExchange.Core.CanonicalPair do
   @doc """
   Canonical `BASE-QUOTE` → exchange-native, per the connector's `mapping`.
 
-  Input with no quote part is not a pair and comes back unchanged — never decorated with a
-  trailing separator, which would be a symbol no venue was ever asked about.
+  Input with no quote part is not a pair and is never decorated with a trailing separator,
+  which would be a symbol no venue was ever asked about. It comes back uppercased, with an
+  `asset_aliases` entry reversed if one applies, and otherwise as it was given.
   """
   @spec to_exchange(mapping(), String.t()) :: String.t()
   def to_exchange(mapping, canonical) when is_map(mapping) and is_binary(canonical) do

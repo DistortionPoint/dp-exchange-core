@@ -9,8 +9,9 @@ defmodule DpExchange.Core.SymbolNormalizer do
   same thing on every venue, because every venue is forced to round-trip them through
   the shared `DpExchange.Core.CanonicalPair` normaliser with its own mapping.
 
-  Two directions, both total (never raise — malformed input degrades to
-  `"UNKNOWN"` for the inbound direction so a bad feed message can't crash a parser):
+  Two directions, both total (never raise on malformed input — through
+  `DpExchange.Core.CanonicalPair`, unparseable input is returned uppercased rather than
+  dropped, so a bad feed message can't crash a parser and is still visible):
 
   - `to_canonical_symbol/1` — exchange-native → canonical `BASE-QUOTE` (uppercase,
     dash). The form the rest of the system stores and reasons about.

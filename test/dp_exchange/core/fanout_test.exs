@@ -209,7 +209,7 @@ defmodule DpExchange.Core.FanoutTest do
 
       ref = Process.monitor(subscriber)
       Process.exit(subscriber, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^subscriber, _reason}
+      assert_receive {:DOWN, ^ref, :process, ^subscriber, _reason}, 5_000
 
       assert {0, after_death, []} = Fanout.deliver([subscriber], :b, dropping, opts)
       assert Enum.empty?(after_death)
@@ -225,7 +225,7 @@ defmodule DpExchange.Core.FanoutTest do
     test "a dead pid resolves to nil, and is skipped rather than reported as behind" do
       pid = spawn(fn -> :ok end)
       ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
 
       assert Fanout.resolve(pid) == nil
       assert {0, dropping, []} = Fanout.deliver([pid], :payload, MapSet.new())
@@ -302,7 +302,7 @@ defmodule DpExchange.Core.FanoutTest do
       %{^subscriber => ref} = monitors
 
       Process.exit(subscriber, :kill)
-      assert_receive {:DOWN, ^ref, :process, ^subscriber, _reason}
+      assert_receive {:DOWN, ^ref, :process, ^subscriber, _reason}, 5_000
 
       assert Fanout.forget(subscriber, monitors) == %{}
     end
@@ -316,8 +316,12 @@ defmodule DpExchange.Core.FanoutTest do
 
       assert Fanout.forget(subscriber, monitors) == %{}
 
+      witness = Process.monitor(subscriber)
       Process.exit(subscriber, :kill)
-      refute_receive {:DOWN, _ref, :process, ^subscriber, _reason}, 100
+      # The witness monitor proves the subscriber is really dead before the absence of the
+      # forgotten monitor's `:DOWN` is asserted.
+      assert_receive {:DOWN, ^witness, :process, ^subscriber, _reason}, 5_000
+      refute_received {:DOWN, _ref, :process, ^subscriber, _reason}
     end
 
     test "forget/2 on a pid that was never watched is a no-op, not a crash" do
@@ -368,7 +372,7 @@ defmodule DpExchange.Core.FanoutTest do
     defp dead_subscriber do
       pid = spawn(fn -> :ok end)
       ref = Process.monitor(pid)
-      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
       pid
     end
   end

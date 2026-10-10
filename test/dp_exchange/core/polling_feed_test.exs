@@ -26,6 +26,34 @@ defmodule DpExchange.Core.PollingFeedTest do
 
   defp event(symbol), do: %{symbol: symbol, price: Decimal.new(1)}
 
+  # Waits until `status/1` satisfies `predicate`, or fails after `timeout` ms. The feed
+  # records a failure on its own timer, so there is no message to wait for; polling the
+  # status bounds the wait by a ceiling instead of guessing a sleep long enough.
+  defp await_status(pid, predicate, timeout \\ 5_000) do
+    deadline = System.monotonic_time(:millisecond) + timeout
+    do_await_status(pid, predicate, deadline)
+  end
+
+  defp do_await_status(pid, predicate, deadline) do
+    status = PollingFeed.status(pid)
+
+    cond do
+      predicate.(status) ->
+        status
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("status never satisfied the predicate; last status: " <> inspect(status))
+
+      true ->
+        receive do
+        after
+          10 -> :ok
+        end
+
+        do_await_status(pid, predicate, deadline)
+    end
+  end
+
   describe "a feed with no fetcher refuses to start" do
     test "neither :fetch nor :fetch_all stops with :no_fetcher" do
       # A feed that would run forever delivering nothing is indistinguishable from
@@ -546,8 +574,9 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 60_000
         )
 
-      refute_receive {:published, _event}, 100
-      assert %{last_error: {:unrequested_symbols, ["btcusd"]}} = PollingFeed.status(pid)
+      status = await_status(pid, &(&1.last_error != nil))
+      refute_received {:published, _event}
+      assert %{last_error: {:unrequested_symbols, ["btcusd"]}} = status
     end
   end
 
@@ -1100,17 +1129,18 @@ defmodule DpExchange.Core.PollingFeedTest do
           fetch: fn _symbol -> {:ok, event("XBT-USD")} end
         )
 
-      refute_receive {:published, _}, 200
+      status = await_status(feed, &(&1.last_error != nil))
+      refute_received {:published, _}
       assert PollingFeed.coverage(feed) == %{}
-      assert %{last_error: {:unrequested_symbols, ["XBT-USD"]}} = PollingFeed.status(feed)
+      assert %{last_error: {:unrequested_symbols, ["XBT-USD"]}} = status
     end
 
     test "an out-of-contract per-symbol result is recorded, and the feed survives" do
       feed = start_feed(symbols: ["BTC-USD"], fetch: fn _symbol -> {:ok, nil} end)
 
-      Process.sleep(120)
+      status = await_status(feed, &(&1.last_error != nil))
       assert Process.alive?(feed)
-      assert %{last_error: {:bad_fetch_result, {:ok, nil}}} = PollingFeed.status(feed)
+      assert %{last_error: {:bad_fetch_result, {:ok, nil}}} = status
     end
 
     test "an out-of-contract bulk result is recorded, and the feed survives" do
@@ -1126,9 +1156,9 @@ defmodule DpExchange.Core.PollingFeedTest do
             id: make_ref()
           )
 
-        Process.sleep(120)
+        status = await_status(feed, &(&1.last_error != nil))
         assert Process.alive?(feed)
-        assert %{last_error: {:bad_fetch_result, _answer}} = PollingFeed.status(feed)
+        assert %{last_error: {:bad_fetch_result, _answer}} = status
       end
     end
 

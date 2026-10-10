@@ -49,7 +49,9 @@ defmodule DpExchange.Core.Instrument do
     :base,
     :quote,
     instrument: :unknown,
-    status: :tradable
+    # `:unknown`, not `:tradable`: an instrument nobody reported a status for is not evidence
+    # it can be traded. See `new/1`.
+    status: :unknown
   ]
 
   @type instrument_type :: :spot | :perp | :unknown
@@ -65,12 +67,18 @@ defmodule DpExchange.Core.Instrument do
         }
 
   @doc """
-  Build an instrument, normalising the venue's own type and status strings.
+  Build an instrument from already-normalised fields.
 
-  Both default to the conservative reading rather than the flattering one:
-  an unrecognised product type is `:unknown` (excluded from collection and
-  surfaced for review), NOT `:spot`. A venue that invents a new contract type
-  must not have it silently admitted into a spot-only fleet.
+  This does **not** normalise anything: pass the venue's own strings through
+  `instrument_from/1` and `status_from/1` first. Those two are conservative, so an
+  unrecognised product type is `:unknown` (excluded from collection and surfaced for
+  review), NOT `:spot`, and a venue that invents a new contract type is not silently
+  admitted into a spot-only fleet.
+
+  A field you leave out takes the struct default, and both defaults are `:unknown`. **`status`
+  used to default to `:tradable`**, so an instrument built without one — a venue path that
+  forgot to pass it — was reported tradable on no evidence at all, the substitution
+  `status_from/1` exists to refuse. Pass `status:` whenever the venue states one.
 
   Raises `ArgumentError` if `:symbol` is absent OR `nil` — see this module's
   "`@enforce_keys` guards presence, not `nil`" section.

@@ -245,9 +245,11 @@ rotated value is unrecoverable without a person.
 
 ## The contract is 88 callbacks, and a package implements what its venue serves
 
-`Venue.required_callbacks/0` is what the compiler enforces. Everything else is optional, and
-an unimplemented callback **exists and returns `{:error, :not_supported}`** — never a raise,
-never a missing function.
+`Venue.required_callbacks/0` is what the compiler enforces, and it is all but three of them.
+Only `list_instruments/1`, `quantization/1` and `coverage_by_kind/1` are
+`@optional_callbacks` and may be absent. For every other callback a venue that does not serve
+it still defines the function, declares it `:unsupported`, and it **exists and returns
+`{:error, :not_supported}`** — never a raise, never a missing function.
 
 Two things a consumer should read rather than infer:
 

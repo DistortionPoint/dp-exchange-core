@@ -169,7 +169,8 @@ published type, for a gap no consumer has reported hitting; see
 Every `Core.Types.*` module exposes a validating `new/1`, built on
 `DpExchange.Core.Types.Validate`: `struct!/2`, plus a check that every field the type's own
 `@enforce_keys` names is present **and non-`nil`**, raising `ArgumentError` naming the
-offending field when it is not.
+offending field when it is not. It also refuses, in any field and however deeply nested, a
+`Decimal` that is `NaN` or infinite and a `NaiveDateTime`.
 
 `@enforce_keys` alone guards presence, not `nil` — `%Candle{open: nil, high: ..., low: ...,
 close: ..., ...}` builds without complaint even though `Candle`'s typespec calls `open` a
@@ -267,14 +268,17 @@ Where a moduledoc explains *why* a guard exists, that explanation is the most va
 thing in the file. Carry it when the code moves or is copied. A guard without its reason
 reads as defensive padding, and the next person tidying up deletes it.
 
-## The surface is 88 callbacks, and almost all of them are optional
+## The surface is 88 callbacks; 85 must exist and 3 may be absent
 
-`Venue.required_callbacks/0` is the list the compiler enforces; everything else is declared
-`:unsupported` and answers `{:error, :not_supported}`. **A new package does not implement 88
-functions.** It implements what its venue serves and declares the rest — which is exactly the
-work, because the declaring is where the thinking is.
+`Venue.required_callbacks/0` is the list the compiler enforces: 85 of the 88. A function for
+a callback your venue does not serve **must still be defined**; it declares the endpoint
+`:unsupported` and answers `{:error, :not_supported}`. **A new package does not have to
+implement 85 real endpoints.** It implements what its venue serves and declares the rest —
+which is exactly the work, because the declaring is where the thinking is. Many callback docs
+in `Core.Venue` begin "Optional"; that means "may be `:unsupported`", not "may be missing".
 
-One of the optional ones is optional for a different reason than the rest: `coverage_by_kind/1`
+Only `list_instruments/1`, `quantization/1` and `coverage_by_kind/1` are
+`@optional_callbacks`, and may be left out of your module. `coverage_by_kind/1`
 is not ceremony to skip, it is a callback Core ships **ahead of any venue adopting it**, so
 that publishing it never breaks a venue package mid-release. Adopt it when you can — see
 `usage-rules/feeds.md` for the incident it exists to make visible — but a package that has not

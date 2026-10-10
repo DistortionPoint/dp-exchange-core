@@ -30,6 +30,17 @@ defmodule DpExchange.PurityTest do
     |> String.replace(~r/^\s*#.*$/m, "")
   end
 
+  describe "the scans below are not vacuous" do
+    test "lib_sources/0 finds the library's sources" do
+      # Every scan here is a `for` over these paths; run from the wrong directory the
+      # wildcard matches nothing and each refute passes having checked nothing.
+      sources = lib_sources()
+
+      assert "lib/dp_exchange.ex" in sources
+      assert "lib/dp_exchange/core/venue.ex" in sources
+    end
+  end
+
   describe "2.10 — nothing in lib/ reaches for the host application" do
     test "no forbidden namespace appears in code" do
       for path <- lib_sources(), namespace <- @forbidden_namespaces do

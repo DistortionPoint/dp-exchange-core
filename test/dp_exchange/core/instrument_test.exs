@@ -11,7 +11,8 @@ defmodule DpExchange.Core.InstrumentTest do
 
       assert instrument.symbol == "BTC-USD"
       assert instrument.instrument == :unknown
-      assert instrument.status == :tradable
+      # Not `:tradable`: an omitted status is no evidence the instrument can be traded.
+      assert instrument.status == :unknown
       assert instrument.base == nil
       assert instrument.quote == nil
     end

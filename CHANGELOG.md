@@ -21,6 +21,57 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+Two defaults that failed open, found 2026-10-10 while checking the docs that described them.
+
+- **`Instrument.new/1` without `:status` is now `:unknown`, not `:tradable`.** An instrument
+  built without a status was reported tradable on no evidence — the substitution
+  `status_from/1` exists to refuse. Every venue package already passes a status on its real
+  path; a caller that relied on the default must now pass `status: :tradable` itself.
+- **`HttpClient.build_auth_headers/5` raises `ArgumentError` on an unknown `auth_type`.** It
+  returned `[]`, so a typo'd scheme sent the request unauthenticated.
+
+### Fixed
+
+Documentation corrected to match the code, found 2026-10-10 by checking each claim against
+the module it describes. No behaviour changed.
+
+- **The contract is 85 required callbacks and 3 optional, not "almost all optional".**
+  `usage-rules.md`, `usage-rules/adapter.md`, the README and many `Core.Venue` callback docs
+  ("Optional, and ...") said a package implements what its venue serves and may omit the rest.
+  Only `list_instruments/1`, `quantization/1` and `coverage_by_kind/1` are in
+  `@optional_callbacks`; every other callback must be defined, and a venue that does not
+  serve it declares it `:unsupported` and answers `{:error, :not_supported}`. `Core.Venue`'s
+  moduledoc now says what "Optional" means there.
+- **`usage-rules/feeds.md` said back-pressure "drops oldest".** It drops the newest: a sender
+  cannot remove what is already in a subscriber's mailbox, and `Core.Fanout` stops sending
+  once the mailbox passes the bound (10,000 by default). `Core.Venue.subscribe/2` already said
+  so; the guide now agrees.
+- **`AdapterContract` moduledoc said "Twenty-one groups".** There are thirty.
+- **`HttpClient`:** `request/5`'s options now list `:rate_limit_blocking`, `:weight` and
+  `:max_retry_after_s`, which were read but undocumented. `:account_id`, `:user_id` and
+  `:operation` are documented as forwarded to the limiter (the default limiter ignores them),
+  where the docs claimed account-aware limiting and an `:operation` default of `"default"`
+  that nothing set. `build_auth_headers/5` documents the function form of `auth_type` and
+  that an unrecognised scheme yields `[]`. `request_error` said "Three shapes" and listed two.
+- **`DefaultRateLimiter` moduledoc said every callback returns `{:error, :not_started}`.**
+  `record/3` and `penalize/3` cannot fail and answer `:ok`. `inspect_provider/2` is documented
+  as returning `{:ok, map}`, as its spec says.
+- **`PollingFeed.start_link/1` now documents its options** and their defaults.
+- **`Types.Validate` and `usage-rules/adapter.md`** now say `new/1` also refuses a `NaN` or
+  infinite `Decimal` and a `NaiveDateTime` in any field.
+- **`usage-rules/symbols.md` said quotes must be listed longest-first.** `CanonicalPair` has
+  sorted them itself for some time; the order no longer matters. `SymbolNormalizer` said
+  malformed input degrades to `"UNKNOWN"`; it comes back uppercased. `CanonicalPair.to_exchange/2`
+  said a bare symbol comes back unchanged; it is uppercased and alias-reversed.
+- **`Instrument.new/1` said it normalises and defaults conservatively.** It does neither: it
+  validates, and an omitted `status` is `:tradable`. Pass `status: :unknown` when there is no
+  status to report.
+- **`RateLimitBehaviour`** no longer calls itself "future" or says "the host" records on
+  `HttpClient`'s behalf; `usage-rules/environments.md` says environment resolution is each
+  venue package's, built on `Core.Config`.
+
 ## [0.3.63] - 2026-10-10
 
 ### Fixed

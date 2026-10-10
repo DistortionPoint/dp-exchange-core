@@ -3,10 +3,10 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   Behaviour for the rate-limit token-bucket implementation that every
   exchange adapter calls before making an API request.
 
-  Part of the future `dp_exchange_core` Hex package. A default in-process
-  bucket implementation ships in `Core.DefaultRateLimiter`; the host
-  application overrides via config (`:rate_limit_module`) to plug in its
-  own distributed limiter, queueing, telemetry, etc.
+  A default in-process bucket implementation ships in `Core.DefaultRateLimiter`; a
+  consumer overrides it with the `:rate_limit_module` key of the `:dp_exchange_core`
+  application env (resolved per call through `Core.Config`) to plug in its own
+  distributed limiter, queueing, telemetry, etc.
 
   Implementations must be safe to call from any process at any frequency.
 
@@ -28,8 +28,8 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   @type opts :: keyword()
 
   @doc """
-  Acquire `weight` tokens for `provider`. Blocks (or returns
-  `:rate_limited`) until tokens are available.
+  Acquire `weight` tokens for `provider`. Blocks until tokens are available or
+  the `:timeout` option elapses.
 
   Returns `:ok` once tokens granted, `{:error, :rate_limit_timeout}` if
   the configured `:timeout` elapses first, or `{:error, reason}` on any
@@ -75,7 +75,7 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   they answer "is there capacity" and, for acquire, wait until there is. Something
   has to report what left, or the bucket stays empty and every check passes.
 
-  For adapters that go through `Core.HttpClient` the host records on their behalf.
+  For adapters that go through `Core.HttpClient`, it reserves tokens on their behalf.
   An adapter issuing its own HTTP calls has to call this itself, and Webull did
   not: it acquired before every request and recorded none, so its ceiling bound
   nothing and the venue answered with HTTP 429. Measured at the point calls leave:

@@ -212,6 +212,29 @@ defmodule DpExchange.Core.PollingFeed do
     |> min(@max_fetch_timeout_ms)
   end
 
+  @doc """
+  Starts a polling feed. An explicit `nil` for any option below is read as absent.
+
+  ## Options
+
+    * `:sink` - **required**, a 1-arity function called with each event a fetch produces.
+      A missing or non-function value stops the feed at start.
+    * `:fetch` - `t:fetch/0`, one symbol per call.
+    * `:fetch_all` - `t:fetch_all/0`, the whole symbol set per call. At least one of
+      `:fetch` and `:fetch_all` is required; with neither the feed stops with `:no_fetcher`.
+    * `:symbols` - the symbols to poll (default: `[]`; see `update_symbols/2`).
+    * `:interval_ms` - poll interval (default: `#{@default_interval_ms}`).
+    * `:start_delay_ms` - wait before the first sweep (default: `#{@default_start_delay_ms}`).
+    * `:fetch_timeout_ms` - a fetch still running after this is a failure (default: the
+      interval, clamped to `#{@min_fetch_timeout_ms}`..`#{@max_fetch_timeout_ms}`).
+    * `:label` - names this feed in notices and logs (default: `"polling-feed"`).
+    * `:provider` - what a `Core.Notice` from this feed names as its provider (default:
+      `:label`).
+    * `:on_refusal` - `(symbol, reason -> any)`, called once per refused symbol (default:
+      no-op).
+    * `:on_notice` - `t:notice_handler/0` (default: no-op).
+    * `:name` - registered name (default: unregistered).
+  """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     case Keyword.get(opts, :name) do

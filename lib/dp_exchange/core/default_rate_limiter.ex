@@ -53,10 +53,14 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   ## Not started is not "no limit"
 
-  Every callback returns `{:error, :not_started}` when the named limiter is not running.
-  Failing open would meter nothing while reporting success, which is exactly the failure
-  the ceiling exists to prevent: a venue answering with HTTP 429 while the budget panel
-  reads comfortable.
+  `acquire/3` and `check/3` return `{:error, :not_started}` when the named limiter is not
+  running, and so does `inspect_provider/2`. Failing open would meter nothing while reporting
+  success, which is exactly the failure the ceiling exists to prevent: a venue answering
+  with HTTP 429 while the budget panel reads comfortable.
+
+  The exceptions are `record/3` and `penalize/3`, which cannot fail by design and answer
+  `:ok` whether or not the limiter is running. They are write-only accounting, so a missed
+  one costs accuracy, and the refusal to proceed is made by `acquire/3` and `check/3`.
   """
 
   use GenServer
@@ -230,8 +234,8 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   @doc """
   The limiter's current view of a provider, for tests and diagnostics.
 
-  Returns `%{next_allowed_in_ms: non_neg_integer()}` — zero when the provider may
-  proceed immediately.
+  Returns `{:ok, %{next_allowed_in_ms: non_neg_integer()}}` — zero when the provider may
+  proceed immediately — or `{:error, reason}`, such as `{:error, :not_started}`.
   """
   @spec inspect_provider(atom() | String.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def inspect_provider(provider, opts \\ []) do

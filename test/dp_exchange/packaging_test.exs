@@ -16,7 +16,10 @@ defmodule DpExchange.PackagingTest do
   describe "files: is declared where Hex actually reads it" do
     test "the package declares its own file list" do
       # A `files:` in project/0 is silently ignored. This asserts the one Hex reads.
-      assert is_list(package_files())
+      files = package_files()
+
+      assert is_list(files)
+      assert files != []
     end
 
     test "the project level does not also declare one, which would mislead a reader" do

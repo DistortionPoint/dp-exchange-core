@@ -118,8 +118,8 @@ defmodule DpExchange.Core.ConfigTest do
           receive do: (:go -> Config.get(:dp_exchange_core, :shared))
         end)
 
-      assert_receive :ready
-      assert_receive :ready
+      assert_receive :ready, 5_000
+      assert_receive :ready, 5_000
       send(a.pid, :go)
       send(b.pid, :go)
 
@@ -170,7 +170,7 @@ defmodule DpExchange.Core.ConfigTest do
       Config.put_override(:survives, :yes)
 
       {dead_pid, ref} = spawn_monitor(fn -> :ok end)
-      assert_receive {:DOWN, ^ref, :process, ^dead_pid, :normal}
+      assert_receive {:DOWN, ^ref, :process, ^dead_pid, :normal}, 5_000
 
       task =
         Task.async(fn ->

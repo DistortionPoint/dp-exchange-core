@@ -507,7 +507,11 @@ defmodule DpExchange.Core.ReferenceVenue do
     # No default scope. The reference venue enforces the contract's own rule, so a
     # conformance run against it fails a package that quietly picked one.
     case Keyword.get(opts, :scope) do
-      scope when scope in [:session, :account] ->
+      :session ->
+        # One order already gone: a non-empty `rejected` is a partial success, not a failure.
+        {:ok, %{cancelled: ["ref-order-1"], rejected: ["ref-order-2"]}}
+
+      :account ->
         {:ok, %{cancelled: ["ref-order-1"], rejected: []}}
 
       nil ->

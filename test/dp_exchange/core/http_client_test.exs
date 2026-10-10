@@ -318,8 +318,12 @@ defmodule DpExchange.Core.HttpClientTest do
                HttpClient.build_auth_headers(:get, "/orders", nil, @credentials, builder)
     end
 
-    test "an unknown scheme yields no headers rather than raising" do
-      assert [] = HttpClient.build_auth_headers(:get, "/x", nil, @credentials, :no_such_scheme)
+    test "an unknown scheme raises rather than sending the request unsigned" do
+      # It answered `[]`, so a typo'd scheme authenticated nothing and the request went out
+      # anyway — failing open on the one decision that must fail closed.
+      assert_raise ArgumentError, ~r/unknown auth_type :no_such_scheme/, fn ->
+        HttpClient.build_auth_headers(:get, "/x", nil, @credentials, :no_such_scheme)
+      end
     end
   end
 

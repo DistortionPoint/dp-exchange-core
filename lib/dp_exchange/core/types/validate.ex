@@ -30,6 +30,11 @@ defmodule DpExchange.Core.Types.Validate do
   error, full stop — the same rule this whole family applies everywhere else. `new!/3`
   fails closed; it does not repair the input.
 
+  **Two further values are refused in any field**, however deeply nested in a list, tuple
+  or plain map: a `Decimal` that is `NaN` or infinite, which is not a number any field of
+  these types can carry, and a `NaiveDateTime`, because every time in this family is a
+  `DateTime` and a time with no zone cannot be placed.
+
   ## Struct literals still work
 
   Nothing here removes `defstruct` or `@enforce_keys` from any `Types.*` module, and

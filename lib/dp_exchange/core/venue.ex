@@ -69,6 +69,18 @@ defmodule DpExchange.Core.Venue do
   both within a single module — so a caller matching the atom silently missed the string and
   treated a refusal as an unrecognised error.
 
+  ## "Optional" means two different things in this file
+
+  Only three callbacks are in `@optional_callbacks`, and only those three may be left out of
+  a venue module entirely: `c:list_instruments/1`, `c:quantization/1` and
+  `c:coverage_by_kind/1`. `required_callbacks/0` is every other callback, and the compiler
+  and the conformance suite insist the module defines each one.
+
+  Many other callback docs below begin "Optional". Read that as **a venue may not serve
+  this**: it declares the endpoint `:unsupported` in `c:capabilities/0` and its function
+  still exists and answers `{:error, :not_supported}`. It does not mean the function may be
+  missing.
+
   ## A library does not start itself
 
   `c:child_spec/1` exists so **you** supervise the venue. This package ships no aggregate
