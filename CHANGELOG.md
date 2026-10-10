@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **0.3.55 made an unsignable request ask the limiter first.** A request with no credentials
+  spent a token. With no limiter running, it reported "Rate limiter unavailable" in place
+  of `{:missing_credentials, _}`, the reason that names the fix. Every venue's "no
+  credentials never reaches the network" test caught it. A request is now signed first, and
+  an unsignable one fails before the limiter. On a **blocking** limiter it is signed again
+  after the wait, and only that signature is sent, which keeps the 0.3.55 nonce-ordering
+  fix. A non-blocking limiter never waits, so its first signature is the one sent.
+
 ## [0.3.55] - 2026-10-10
 
 ### Fixed

@@ -418,9 +418,20 @@ defmodule DpExchange.Core.HttpClient do
   # before it was sent. Two concurrent callers on an incrementing nonce were then released in
   # either order, and the later-signed request reached the venue first, so the earlier one
   # was refused as `InvalidNonce`. A time-based nonce past its 30 s window was refused the
-  # same way. Now the attempt reserves its tokens, then signs, then sends.
-  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left),
-    do: attempt(method, url, headers, body, opts, attempts_left)
+  # same way. So on a BLOCKING limiter the request is signed again once the wait is over, and
+  # only that signature is sent.
+  #
+  # It is still signed first, too. A request that cannot be signed (no credentials) must
+  # fail with that reason before the limiter is asked, or it spends a token and, with no
+  # limiter running, reports "Rate limiter unavailable" in place of the reason that names
+  # the fix (found 2026-10-10 by every venue's "no credentials never reaches the network"
+  # test). A non-blocking limiter never waits, so its first signature is the one sent.
+  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left) do
+    case resolve_headers(headers) do
+      {:ok, resolved} -> attempt(method, url, headers, resolved, body, opts, attempts_left)
+      {:error, _reason} = error -> error
+    end
+  end
 
   defp resolve_headers(headers) when is_function(headers, 0) do
     case headers.() do
@@ -432,8 +443,9 @@ defmodule DpExchange.Core.HttpClient do
 
   defp resolve_headers(headers), do: {:ok, headers}
 
-  # `headers` is what each attempt resolves again — see `resolve_headers/1`.
-  defp attempt(method, url, headers, body, opts, attempts_left) do
+  # `headers` is what each attempt resolves again; `signed` is this attempt's first
+  # signature — see `do_request_with_rate_limiting/6`.
+  defp attempt(method, url, headers, signed, body, opts, attempts_left) do
     # The endpoint a `rate_limit_per_endpoint: true` request is metered under — see
     # `rate_limit_keys/1`. The URL's path, never its query: `?symbol=BTCUSD` and
     # `?symbol=ETHUSD` are the same endpoint to the venue's per-endpoint limit.
@@ -441,15 +453,19 @@ defmodule DpExchange.Core.HttpClient do
 
     # Check rate limits before making the request, and sign only once they have cleared.
     case check_rate_limits(opts) do
-      :ok -> sign_and_send(method, url, headers, body, opts, attempts_left)
+      :ok -> sign_and_send(method, url, headers, signed, body, opts, attempts_left)
       refused -> rate_limit_refusal(refused, opts)
     end
   end
 
-  defp sign_and_send(method, url, headers, body, opts, attempts_left) do
-    case resolve_headers(headers) do
-      {:ok, resolved} -> send_attempt(method, url, headers, resolved, body, opts, attempts_left)
-      {:error, _reason} = error -> error
+  defp sign_and_send(method, url, headers, signed, body, opts, attempts_left) do
+    if blocking?(opts) and is_function(headers, 0) do
+      case resolve_headers(headers) do
+        {:ok, fresh} -> send_attempt(method, url, headers, fresh, body, opts, attempts_left)
+        {:error, _reason} = error -> error
+      end
+    else
+      send_attempt(method, url, headers, signed, body, opts, attempts_left)
     end
   end
 

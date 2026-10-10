@@ -205,45 +205,59 @@ defmodule DpExchange.Core.HttpClientTest do
       refute_received {:counted, _key, _weight}
     end
 
-    test "a header function is signed only after the limiter has cleared" do
-      # Signed first and then held by a blocking limiter, two callers on an incrementing
+    test "on a blocking limiter the request is signed again after the wait, and that is sent" do
+      # Signed once and then held by a blocking limiter, two callers on an incrementing
       # nonce were released in either order, and the earlier signature reached the venue
       # second and was refused as a replay.
       use_stub()
       test = self()
+      counter = :counters.new(1, [])
 
       headers = fn ->
-        send(test, :signed)
-        []
+        :counters.add(counter, 1, 1)
+        n = :counters.get(counter, 1)
+        send(test, {:signed, n})
+        [{"x-nonce", Integer.to_string(n)}]
       end
 
-      HttpClient.request(:get, "http://127.0.0.1:1/never", headers, nil,
+      plug = fn conn ->
+        send(test, {:sent_nonce, Plug.Conn.get_req_header(conn, "x-nonce")})
+        Req.Test.json(conn, %{})
+      end
+
+      HttpClient.request(:get, "http://venue.test/x", headers, nil,
         provider: "v",
+        plug: plug,
+        rate_limit_blocking: true,
         retry_attempts: 0
       )
 
       {:messages, messages} = Process.info(self(), :messages)
       reserved = Enum.find_index(messages, &(&1 == {:counted, "v", 1}))
-      signed = Enum.find_index(messages, &(&1 == :signed))
+      resigned = Enum.find_index(messages, &(&1 == {:signed, 2}))
 
-      assert reserved != nil and signed != nil
-      assert reserved < signed
+      assert reserved != nil and resigned != nil
+      assert reserved < resigned
+      assert_received {:sent_nonce, ["2"]}
     end
 
-    test "a header function is not called at all when the limiter refuses" do
-      use_stub({:rate_limited, 1_500})
-      test = self()
+    test "a request that cannot be signed fails with that reason before the limiter is asked" do
+      # Asked first, an unstarted limiter answered "Rate limiter unavailable" for a request
+      # that had no credentials, and a running one spent a token on it.
+      use_stub()
 
-      HttpClient.request(
-        :get,
-        "http://127.0.0.1:1/never",
-        fn -> send(test, :signed) && [] end,
-        nil,
-        provider: "v",
-        retry_attempts: 0
-      )
+      assert {:error, :missing_credentials} =
+               HttpClient.request(
+                 :get,
+                 "http://127.0.0.1:1/never",
+                 fn -> {:error, :missing_credentials} end,
+                 nil,
+                 provider: "v",
+                 retry_attempts: 0
+               )
 
-      refute_received :signed
+      refute_received {:acquire, :key, "v"}
+      refute_received {:counted, _key, _weight}
     end
 
     test "without the option only the provider's bucket is metered" do
