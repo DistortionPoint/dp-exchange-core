@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.57] - 2026-10-10
+
 ### Fixed
 
 - **Conformance assertions that could not fail now can.**
