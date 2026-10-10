@@ -21,6 +21,13 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`Venue.cancel_order/3` is typed `result(Order.t() | :cancelled)`.** It said `Order.t()`,
+  which three of five venues never returned: Coinbase, Webull and Schwab cancel endpoints
+  answer success with no order data. `:cancelled` is now the declared answer for that case.
+  A caller wanting the order asks `get_order/3`.
+
 ## [0.3.58] - 2026-10-10
 
 ### Fixed

@@ -765,8 +765,18 @@ defmodule DpExchange.Core.Venue do
   """
   @callback place_orders(credentials(), [map()], keyword()) :: result([map()])
 
-  @doc "Cancels an order."
-  @callback cancel_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
+  @doc """
+  Cancels an order.
+
+  `{:ok, %Order{}}` where the venue's cancel answer carries the order, and
+  `{:ok, :cancelled}` where it does not: `dp_exchange_coinbase`'s batch-cancel-of-one,
+  `dp_exchange_webull`'s and `dp_exchange_schwab`'s cancels answer success with no order
+  data. This type said `Order.t()` only, which three of five venues never returned. A
+  caller wanting the order after a `:cancelled` asks `get_order/3`; a package does not
+  fabricate one from the request.
+  """
+  @callback cancel_order(credentials(), String.t(), keyword()) ::
+              result(Types.Order.t() | :cancelled)
 
   @doc """
   Cancels open orders in bulk, at a scope the caller must state.
