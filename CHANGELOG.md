@@ -21,6 +21,41 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conformance assertions that could not fail now can.**
+  - Group 7 (purity) treated a module found nowhere as permitted, which is exactly a host-app
+    module the package never declared.
+  - Group 11's "no facade return value carries a process" walked the `:unsupported`
+    endpoints, which answer `{:error, :not_supported}`. It now walks the active ones, on the
+    fake.
+  - Group 1's optional-callback check asserted `is_boolean/1`, which is always true. It now
+    fails a callback exported at the wrong arity.
+  - Group 3's `runtime_id/0` check accepted `nil` and any atom. It now requires the module's
+    underscored last segment.
+  - Group 28 could filter every call out before the venue was loaded, and now loads it first.
+  - Group 26 called a missing fake, and raised a bare `MatchError` on fewer than two pairs.
+  - Group 5 counted a fake that raised as conforming.
+- **`Timeframe.aligned?/2` called a millisecond-precision boundary unaligned.** It compared
+  the microsecond tuple `{0, 3}` with `{0, 0}`, and `from_unix!(ms, :millisecond)` and
+  `.000Z` strings both produce `{0, 3}`. `boundary/2` rounded a pre-1970 time into the next
+  bucket. It now uses `Integer.floor_div/2`.
+- **`Types.*.new/1` refuses NaN, Infinity and `NaiveDateTime` in any field.** A nil check let
+  `Decimal.new("NaN")` build, and that later raises inside `Decimal.compare/2` in the
+  consumer.
+- **`Notice.new/3`** refuses a `nil` provider and a non-`DateTime` `:at`, and reads `-` as
+  `_` in credential keys (`api-key`, `X-Api-Key`). It also refuses `client_secret`,
+  `x_api_key`, `app_secret`, `signing_key` and `cookie`.
+- **`Telemetry.link_down/2` raised on a non-string reason** inside the venue's feed. A raw
+  reason is now inspected. `endpoint/1` strips userinfo and the fragment as well as the query.
+- **`Capabilities` accepted any `Decimal` as `max_leverage`**, including `0`, a negative and
+  NaN. It must now be positive and finite.
+
+### Documentation
+
+- `usage-rules/testing.md` said 23 assertion groups; there are 30. The Telemetry moduledoc
+  now lists the `count` and conditional `bytes` measurements each link event actually emits.
+
 ## [0.3.56] - 2026-10-10
 
 ### Fixed

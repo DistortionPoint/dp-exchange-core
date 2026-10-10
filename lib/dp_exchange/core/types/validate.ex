@@ -56,6 +56,7 @@ defmodule DpExchange.Core.Types.Validate do
 
     case Enum.find(required_non_nil, fn field -> is_nil(Map.get(attrs_map, field)) end) do
       nil ->
+        refuse_unrepresentable!(module, attrs_map)
         struct!(module, attrs_map)
 
       field ->
@@ -64,5 +65,29 @@ defmodule DpExchange.Core.Types.Validate do
                 "a nil here is what a decode bug on a renamed venue field produces, and this " <>
                 "constructor fails closed rather than build a struct the typespec says cannot occur"
     end
+  end
+
+  # **Not-a-number and no-timezone are refused too, in any field.** A nil check let
+  # `price: Decimal.new("NaN")` build: `Decimal.parse/1` reads "NaN" and "Infinity" in full,
+  # so a venue sending one arrives as a well-formed `Decimal` that poisons arithmetic
+  # silently and RAISES in `Decimal.compare/2` (`TopOfBook.crossed?/1`, `mid/1`) in the
+  # consumer's process. And `observed_at: ~N[...]` built, a time with no zone where every
+  # type in this family promises a `DateTime`. Neither is ever a legitimate value here: no
+  # type has a field typed `NaiveDateTime`, and no quantity is infinite.
+  defp refuse_unrepresentable!(module, attrs_map) do
+    Enum.each(attrs_map, fn
+      {field, %Decimal{coef: coef}} when coef in [:NaN, :inf] ->
+        raise ArgumentError,
+              "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(coef)} — not a " <>
+                "number any field of this type can carry"
+
+      {field, %NaiveDateTime{}} ->
+        raise ArgumentError,
+              "#{inspect(module)}.new/1: field #{inspect(field)} is a NaiveDateTime — every " <>
+                "time in this family is a DateTime, and a time with no zone cannot be placed"
+
+      _fine ->
+        :ok
+    end)
   end
 end

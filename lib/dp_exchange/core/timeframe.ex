@@ -146,7 +146,11 @@ defmodule DpExchange.Core.Timeframe do
   def aligned?(%DateTime{} = datetime, timeframe) do
     case seconds(timeframe) do
       {:ok, width} ->
-        rem(DateTime.to_unix(datetime), width) == 0 and datetime.microsecond == {0, 0}
+        # The VALUE of the microseconds, not the tuple. `{0, 3}` is zero microseconds at
+        # millisecond precision, which is what `from_unix!(ms, :millisecond)` and an ISO
+        # string ending `.000Z` both produce, and comparing with `{0, 0}` called an exact
+        # hour boundary unaligned.
+        rem(DateTime.to_unix(datetime), width) == 0 and elem(datetime.microsecond, 0) == 0
 
       :error ->
         true
@@ -160,7 +164,13 @@ defmodule DpExchange.Core.Timeframe do
   def boundary(%DateTime{} = datetime, timeframe) do
     case seconds(timeframe) do
       {:ok, width} ->
-        datetime |> DateTime.to_unix() |> div(width) |> Kernel.*(width) |> DateTime.from_unix!()
+        # `Integer.floor_div/2`: `div/2` truncates toward zero, so before 1970 it rounded a
+        # time UP into the next bucket instead of down into its own.
+        datetime
+        |> DateTime.to_unix()
+        |> Integer.floor_div(width)
+        |> Kernel.*(width)
+        |> DateTime.from_unix!()
 
       :error ->
         datetime

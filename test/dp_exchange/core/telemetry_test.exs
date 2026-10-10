@@ -306,8 +306,16 @@ defmodule DpExchange.Core.TelemetryTest do
       assert is_binary(metadata.reason)
     end
 
-    test "down refuses a non-binary reason at the call site" do
-      assert_raise FunctionClauseError, fn -> Telemetry.link_down(:any_venue, {:raw, :term}) end
+    test "down inspects a non-binary reason rather than raising into the venue's feed" do
+      # It raised `FunctionClauseError`, which made telemetry the reason a feed crashed. The
+      # property that matters, a reason that is text and never a raw term, still holds.
+      provider = unique_provider()
+      :ok = attach([[:dp_exchange, :link, :down]], provider)
+
+      assert :ok = Telemetry.link_down(provider, {:raw, :term})
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements,
+                      %{reason: "{:raw, :term}"}}
     end
 
     test "event carries bytes, which is what makes it a throughput signal" do

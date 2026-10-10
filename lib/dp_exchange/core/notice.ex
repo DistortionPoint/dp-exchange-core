@@ -163,7 +163,8 @@ defmodule DpExchange.Core.Notice do
   @severities ~w(info warning error)a
 
   @credential_keys ~w(api_key api_secret secret password passphrase token access_token
-                      refresh_token private_key signature authorization bearer)a
+                      refresh_token private_key signature authorization bearer client_secret
+                      x_api_key app_secret signing_key cookie)a
 
   # Derived once, at compile time, so the runtime check below never has to turn an
   # incoming key into an atom to compare it. `@credential_keys` stays the single
@@ -235,11 +236,25 @@ defmodule DpExchange.Core.Notice do
     severity = Config.opt(opts, :severity, default_severity(kind))
     validate_severity!(severity)
 
+    # `provider:` and `at:` were taken as given, so `nil` and a `NaiveDateTime` both built:
+    # a notice a consumer routes by provider and orders by time, with neither.
+    unless (is_atom(provider) and provider not in [nil, true, false]) or
+             (is_binary(provider) and provider != "") do
+      raise ArgumentError,
+            "notice provider must be a venue atom or name, got #{inspect(provider)}"
+    end
+
+    at = Config.opt(opts, :at, DateTime.utc_now())
+
+    unless is_struct(at, DateTime) do
+      raise ArgumentError, "notice :at must be a DateTime, got #{inspect(at)}"
+    end
+
     %Notice{
       kind: kind,
       provider: provider,
       severity: severity,
-      at: Config.opt(opts, :at, DateTime.utc_now()),
+      at: at,
       message: message(opts, kind, provider, details),
       details: details
     }
@@ -300,9 +315,15 @@ defmodule DpExchange.Core.Notice do
       details
       |> Map.keys()
       |> Enum.filter(fn key ->
-        normalised = key |> to_string() |> String.downcase()
+        # `-` and `_` are one separator: `"api-key"` and `"X-Api-Key"` are header spellings
+        # of the same credential, and were let through.
+        normalised = key |> to_string() |> String.downcase() |> String.replace("-", "_")
         normalised in @credential_key_strings
       end)
+
+    # Top level only, deliberately. A nested map is often the venue's own decoded payload
+    # (`dp_exchange_webull` puts its broker notice body there), and raising on a key inside
+    # it would let one venue message crash the transport that received it.
 
     if offending != [] do
       raise ArgumentError,

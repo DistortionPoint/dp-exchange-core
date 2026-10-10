@@ -200,7 +200,9 @@ defmodule DpExchange.Core.AdapterContract do
       arg_helpers(),
       subscription_set_helpers(),
       credential_gate_helpers(),
-      purity_helpers()
+      purity_helpers(),
+      process_helpers(),
+      process_walk_helpers()
     ]
   end
 
@@ -302,11 +304,20 @@ defmodule DpExchange.Core.AdapterContract do
         test "optional callbacks are implemented or absent, never half" do
           Code.ensure_loaded!(@venue)
 
-          for {name, arity} <- Venue.behaviour_info(:optional_callbacks) do
-            exported = function_exported?(@venue, name, arity)
+          # "Half" is the callback's NAME exported at some other arity and not at the one the
+          # behaviour declares: a consumer calling it at the declared arity gets an
+          # `UndefinedFunctionError`, and `function_exported?/3` at that arity says absent
+          # while the module plainly meant to implement it. It asserted `is_boolean/1` of
+          # `function_exported?/3`, which is always true.
+          exports = @venue.__info__(:functions)
 
-            assert is_boolean(exported),
-                   "#{name}/#{arity} must be fully present or fully absent"
+          for {name, arity} <- Venue.behaviour_info(:optional_callbacks),
+              not function_exported?(@venue, name, arity) do
+            other_arities = for {^name, a} <- exports, do: a
+
+            assert other_arities == [],
+                   "#{name}/#{arity} is an optional callback; #{inspect(@venue)} exports " <>
+                     "#{name} at #{inspect(other_arities)} but not at #{arity}"
           end
         end
       end
@@ -372,8 +383,15 @@ defmodule DpExchange.Core.AdapterContract do
           assert is_binary(name) and String.trim(name) != ""
         end
 
+        # It asserted `is_atom/1` only, which `nil` passes, and so does `:foo` on
+        # `DpExchange.Coinbase`. The name says what it means: the module's last segment,
+        # underscored — `DpExchange.Coinbase` is `:coinbase`.
         test "runtime_id/0 is an atom matching the namespace segment" do
-          assert is_atom(@venue.runtime_id())
+          id = @venue.runtime_id()
+          segment = @venue |> Module.split() |> List.last() |> Macro.underscore()
+
+          assert is_atom(id) and id not in [nil, true, false] and Atom.to_string(id) == segment,
+                 "runtime_id/0 is #{inspect(id)}; #{inspect(@venue)} names #{inspect(segment)}"
         end
 
         test "asset_classes/0 is a non-empty list of known classes" do
@@ -1077,12 +1095,11 @@ defmodule DpExchange.Core.AdapterContract do
                  "the package declares its own supervision entry point"
         end
 
+        # It walked the `:unsupported` endpoints, which answer `{:error, :not_supported}`,
+        # so it could not fail. The answers that can carry a process are the ACTIVE ones,
+        # and they are asked of the fake, which answers without a network.
         test "no facade return value carries a process, socket or reference" do
-          caps = @venue.capabilities()
-
-          for endpoint <- Capabilities.endpoints_at(caps, :unsupported) do
-            refute match?({:ok, pid} when is_pid(pid), call_endpoint(endpoint))
-          end
+          if @fake, do: assert_no_process_in_answers(@fake, @venue)
         end
       end
     end
@@ -2023,6 +2040,11 @@ defmodule DpExchange.Core.AdapterContract do
       defp wrong_type({:ok, %{} = raw}, _modules),
         do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
 
+      # A fake that raised did not answer, and counted as conforming: a fake crashing on
+      # every endpoint passed this group.
+      defp wrong_type({:raised, error}, _modules),
+        do: "a raise: #{error |> Exception.message() |> String.slice(0, 80)}"
+
       defp wrong_type(_not_a_success, _modules), do: nil
     end
   end
@@ -2079,6 +2101,10 @@ defmodule DpExchange.Core.AdapterContract do
         # which needs a feed's whole call budget to observe. Each venue's own facade test
         # holds a feed that dies mid-call, which goes through the same `catch`.
         test "with no feed running, every streaming call returns a value" do
+          # Loaded first: `function_exported?/3` below is false for a module not yet loaded,
+          # and tests run in random order, so this could filter every entry out and pass.
+          Code.ensure_loaded!(@venue)
+
           for {name, arity, call} <- [
                 {:subscribe, 2, fn -> @venue.subscribe(@sample_pairs, @absent_feed_opts) end},
                 {:unsubscribe, 2, fn -> @venue.unsubscribe(@sample_pairs, @absent_feed_opts) end},
@@ -2194,7 +2220,15 @@ defmodule DpExchange.Core.AdapterContract do
         # records the same division of labour for the same reason. What it does catch is the
         # fake drifting from it, which is the half that reaches a consumer's test suite.
         test "subscribe/2 adds to the set, update_symbols/2 replaces it, unsubscribe/2 removes" do
-          assert_subscription_set_semantics(@fake, @sample_pairs)
+          # Every other fake-driven group checks for a fake; this one called `nil.update_symbols`
+          # without one. And with fewer than two pairs it raised a bare `MatchError`.
+          if @fake do
+            assert length(@sample_pairs) >= 2,
+                   "assertion 26 needs two `sample_pairs:` the venue serves, or \"added\" and " <>
+                     "\"replaced\" are the same answer; got #{inspect(@sample_pairs)}"
+
+            assert_subscription_set_semantics(@fake, @sample_pairs)
+          end
         end
       end
     end
@@ -2254,6 +2288,49 @@ defmodule DpExchange.Core.AdapterContract do
                  "is the whole difference between it and subscribe/2, and a venue where both " <>
                  "add has one callback doing two jobs and the other doing none."
       end
+    end
+  end
+
+  # Assertion 11's process check. It walked the `:unsupported` endpoints, which answer
+  # `{:error, :not_supported}`, so it could not fail. The answers that can carry a process
+  # are the ACTIVE ones, asked of the fake, which answers without a network. Only a success
+  # is data: `call_on/3` turns an exit into `{:exit, reason}`, which may name a pid.
+  defp process_helpers do
+    quote location: :keep do
+      defp assert_no_process_in_answers(fake, venue) do
+        caps = venue.capabilities()
+
+        for {{name, arity}, _modules} <- DpExchange.Core.AdapterContract.promised_types(),
+            Capabilities.active?(caps, {name, arity}) do
+          result = call_on(fake, {name, arity}, endpoint_args(name, arity))
+
+          refute match?({:ok, _value}, result) and carries_process?(result),
+                 "#{name}/#{arity} answered with a process, port or reference inside: " <>
+                   inspect(result, limit: 8)
+        end
+      end
+    end
+  end
+
+  # The term walk behind `assert_no_process_in_answers/2`, apart so neither block is complex.
+  defp process_walk_helpers do
+    quote location: :keep do
+      defp carries_process?(term) when is_pid(term) or is_port(term) or is_reference(term),
+        do: true
+
+      defp carries_process?(term) when is_tuple(term),
+        do: term |> Tuple.to_list() |> Enum.any?(&carries_process?/1)
+
+      defp carries_process?(term) when is_list(term), do: Enum.any?(term, &carries_process?/1)
+
+      defp carries_process?(%_struct{} = term),
+        do: term |> Map.from_struct() |> carries_process?()
+
+      defp carries_process?(term) when is_map(term),
+        do:
+          Enum.any?(term, fn {key, value} -> carries_process?(key) or carries_process?(value) end)
+
+      defp carries_process?(_scalar), do: false
     end
   end
 
@@ -2319,15 +2396,37 @@ defmodule DpExchange.Core.AdapterContract do
           "at real modules, assertions 16, 18 and 19 are all examining nothing and passing."
       end
 
+      # `place_order/3` takes an order request, not a symbol. Shaped as `{:credentialed, 3}`
+      # it was called as `place_order(credentials, "BTC-USD", opts)`, every fake raised, and
+      # assertion 5 counted the raise as conforming, so no venue's order path was ever
+      # checked against the `Order` it promises (found 2026-10-10, once 5 stopped doing so).
+      @arg_overrides %{{:place_order, 3} => [:credentials, :order_request, :opts]}
+
       defp endpoint_args(name, arity) do
         kind = if name in @credentialed, do: :credentialed, else: :public
 
-        @arg_shapes
-        |> Map.get({kind, arity}, List.duplicate(:opts, arity))
+        @arg_overrides
+        |> Map.get(
+          {name, arity},
+          Map.get(@arg_shapes, {kind, arity}, List.duplicate(:opts, arity))
+        )
         |> Enum.map(&arg_value(&1, {name, arity}))
       end
 
       defp arg_value(:credentials, _endpoint), do: @credentials
+
+      # A small limit buy: the shape every venue's `place_order/3` reads, sized so no fake
+      # refuses it for being too large.
+      defp arg_value(:order_request, _endpoint) do
+        %{
+          symbol: sample_symbol(),
+          side: :buy,
+          order_type: :limit,
+          time_in_force: :gtc,
+          quantity: Decimal.new("0.001"),
+          price: Decimal.new("1")
+        }
+      end
 
       defp arg_value(:symbol, endpoint),
         do: Map.get(@endpoint_symbols, endpoint, sample_symbol())
@@ -2445,8 +2544,12 @@ defmodule DpExchange.Core.AdapterContract do
       defp permitted_module?(module, declared) do
         case :code.which(module) do
           path when is_list(path) -> from_declared_dep?(to_string(path), declared)
-          # Preloaded (`:erlang`) or not on disk. Neither is a foreign dependency.
-          _preloaded -> true
+          # **Nowhere at all is foreign.** A module this package calls that no loaded
+          # application provides is a host-app module it does not depend on, which is the
+          # exact case this assertion exists for. It was treated as permitted.
+          :non_existing -> false
+          # Preloaded (`:erlang`) or cover-compiled (this package under `--cover`).
+          _preloaded_or_cover -> true
         end
       end
 

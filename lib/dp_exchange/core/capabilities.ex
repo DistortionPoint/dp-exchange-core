@@ -894,7 +894,19 @@ defmodule DpExchange.Core.Capabilities do
   # caller at the balance response, which is where the answer actually lives.
   defp validate_margin!(%__MODULE__{supports_margin: true, max_leverage: :per_account}), do: :ok
 
-  defp validate_margin!(%__MODULE__{supports_margin: true, max_leverage: %Decimal{}}), do: :ok
+  # A positive, finite number. Any `%Decimal{}` passed, so `0`, a negative, NaN or Infinity
+  # was a leverage a caller would size positions by.
+  defp validate_margin!(%__MODULE__{
+         supports_margin: true,
+         max_leverage: %Decimal{coef: coef} = l
+       })
+       when is_integer(coef) do
+    if Decimal.gt?(l, 0) do
+      :ok
+    else
+      raise ArgumentError, "max_leverage #{inspect(l)} is not positive"
+    end
+  end
 
   defp validate_margin!(%__MODULE__{max_leverage: leverage}) do
     raise ArgumentError,

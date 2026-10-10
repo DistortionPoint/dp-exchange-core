@@ -85,11 +85,13 @@ defmodule DpExchange.Core.Telemetry do
   ### Link lifecycle
 
   - `[:dp_exchange, :link, :up]` — a live route to the venue was established.
-    Metadata: `%{provider:}`.
+    Measurements: `%{count: 1}`. Metadata: `%{provider:}`.
   - `[:dp_exchange, :link, :down]` — the route was lost.
-    Metadata: `%{provider:, reason:}`.
+    Measurements: `%{count: 1}`. Metadata: `%{provider:, reason:}`.
   - `[:dp_exchange, :link, :event]` — a payload arrived over the route.
-    Measurements: `%{bytes: integer}`. Metadata: `%{provider:, type:}`.
+    Measurements: `%{count: 1, bytes: integer}` from `link_event/3`, or `%{count: 1}` with no
+    `:bytes` from `link_event/2`, a route that cannot measure wire size. Metadata:
+    `%{provider:, type:}`.
   - `[:dp_exchange, :link, :reconnect_attempt]` — re-establishing after a drop.
     Metadata: `%{provider:, attempt: integer, delay_ms: integer}`.
 
@@ -232,8 +234,14 @@ defmodule DpExchange.Core.Telemetry do
   every occurrence a distinct series. It is also the shape `Core.Notice`'s own
   `details.reason` uses, so the two channels agree about one event.
   """
-  @spec link_down(atom() | String.t(), String.t()) :: :ok
-  def link_down(provider, reason) when is_binary(reason) do
+  @spec link_down(atom() | String.t(), term()) :: :ok
+  # A raw term is inspected here rather than refused. The `is_binary/1` guard raised
+  # `FunctionClauseError` into the venue's own feed when a reason arrived as an atom or a
+  # tuple, which is this module being the reason a call failed.
+  def link_down(provider, reason) when not is_binary(reason),
+    do: link_down(provider, inspect(reason))
+
+  def link_down(provider, reason) do
     :telemetry.execute(
       [:dp_exchange, :link, :down],
       %{count: 1},
@@ -309,6 +317,12 @@ defmodule DpExchange.Core.Telemetry do
   """
   @spec endpoint(String.t()) :: String.t()
   def endpoint(url) when is_binary(url) do
-    url |> String.split("?") |> List.first() |> String.slice(0, 200)
+    # The fragment goes with the query, and `user:pass@` with both: userinfo is a
+    # credential written into the URL itself, the one place a query-only strip missed.
+    url
+    |> String.split(["?", "#"], parts: 2)
+    |> List.first()
+    |> String.replace(~r{^([a-z][a-z0-9+.-]*://)[^/@]*@}i, "\\1")
+    |> String.slice(0, 200)
   end
 end
