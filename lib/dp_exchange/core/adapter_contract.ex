@@ -167,6 +167,194 @@ defmodule DpExchange.Core.AdapterContract do
 
   defp core_types_in(_leaf), do: []
 
+  @doc """
+  The names of the `Core.Venue` callbacks whose first argument is `credentials()`, read from
+  the behaviour's own `@callback` specs.
+
+  The suite shapes a call's arguments by whether the callback takes its credential
+  positionally. That used to be a hand-written list of eleven names, and it rotted in the
+  way a list does: `list_payment_methods/2`, `get_payment_method/3`, `get_notional_balances/3`,
+  `list_custody_fees/2`, `get_transactions/2`, `place_orders/3`, `cancel_all_orders/2`,
+  `preview_order/3`, `preview_replace/4`, `close_position/3` and `get_trade_volume/2` all take
+  `credentials()` first and none was on it. Each was therefore called with a symbol where the
+  credential belongs, a fake that matched on its credentials raised, and the raise was taken
+  for an answer by every assertion that tolerates one. A union such as
+  `credentials() | nil` (`test_connection/2`) counts.
+  """
+  @spec credentialed_callbacks() :: [atom()]
+  def credentialed_callbacks do
+    {:ok, callbacks} = Code.Typespec.fetch_callbacks(DpExchange.Core.Venue)
+
+    for {{name, _arity}, [spec | _rest]} <- callbacks,
+        {:type, _line, :fun, [{:type, _args_line, :product, [first | _args]}, _result]} <- [spec],
+        takes_credentials?(first),
+        uniq: true,
+        do: name
+  end
+
+  defp takes_credentials?({:user_type, _line, :credentials, []}), do: true
+
+  defp takes_credentials?(ast) when is_tuple(ast),
+    do: ast |> Tuple.to_list() |> takes_credentials?()
+
+  defp takes_credentials?(ast) when is_list(ast), do: Enum.any?(ast, &takes_credentials?/1)
+  defp takes_credentials?(_leaf), do: false
+
+  # Argument shapes as DATA rather than a clause per arity. Ten clauses is ten places to be
+  # inconsistent, and the shapes really are a small table.
+  @arg_shapes %{
+    {:credentialed, 2} => [:credentials, :opts],
+    {:credentialed, 3} => [:credentials, :symbol, :opts],
+    {:public, 1} => [:opts],
+    {:public, 2} => [:symbol, :opts],
+    {:public, 3} => [:symbol, :timeframe, :opts],
+    {:public, 4} => [:symbol, :timeframe, :opts, :opts]
+  }
+
+  # Callbacks whose arguments are not a symbol: an order request, a batch of them, an order
+  # id, a set of changes. Shaped as `{:credentialed, 3}` the order writes were called as
+  # `place_order(credentials, "BTC-USD", opts)`, every fake raised, and assertion 5 counted
+  # the raise as conforming, so no venue's order path was ever checked against the `Order` it
+  # promises (found 2026-10-10, once 5 stopped doing so). `replace_order/4` has no
+  # credentialed arity-4 shape at all, so every position was `opts`, and it raised the same
+  # way. `place_orders/3`, `preview_order/3` and `preview_replace/4` were the same shape of
+  # mistake and are listed for the same reason.
+  @arg_overrides %{
+    {:place_order, 3} => [:credentials, :order_request, :opts],
+    {:place_orders, 3} => [:credentials, :order_requests, :opts],
+    {:preview_order, 3} => [:credentials, :order_request, :opts],
+    {:replace_order, 4} => [:credentials, :order_id, :order_changes, :opts],
+    {:preview_replace, 4} => [:credentials, :order_id, :order_changes, :opts],
+    # **The rest of the callbacks whose arguments are not `(symbol, timeframe, opts...)`.**
+    # Found 2026-10-10: by arity alone `stake/3` was called as `stake("BTC-USD", "1h", opts)`
+    # — a timeframe where its `Decimal` amount belongs — `withdraw/5` with five keyword lists,
+    # `get_fx_rate/3` with `"1h"` for its `DateTime`, `quantization/1` with a keyword list for
+    # its symbol. Each fake raised, and assertions 12 and 17 take a raise as an answer, so
+    # none of these paths was ever checked. Every position below is the `Core.Venue` spec's.
+    {:quantization, 1} => [:symbol],
+    {:stake, 3} => [:asset, :amount, :opts],
+    {:unstake, 3} => [:asset, :amount, :opts],
+    {:quote_conversion, 4} => [:asset, :quote_asset, :amount, :opts],
+    {:convert, 4} => [:asset, :quote_asset, :amount, :opts],
+    {:get_deposit_address, 3} => [:asset, :network, :opts],
+    {:list_networks, 2} => [:asset, :opts],
+    {:estimate_withdrawal_fee, 4} => [:asset, :network, :amount, :opts],
+    {:withdraw, 5} => [:asset, :network, :amount, :address, :opts],
+    {:transfer_internal, 4} => [:asset, :amount, :opts, :opts],
+    {:request_approved_address, 4} => [:asset, :network, :address, :opts],
+    {:remove_approved_address, 3} => [:asset, :address, :opts],
+    {:get_fx_rate, 3} => [:fx_pair, :at, :opts],
+    {:get_financials, 3} => [:symbol, :statement_kind, :opts],
+    {:create_watchlist, 3} => [:name, :symbols, :opts],
+    {:rename_account, 3} => [:account_id, :name, :opts]
+  }
+
+  @doc """
+  How a call to `name/arity` is shaped, position by position: `:credentials`, `:symbol`,
+  `:timeframe`, `:opts`, or one of the order arguments.
+
+  `credentialed?` is whether the callback takes its credential positionally — see
+  `credentialed_callbacks/0`. A per-callback override wins over the shape the arity implies.
+  Both the call assertions and assertion 17's credential-stripped call are built from this one
+  table; the stripped call used to rebuild its own and ignore the overrides, so for
+  `place_order/3` and `replace_order/4` it sent a malformed order, the fake raised, and
+  "no `{:ok, _}` with credentials stripped" held for a reason that had nothing to do with
+  credentials.
+  """
+  @spec arg_shape(atom(), non_neg_integer(), boolean()) :: [atom()]
+  def arg_shape(name, arity, credentialed?) do
+    kind = if credentialed?, do: :credentialed, else: :public
+
+    case Map.fetch(@arg_overrides, {name, arity}) do
+      {:ok, shape} -> shape
+      :error -> Map.get(@arg_shapes, {kind, arity}, List.duplicate(:opts, arity))
+    end
+  end
+
+  @doc """
+  The applications a package may link against: its own, every declared dependency, and what
+  those depend on at runtime, as strings.
+
+  `deps` is `Mix.Project.config()[:deps]` in any of Mix's three shapes. The purity assertion
+  read it with `for {dep, _rest} <- deps`, which matches a two-element tuple only, so every
+  dependency declared with a requirement AND options — `{:jason, "~> 1.4", optional: true}`,
+  `{:foo, "~> 1.0", only: :test}` — was silently dropped from the declared set.
+  """
+  @spec permitted_apps(atom(), [tuple()]) :: MapSet.t(String.t())
+  def permitted_apps(app, deps) when is_atom(app) and is_list(deps) do
+    roots = [app | Enum.map(deps, &elem(&1, 0))]
+    roots |> expand_apps(%{}) |> Map.keys() |> MapSet.new(&Atom.to_string/1)
+  end
+
+  # `seen` is a plain map, not a `MapSet`: threading an opaque `MapSet` through this
+  # recursion is a dialyzer `call_without_opaque` error.
+  defp expand_apps([], seen), do: seen
+
+  defp expand_apps([app | rest], seen) do
+    if Map.has_key?(seen, app) do
+      expand_apps(rest, seen)
+    else
+      expand_apps(runtime_applications(app) ++ rest, Map.put(seen, app, true))
+    end
+  end
+
+  # A dependency not built in this environment has no `.app` to load; it contributes itself
+  # and nothing else, which is the right answer for a `only: :dev` tool.
+  defp runtime_applications(app) do
+    _loaded = Application.load(app)
+
+    List.wrap(Application.spec(app, :applications)) ++
+      List.wrap(Application.spec(app, :included_applications))
+  end
+
+  @doc """
+  The modules in `modules` that belong to an application outside `permitted`.
+
+  `build_lib_dir` is `Path.join(Mix.Project.build_path(), "lib")`. A module found under it
+  belongs to the application named by its first path segment. A module found anywhere else is
+  OTP or the Elixir standard library and is permitted, and a module found nowhere is a
+  host-application module this package depends on without saying so, which is foreign.
+
+  **The previous check could not fire for a dependency.** It looked for `/deps/<name>/` in
+  the module's path, but Mix compiles a dependency into `_build/<env>/lib/<name>/ebin` and
+  loads it from there, never from `deps/`. Every dependency module therefore matched nothing
+  and was permitted, so a package linking an undeclared dependency passed. Only the
+  `:non_existing` branch ever rejected anything.
+  """
+  @spec foreign_modules([module()], MapSet.t(String.t()), Path.t()) :: [module()]
+  def foreign_modules(modules, permitted, build_lib_dir) do
+    prefix = Path.expand(build_lib_dir) <> "/"
+    Enum.reject(modules, &permitted_module?(&1, permitted, prefix))
+  end
+
+  defp permitted_module?(module, permitted, prefix) do
+    case :code.which(module) do
+      path when is_list(path) -> permitted_path?(Path.expand(to_string(path)), permitted, prefix)
+      # **Nowhere at all is foreign.** A module this package calls that no loaded
+      # application provides is a host-app module it does not depend on.
+      :non_existing -> false
+      # Cover-compiled: `mix test --cover` recompiles the project's OWN modules in memory,
+      # so there is no path to read the app from. Asked of the application controller
+      # instead; taking it as permitted made every module of the package under test count
+      # as permitted for ANY package, which is exactly what this function decides.
+      :cover_compiled -> permitted_app?(Application.get_application(module), permitted)
+      # Preloaded (`:erlang`, `:init`): OTP itself.
+      _preloaded -> true
+    end
+  end
+
+  defp permitted_app?(nil, _permitted), do: false
+  defp permitted_app?(app, permitted), do: MapSet.member?(permitted, Atom.to_string(app))
+
+  defp permitted_path?(path, permitted, prefix) do
+    if String.starts_with?(path, prefix) do
+      [app | _rest] = path |> String.replace_prefix(prefix, "") |> Path.split()
+      MapSet.member?(permitted, app)
+    else
+      true
+    end
+  end
+
   @doc false
   defmacro __using__(opts) do
     [
@@ -179,6 +367,7 @@ defmodule DpExchange.Core.AdapterContract do
       both_endpoints(),
       coverage_routes(),
       coverage_by_kind(),
+      top_of_book_assertion(),
       purity(),
       volume_window_stated(),
       isolation(),
@@ -200,8 +389,8 @@ defmodule DpExchange.Core.AdapterContract do
       arg_helpers(),
       subscription_set_helpers(),
       credential_gate_helpers(),
-      purity_helpers(),
       order_arg_helpers(),
+      value_arg_helpers(),
       process_helpers(),
       process_walk_helpers()
     ]
@@ -969,10 +1158,9 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
-  defp purity do
+  # Assertion 14, apart from `purity/0` so neither quoted block grows past credo's ceiling.
+  defp top_of_book_assertion do
     quote location: :keep do
-      # --- 7, 10, 11. purity, exclusivity, self-sufficiency ----------------
-
       describe "14. top of book is not a price" do
         # These assertions exist because the confusion they forbid already shipped: a venue
         # package read `price || ask` from a best-bid/ask endpoint, so a response with no
@@ -1056,6 +1244,12 @@ defmodule DpExchange.Core.AdapterContract do
           end
         end
       end
+    end
+  end
+
+  defp purity do
+    quote location: :keep do
+      # --- 7, 10, 11. purity, exclusivity, self-sufficiency ----------------
 
       describe "7. purity" do
         test "the compiled package links against nothing but its declared dependencies" do
@@ -1069,11 +1263,14 @@ defmodule DpExchange.Core.AdapterContract do
           # imports chunk answers the real question: does this package reach for anything
           # its consumers have not agreed to install? A transitive reference nobody
           # noticed shows up here and in no grep.
+          #
+          # The decision itself is `AdapterContract.foreign_modules/3`, public so it can be
+          # tested: a dependency is permitted by the application its module is built into
+          # (`_build/<env>/lib/<app>/ebin`), not by a `deps/` path no dependency is loaded
+          # from, and `mix.exs` deps are read in all three tuple shapes.
           config = Mix.Project.config()
           app = config[:app]
-          # Strings, not atoms: `from_declared_dep?/2` below compares against this without
-          # ever calling `String.to_atom/1` on the directory name it pulls off a beam path.
-          declared = for {dep, _rest} <- config[:deps], do: Atom.to_string(dep)
+          permitted = DpExchange.Core.AdapterContract.permitted_apps(app, config[:deps] || [])
 
           linked =
             Mix.Project.build_path()
@@ -1087,7 +1284,12 @@ defmodule DpExchange.Core.AdapterContract do
             end)
             |> Enum.uniq()
 
-          foreign = Enum.reject(linked, &permitted_module?(&1, declared))
+          foreign =
+            DpExchange.Core.AdapterContract.foreign_modules(
+              linked,
+              permitted,
+              Path.join(Mix.Project.build_path(), "lib")
+            )
 
           assert foreign == [],
                  "#{app} links against modules outside stdlib and its declared " <>
@@ -1516,7 +1718,10 @@ defmodule DpExchange.Core.AdapterContract do
           caps = @venue.capabilities()
 
           if @fake && @sample_pairs != [] && Capabilities.active?(caps, {:subscribe, 2}) do
-            assert :ok = @fake.subscribe(@sample_pairs, to: self())
+            # The venue's own `endpoint_opts`, as assertions 26, 27 and 29 already pass them: a
+            # fake that needs one to subscribe was called without it here alone.
+            opts = :opts |> arg_value({:subscribe, 2}) |> Keyword.put(:to, self())
+            assert :ok = @fake.subscribe(@sample_pairs, opts)
 
             assert_receive {:dp_exchange, runtime_id, payload},
                            500,
@@ -2380,20 +2585,9 @@ defmodule DpExchange.Core.AdapterContract do
   # facade takes them, then a symbol, then options.
   defp arg_helpers do
     quote location: :keep do
-      @credentialed ~w(get_balances get_accounts get_fees get_transfers place_order
-                       cancel_order get_order get_orders get_trade_history
-                       test_connection get_rate_limit_status)a
-
-      # Argument shapes as DATA rather than a clause per arity. Ten clauses is ten
-      # places to be inconsistent, and the shapes really are a small table.
-      @arg_shapes %{
-        {:credentialed, 2} => [:credentials, :opts],
-        {:credentialed, 3} => [:credentials, :symbol, :opts],
-        {:public, 1} => [:opts],
-        {:public, 2} => [:symbol, :opts],
-        {:public, 3} => [:symbol, :timeframe, :opts],
-        {:public, 4} => [:symbol, :timeframe, :opts, :opts]
-      }
+      # Read from `Core.Venue`'s own specs, not listed by hand: see
+      # `AdapterContract.credentialed_callbacks/0` for the eleven callbacks a list missed.
+      @credentialed DpExchange.Core.AdapterContract.credentialed_callbacks()
 
       # Assertions 16, 18 and 19 all read compiled modules under `package_root`. A root that
       # matches nothing used to answer `{:ok, []}` from all three — "no violations" — so one
@@ -2410,38 +2604,43 @@ defmodule DpExchange.Core.AdapterContract do
           "at real modules, assertions 16, 18 and 19 are all examining nothing and passing."
       end
 
-      # `place_order/3` takes an order request, not a symbol. Shaped as `{:credentialed, 3}`
-      # it was called as `place_order(credentials, "BTC-USD", opts)`, every fake raised, and
-      # assertion 5 counted the raise as conforming, so no venue's order path was ever
-      # checked against the `Order` it promises (found 2026-10-10, once 5 stopped doing so).
-      # `replace_order/4` has no credentialed arity-4 shape at all, so every position was
-      # `opts`, and it raised the same way.
-      @arg_overrides %{
-        {:place_order, 3} => [:credentials, :order_request, :opts],
-        {:replace_order, 4} => [:credentials, :order_id, :order_changes, :opts]
-      }
-
+      # The shape table, overrides included, is `AdapterContract.arg_shape/3`, shared with
+      # assertion 17's credential-stripped call so the two cannot drift apart.
       defp endpoint_args(name, arity) do
-        kind = if name in @credentialed, do: :credentialed, else: :public
-
-        @arg_overrides
-        |> Map.get(
-          {name, arity},
-          Map.get(@arg_shapes, {kind, arity}, List.duplicate(:opts, arity))
-        )
+        name
+        |> DpExchange.Core.AdapterContract.arg_shape(arity, credentialed?(name))
         |> Enum.map(&arg_value(&1, {name, arity}))
       end
 
       defp arg_value(:credentials, _endpoint), do: @credentials
 
       # The order-write arguments, apart in `order_arg_helpers/0` so this block stays simple.
-      defp arg_value(kind, _endpoint) when kind in [:order_request, :order_id, :order_changes],
-        do: order_arg(kind)
+      defp arg_value(kind, _endpoint)
+           when kind in [:order_request, :order_requests, :order_id, :order_changes],
+           do: order_arg(kind)
 
       defp arg_value(:symbol, endpoint),
         do: Map.get(@endpoint_symbols, endpoint, sample_symbol())
 
       defp arg_value(:timeframe, _endpoint), do: "1h"
+
+      # Asset, amount, network, address and the rest — see `@arg_overrides`. Apart in
+      # `value_arg_helpers/0`, like the order arguments, to keep this block simple.
+      defp arg_value(kind, _endpoint)
+           when kind in [
+                  :asset,
+                  :quote_asset,
+                  :amount,
+                  :network,
+                  :address,
+                  :fx_pair,
+                  :at,
+                  :statement_kind,
+                  :name,
+                  :symbols,
+                  :account_id
+                ],
+           do: value_arg(kind)
 
       # The venue's own per-endpoint options, plus the credential every venue's contract
       # test already supplies.
@@ -2491,8 +2690,29 @@ defmodule DpExchange.Core.AdapterContract do
         }
       end
 
+      # `place_orders/3` takes a list: a batch of one is still a batch.
+      defp order_arg(:order_requests), do: [order_arg(:order_request)]
       defp order_arg(:order_id), do: "contract-order-1"
       defp order_arg(:order_changes), do: %{price: Decimal.new("1")}
+    end
+  end
+
+  # The non-symbol, non-order arguments `@arg_overrides` names, each the type its
+  # `Core.Venue` spec declares. The asset is the sample pair's base, so a venue that only
+  # knows its own listed assets is asked about one of them.
+  defp value_arg_helpers do
+    quote location: :keep do
+      defp value_arg(:asset), do: sample_symbol() |> String.split("-") |> hd()
+      defp value_arg(:quote_asset), do: "USD"
+      defp value_arg(:amount), do: Decimal.new("0.001")
+      defp value_arg(:network), do: "contract-network"
+      defp value_arg(:address), do: "contract-address"
+      defp value_arg(:fx_pair), do: "EUR-USD"
+      defp value_arg(:at), do: ~U[2026-01-02 15:00:00Z]
+      defp value_arg(:statement_kind), do: :income
+      defp value_arg(:name), do: "contract-name"
+      defp value_arg(:symbols), do: [sample_symbol()]
+      defp value_arg(:account_id), do: "contract-account-1"
     end
   end
 
@@ -2531,10 +2751,8 @@ defmodule DpExchange.Core.AdapterContract do
       # or through `opts`), and in `opts` for every endpoint, public-shaped ones
       # included.
       defp stripped_credential_args(name, arity) do
-        kind = if credentialed?(name), do: :credentialed, else: :public
-
-        @arg_shapes
-        |> Map.get({kind, arity}, List.duplicate(:opts, arity))
+        name
+        |> DpExchange.Core.AdapterContract.arg_shape(arity, credentialed?(name))
         |> Enum.map(&stripped_arg_value(&1, {name, arity}))
       end
 
@@ -2559,53 +2777,6 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp stripped_arg_value(other, endpoint), do: arg_value(other, endpoint)
-    end
-  end
-
-  # Which modules a package may legitimately link against.
-  defp purity_helpers do
-    quote location: :keep do
-      # Asked of the loaded module's own beam path rather than of a list of names.
-      #
-      # A module loaded from `deps/<name>/` came from dependency `<name>`; anything else
-      # is OTP, the Elixir standard library, or this package itself. That is both simpler
-      # than a name list and strictly stronger: it catches a dependency nobody declared,
-      # which no list of forbidden namespaces ever could — a list only forbids what
-      # someone thought to write down.
-      defp permitted_module?(module, declared) do
-        case :code.which(module) do
-          path when is_list(path) -> from_declared_dep?(to_string(path), declared)
-          # **Nowhere at all is foreign.** A module this package calls that no loaded
-          # application provides is a host-app module it does not depend on, which is the
-          # exact case this assertion exists for. It was treated as permitted.
-          :non_existing -> false
-          # Preloaded (`:erlang`) or cover-compiled (this package under `--cover`).
-          _preloaded_or_cover -> true
-        end
-      end
-
-      # This is NOT the `Notice.reject_credentials!/1` class of bug (C8): `dep` is not
-      # venue- or attacker-influenced. It is a directory name lifted from `:code.which/1`
-      # on a module drawn from THIS PACKAGE'S OWN COMPILED `.beam` imports chunk
-      # (`adapter_contract.ex` — "7. purity" test, reading `_build/.../ebin/*.beam`),
-      # which in turn comes only from source this package's own developer wrote and `mix
-      # deps.get` already fetched under `deps/`. The set of distinct values `dep` can ever
-      # take is exactly the package's own dependency tree — fixed at build time by
-      # `mix.lock`, never by a venue's runtime payload — so this was never an unbounded,
-      # attacker-driven atom mint the way C8 was.
-      #
-      # Compared as a string regardless, not `String.to_atom(dep) in declared`: `declared`
-      # is built as strings by the caller (`Atom.to_string/1` on each `mix.exs` dep, once,
-      # at test time) specifically so this never calls `String.to_atom/1` on anything at
-      # all — sobelow's `DOS.StringToAtom` flags the call shape itself, confidence aside,
-      # and the fix costs nothing here since both sides were only ever going to be
-      # compile-time-fixed dependency names.
-      defp from_declared_dep?(path, declared) do
-        case Regex.run(~r{/deps/([^/]+)/}, path) do
-          [_match, dep] -> dep in declared
-          nil -> true
-        end
-      end
     end
   end
 end

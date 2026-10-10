@@ -99,4 +99,158 @@ defmodule DpExchange.Core.AdapterContractTest do
       assert Enum.sort(listed -- Enum.uniq(running)) == [6, 9, 10]
     end
   end
+
+  # --- the call-shape table every fake-driven assertion and assertion 17 share -------
+
+  describe "arg_shape/3 and credentialed_callbacks/0" do
+    test "every callback that takes credentials() first is credentialed, by spec" do
+      credentialed = DpExchange.Core.AdapterContract.credentialed_callbacks()
+
+      # The eleven the hand-written list did not name, plus the ones it did. A union such as
+      # `credentials() | nil` counts, so `test_connection/2` is here too.
+      expected =
+        ~w(get_balances get_accounts get_fees get_transfers place_order cancel_order get_order
+           get_orders get_trade_history test_connection get_rate_limit_status
+           list_payment_methods get_payment_method get_notional_balances list_custody_fees
+           get_transactions place_orders cancel_all_orders preview_order replace_order
+           preview_replace close_position get_trade_volume)a
+
+      assert Enum.sort(expected) == Enum.sort(credentialed)
+    end
+
+    test "a callback that does not take credentials first is not credentialed" do
+      credentialed = DpExchange.Core.AdapterContract.credentialed_callbacks()
+
+      for name <- ~w(get_price get_symbols withdraw get_deposit_address stake subscribe)a do
+        refute name in credentialed, "#{name} takes no credentials() argument"
+      end
+    end
+
+    test "every credentialed callback is called with its credential first" do
+      credentialed = DpExchange.Core.AdapterContract.credentialed_callbacks()
+
+      for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:callbacks),
+          name in credentialed do
+        shape = DpExchange.Core.AdapterContract.arg_shape(name, arity, true)
+
+        assert hd(shape) == :credentials, "#{name}/#{arity} was shaped #{inspect(shape)}"
+        assert length(shape) == arity, "#{name}/#{arity} was shaped #{inspect(shape)}"
+      end
+    end
+
+    test "an order write is shaped as an order, whatever its credentialed flag" do
+      shape = &DpExchange.Core.AdapterContract.arg_shape/3
+
+      assert shape.(:place_order, 3, true) == [:credentials, :order_request, :opts]
+      assert shape.(:place_order, 3, false) == [:credentials, :order_request, :opts]
+      assert shape.(:place_orders, 3, true) == [:credentials, :order_requests, :opts]
+      assert shape.(:preview_order, 3, true) == [:credentials, :order_request, :opts]
+      assert shape.(:replace_order, 4, true) == [:credentials, :order_id, :order_changes, :opts]
+      assert shape.(:preview_replace, 4, true) == [:credentials, :order_id, :order_changes, :opts]
+    end
+
+    test "the default shapes follow arity and the credentialed flag" do
+      shape = &DpExchange.Core.AdapterContract.arg_shape/3
+
+      assert shape.(:get_balances, 2, true) == [:credentials, :opts]
+      assert shape.(:get_order, 3, true) == [:credentials, :symbol, :opts]
+      assert shape.(:get_price, 2, false) == [:symbol, :opts]
+      assert shape.(:get_historical_prices, 4, false) == [:symbol, :timeframe, :opts, :opts]
+      assert shape.(:quantization, 1, false) == [:symbol]
+    end
+
+    test "a callback whose arguments are an asset, an amount or a time is shaped by its spec" do
+      # By arity alone `stake/3` was called with "1h" where its Decimal amount belongs and
+      # `withdraw/5` with five keyword lists; the fakes raised and the raise was accepted.
+      shape = &DpExchange.Core.AdapterContract.arg_shape/3
+
+      assert shape.(:stake, 3, false) == [:asset, :amount, :opts]
+      assert shape.(:convert, 4, false) == [:asset, :quote_asset, :amount, :opts]
+      assert shape.(:withdraw, 5, false) == [:asset, :network, :amount, :address, :opts]
+      assert shape.(:get_fx_rate, 3, false) == [:fx_pair, :at, :opts]
+      assert shape.(:get_financials, 3, false) == [:symbol, :statement_kind, :opts]
+    end
+
+    test "every callback's shape has exactly its arity" do
+      credentialed = DpExchange.Core.AdapterContract.credentialed_callbacks()
+
+      for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:callbacks) do
+        shape = DpExchange.Core.AdapterContract.arg_shape(name, arity, name in credentialed)
+        assert length(shape) == arity, "#{name}/#{arity} was shaped #{inspect(shape)}"
+      end
+    end
+  end
+
+  # --- assertion 7's decision, which could not reject a dependency -------------------
+
+  describe "permitted_apps/2 and foreign_modules/3" do
+    test "a dependency declared with a requirement AND options is declared" do
+      permitted =
+        DpExchange.Core.AdapterContract.permitted_apps(:decimal, [
+          {:jason, "~> 1.4", optional: true},
+          {:telemetry, "~> 1.0"},
+          {:sibling, path: "../sibling"}
+        ])
+
+      for app <- ~w(decimal jason telemetry sibling) do
+        assert MapSet.member?(permitted, app), "#{app} is declared"
+      end
+
+      refute MapSet.member?(permitted, "req")
+    end
+
+    test "a dependency's own runtime dependencies are permitted with it" do
+      permitted = DpExchange.Core.AdapterContract.permitted_apps(:req, [])
+
+      assert MapSet.member?(permitted, "req")
+      assert MapSet.member?(permitted, "finch")
+    end
+
+    test "a module is judged by the application it is built into, not by a deps/ path" do
+      lib_dir = Path.join(Mix.Project.build_path(), "lib")
+
+      # The premise the old check got wrong: a dependency is loaded from the build path.
+      for module <- [Decimal, Jason, Req] do
+        assert module |> :code.which() |> to_string() |> String.starts_with?(lib_dir)
+      end
+
+      permitted = DpExchange.Core.AdapterContract.permitted_apps(:decimal, [])
+
+      assert DpExchange.Core.AdapterContract.foreign_modules(
+               [Decimal, Jason, Req],
+               permitted,
+               lib_dir
+             ) == [Jason, Req]
+    end
+
+    test "OTP and the Elixir standard library are always permitted" do
+      lib_dir = Path.join(Mix.Project.build_path(), "lib")
+      permitted = DpExchange.Core.AdapterContract.permitted_apps(:decimal, [])
+
+      assert DpExchange.Core.AdapterContract.foreign_modules(
+               [Enum, String, :lists, :erlang],
+               permitted,
+               lib_dir
+             ) == []
+    end
+
+    test "the package's own modules are permitted only when its own app is" do
+      lib_dir = Path.join(Mix.Project.build_path(), "lib")
+      own = DpExchange.Core.AdapterContract.permitted_apps(:dp_exchange_core, [])
+      other = DpExchange.Core.AdapterContract.permitted_apps(:decimal, [])
+      modules = [DpExchange.Core.Venue]
+
+      assert DpExchange.Core.AdapterContract.foreign_modules(modules, own, lib_dir) == []
+      assert DpExchange.Core.AdapterContract.foreign_modules(modules, other, lib_dir) == modules
+    end
+
+    test "a module no application provides is foreign" do
+      lib_dir = Path.join(Mix.Project.build_path(), "lib")
+      permitted = DpExchange.Core.AdapterContract.permitted_apps(:decimal, [])
+      host_module = Module.concat(["Contract", "HostApplication", "Nowhere"])
+
+      assert DpExchange.Core.AdapterContract.foreign_modules([host_module], permitted, lib_dir) ==
+               [host_module]
+    end
+  end
 end

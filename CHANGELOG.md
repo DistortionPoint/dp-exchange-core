@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+All found 2026-10-10 by reading the conformance suite. Both tighten it: a venue that was
+passing only because the check could not fire may now fail.
+
+- **`AdapterContract` assertion 7 (purity) could not reject a dependency.** It identified a
+  module's owner by looking for `/deps/<name>/` in its path, but Mix builds and loads every
+  dependency from `_build/<env>/lib/<name>/ebin`, so nothing ever matched and every
+  dependency module was permitted; only a module that exists nowhere was refused. It also
+  read `mix.exs` deps with `for {dep, _rest} <- deps`, which silently drops any dependency
+  declared with both a requirement and options. Now decided by `AdapterContract.permitted_apps/2`
+  and `foreign_modules/3` (public, tested): a module belongs to the application it is built
+  into, and its own app, every declared dependency and their runtime dependencies are
+  permitted. A venue linking a library it neither declares nor receives through a declared
+  dependency now fails 7.
+- **`AdapterContract` assertion 17 (credential gate) never exercised `place_order/3` or
+  `replace_order/4`.** Its credential-stripped call rebuilt the argument list without the
+  per-callback overrides the other assertions use, so it sent `place_order(%{}, "BTC-USD",
+  opts)`; a fake matching on its order raised, a raise is not `{:ok, _}`, and the assertion
+  passed without reaching the credential. Both calls now come from one table,
+  `AdapterContract.arg_shape/3`. A fake whose order writes succeed with credentials stripped,
+  on a `credential_benefit: :required` venue, now fails 17.
+- **Eleven credentialed callbacks were called with a symbol where the credential belongs.**
+  `list_payment_methods/2`, `get_payment_method/3`, `get_notional_balances/3`,
+  `list_custody_fees/2`, `get_transactions/2`, `place_orders/3`, `cancel_all_orders/2`,
+  `preview_order/3`, `preview_replace/4`, `close_position/3` and `get_trade_volume/2` were
+  missing from a hand-written list, so every fake-driven assertion (5, 11, 12, 17) called
+  them with the wrong arguments and tolerated the raise. The set is now read from
+  `Core.Venue`'s `@callback` specs (`AdapterContract.credentialed_callbacks/0`), and
+  `place_orders/3`, `preview_order/3` and `preview_replace/4` are shaped as the orders they
+  take.
+- **Every other non-symbol callback was called with arguments of the wrong type.** By arity
+  alone `stake/3` got `"1h"` where its `Decimal` amount belongs, `withdraw/5` five keyword
+  lists, `get_fx_rate/3` `"1h"` for its `DateTime`, `quantization/1` a keyword list for its
+  symbol; each fake raised and the raise was accepted. Sixteen callbacks now carry their
+  `Core.Venue` spec's own argument kinds (asset, amount, network, address, FX pair,
+  instant, statement kind, watchlist name and symbols, account id), and a test pins every
+  callback's shape to its arity.
+- **Assertion 20 subscribed without the venue's `endpoint_opts`**, unlike 26, 27 and 29, so a
+  fake that needs an option to subscribe failed there alone. It now passes them.
+
 ## [0.3.62] - 2026-10-10
 
 ### Fixed

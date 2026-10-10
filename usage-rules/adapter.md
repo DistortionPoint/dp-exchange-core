@@ -411,6 +411,26 @@ If your `capabilities/0` declares `credential_benefit: :required`, assertion 17 
 stripped and refuses `{:ok, _}` back. It is Fake-only — it never dials the real venue —
 so it carries none of the risk a live-network assertion would.
 
+**The stripped call is shaped like the real one.** `place_order/3`, `place_orders/3`,
+`preview_order/3`, `replace_order/4` and `preview_replace/4` are called with a well-formed
+order request, id or change set and an empty credential. Previously the stripped call sent
+`place_order(%{}, "BTC-USD", opts)` — a symbol where the order belongs — so a fake that
+matched on its order raised, the raise was not an `{:ok, _}`, and the assertion passed
+without ever reaching the credential check. A fake whose order writes succeed without a
+credential now fails 17 on a `:required` venue, as it always should have. Which callbacks
+take their credential positionally is read from `Core.Venue`'s own specs
+(`AdapterContract.credentialed_callbacks/0`), not from a list.
+
+## Assertion 7 — declare what you link
+
+`mix.exs` dependencies are read in every tuple shape (`{:dep, "~> 1.0", optional: true}` as
+well as `{:dep, "~> 1.0"}`), and a module is judged by the application it is built into:
+your own, a declared dependency, or something a declared dependency depends on at runtime.
+OTP and the Elixir standard library are always permitted. Previously the check looked for
+`/deps/<name>/` in each module's path, which no dependency is ever loaded from, so it could
+reject only a module that exists nowhere. A package calling a library nothing it declares
+brings in now fails 7.
+
 **"Every active endpoint", not "every endpoint that takes a `credentials()` argument".**
 `:required` means every active endpoint on your venue needs a credential — that is what
 declaring it says — so this checks them all: `Venue.behaviour_info(:callbacks)` minus
