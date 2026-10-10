@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.64] - 2026-10-10
+
 ### Changed
 
 Two defaults that failed open, found 2026-10-10 while checking the docs that described them.
