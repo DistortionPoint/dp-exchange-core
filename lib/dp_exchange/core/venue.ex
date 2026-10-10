@@ -943,6 +943,11 @@ defmodule DpExchange.Core.Venue do
 
   A dead subscriber stops delivery too. A venue must not accumulate events for a process
   that no longer exists.
+
+  **It is feed-wide, not per subscriber.** Nothing in the call names a subscriber, so
+  unsubscribing a symbol stops it for every process subscribed to it on this venue. Two
+  consumers sharing one venue's feed must agree on its symbol set, or each run their own
+  feed.
   """
   @callback unsubscribe([symbol()], keyword()) :: :ok | {:error, term()}
 

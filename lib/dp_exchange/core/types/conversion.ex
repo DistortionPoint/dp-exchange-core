@@ -26,6 +26,8 @@ defmodule DpExchange.Core.Types.Conversion do
     * `:settled` — the assets have moved
     * `:expired` — the window closed unaccepted
     * `:failed` — the venue rejected or could not complete it
+    * `:cancelled` — withdrawn before it settled. Not `:expired`: a window that closed and a
+      quote someone cancelled are different events, and Coinbase reports them as two
 
   **`:quoted` is not a conversion that happened.** A package that reported a quote as
   complete would be reporting an intention as a fact.
@@ -48,7 +50,7 @@ defmodule DpExchange.Core.Types.Conversion do
     :provider
   ]
 
-  @type status :: :quoted | :committed | :settled | :expired | :failed
+  @type status :: :quoted | :committed | :settled | :expired | :failed | :cancelled
 
   @type t :: %__MODULE__{
           id: String.t(),

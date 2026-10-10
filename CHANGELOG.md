@@ -21,6 +21,19 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`Types.Conversion` status `:cancelled`.** It means withdrawn before it settled. Coinbase
+  reports `TRADE_STATUS_CANCELED` separately from `TRADE_STATUS_EXPIRED`, and with no value
+  to carry it a cancelled conversion was stamped `:expired`: a window that closed, which is a
+  different event.
+
+### Changed
+
+- **`Venue.unsubscribe/2` says it is feed-wide.** The call names no subscriber, so
+  unsubscribing a symbol stops it for every process subscribed to it on that venue. Every
+  package already behaved this way, but the contract never said so.
+
 ## [0.3.59] - 2026-10-10
 
 ### Changed
