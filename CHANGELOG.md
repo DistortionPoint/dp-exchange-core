@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.54] - 2026-10-10
+
 ### Fixed
 
 - **`HttpClient`: an endpoint bucket that refused spent the provider bucket's token.** With
