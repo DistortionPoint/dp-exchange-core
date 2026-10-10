@@ -201,6 +201,7 @@ defmodule DpExchange.Core.AdapterContract do
       subscription_set_helpers(),
       credential_gate_helpers(),
       purity_helpers(),
+      order_arg_helpers(),
       process_helpers(),
       process_walk_helpers()
     ]
@@ -2403,7 +2404,12 @@ defmodule DpExchange.Core.AdapterContract do
       # it was called as `place_order(credentials, "BTC-USD", opts)`, every fake raised, and
       # assertion 5 counted the raise as conforming, so no venue's order path was ever
       # checked against the `Order` it promises (found 2026-10-10, once 5 stopped doing so).
-      @arg_overrides %{{:place_order, 3} => [:credentials, :order_request, :opts]}
+      # `replace_order/4` has no credentialed arity-4 shape at all, so every position was
+      # `opts`, and it raised the same way.
+      @arg_overrides %{
+        {:place_order, 3} => [:credentials, :order_request, :opts],
+        {:replace_order, 4} => [:credentials, :order_id, :order_changes, :opts]
+      }
 
       defp endpoint_args(name, arity) do
         kind = if name in @credentialed, do: :credentialed, else: :public
@@ -2418,18 +2424,9 @@ defmodule DpExchange.Core.AdapterContract do
 
       defp arg_value(:credentials, _endpoint), do: @credentials
 
-      # A small limit buy: the shape every venue's `place_order/3` reads, sized so no fake
-      # refuses it for being too large.
-      defp arg_value(:order_request, _endpoint) do
-        %{
-          symbol: sample_symbol(),
-          side: :buy,
-          order_type: :limit,
-          time_in_force: :gtc,
-          quantity: Decimal.new("0.001"),
-          price: Decimal.new("1")
-        }
-      end
+      # The order-write arguments, apart in `order_arg_helpers/0` so this block stays simple.
+      defp arg_value(kind, _endpoint) when kind in [:order_request, :order_id, :order_changes],
+        do: order_arg(kind)
 
       defp arg_value(:symbol, endpoint),
         do: Map.get(@endpoint_symbols, endpoint, sample_symbol())
@@ -2468,6 +2465,27 @@ defmodule DpExchange.Core.AdapterContract do
   # single quoted block growing past credo's complexity ceiling is the same "400-line
   # block nobody reads" this file's groups already exist to avoid, just measured in
   # cyclomatic complexity instead of line count.
+  # `place_order/3` and `replace_order/4`'s arguments for assertion 5 — see `@arg_overrides`.
+  defp order_arg_helpers do
+    quote location: :keep do
+      # A small limit buy: the shape every venue's `place_order/3` reads, sized so no fake
+      # refuses it for being too large.
+      defp order_arg(:order_request) do
+        %{
+          symbol: sample_symbol(),
+          side: :buy,
+          order_type: :limit,
+          time_in_force: :gtc,
+          quantity: Decimal.new("0.001"),
+          price: Decimal.new("1")
+        }
+      end
+
+      defp order_arg(:order_id), do: "contract-order-1"
+      defp order_arg(:order_changes), do: %{price: Decimal.new("1")}
+    end
+  end
+
   defp credential_gate_helpers do
     quote location: :keep do
       # `test_connection/2` and `get_rate_limit_status/2` are the only two exemptions,

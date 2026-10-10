@@ -21,6 +21,13 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertion 5 called `replace_order/4` with options in every position.** There was no
+  credentialed arity-4 shape, so every venue's fake raised. The raise was counted as
+  conforming until 0.3.57. It now passes an order id and a `%{price: _}` change, the way
+  `place_order/3` now gets an order request.
+
 ## [0.3.57] - 2026-10-10
 
 ### Fixed
