@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`HttpClient` signed a request before the limiter's wait, not after.** A header function
+  was called first and a blocking limiter waited afterwards. Two callers on an incrementing
+  nonce (`dp_exchange_gemini`) were then released in either order, and the earlier signature
+  reached the venue second and was refused as a replay. A time-based nonce could outlive its
+  30 s window the same way. Each attempt now reserves its tokens, then signs, then sends, and
+  a request the limiter refuses is never signed.
+
 ## [0.3.54] - 2026-10-10
 
 ### Fixed

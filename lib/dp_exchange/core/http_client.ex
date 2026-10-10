@@ -412,105 +412,123 @@ defmodule DpExchange.Core.HttpClient do
   # function here is resolved per attempt, so every attempt carries a fresh signature. It
   # may return a header list, `{:ok, list}`, or `{:error, reason}`. An error is returned at
   # once and never retried: a request that cannot be signed will not sign on a second try.
-  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left)
-       when is_function(headers, 0) do
+  #
+  # **Signed AFTER the limiter, not before.** The function used to be called first and the
+  # limiter waited afterwards, so on a blocking limiter a signature could sit for seconds
+  # before it was sent. Two concurrent callers on an incrementing nonce were then released in
+  # either order, and the later-signed request reached the venue first, so the earlier one
+  # was refused as `InvalidNonce`. A time-based nonce past its 30 s window was refused the
+  # same way. Now the attempt reserves its tokens, then signs, then sends.
+  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left),
+    do: attempt(method, url, headers, body, opts, attempts_left)
+
+  defp resolve_headers(headers) when is_function(headers, 0) do
     case headers.() do
-      {:ok, resolved} when is_list(resolved) ->
-        attempt(method, url, headers, resolved, body, opts, attempts_left)
-
-      {:error, _reason} = error ->
-        error
-
-      resolved when is_list(resolved) ->
-        attempt(method, url, headers, resolved, body, opts, attempts_left)
+      {:ok, resolved} when is_list(resolved) -> {:ok, resolved}
+      {:error, _reason} = error -> error
+      resolved when is_list(resolved) -> {:ok, resolved}
     end
   end
 
-  defp do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left),
-    do: attempt(method, url, headers, headers, body, opts, attempts_left)
+  defp resolve_headers(headers), do: {:ok, headers}
 
-  # `headers` is what the next attempt resolves again; `resolved` is what this one sends.
-  defp attempt(method, url, headers, resolved, body, opts, attempts_left) do
+  # `headers` is what each attempt resolves again — see `resolve_headers/1`.
+  defp attempt(method, url, headers, body, opts, attempts_left) do
     # The endpoint a `rate_limit_per_endpoint: true` request is metered under — see
     # `rate_limit_keys/1`. The URL's path, never its query: `?symbol=BTCUSD` and
     # `?symbol=ETHUSD` are the same endpoint to the venue's per-endpoint limit.
     opts = Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path end)
 
-    # Check rate limits before making the request
+    # Check rate limits before making the request, and sign only once they have cleared.
     case check_rate_limits(opts) do
-      :ok ->
-        # Every attempt reserved its tokens in `check_rate_limits/1` before it was sent, so
-        # every outcome is already counted: a 5xx retried below and a 429 consumed the
-        # venue's quota exactly as a 2xx did. Counting only successes is the incident this
-        # module's moduledoc records ("395 calls per 60s against a documented 300, while
-        # the budget panel read 83/240"). Nothing is recorded again afterwards, because a
-        # second count halves the ceiling.
-        response = make_http_request(method, url, resolved, body, opts)
+      :ok -> sign_and_send(method, url, headers, body, opts, attempts_left)
+      refused -> rate_limit_refusal(refused, opts)
+    end
+  end
 
-        case response do
-          {:ok, response} ->
-            {:ok, response}
+  defp sign_and_send(method, url, headers, body, opts, attempts_left) do
+    case resolve_headers(headers) do
+      {:ok, resolved} -> send_attempt(method, url, headers, resolved, body, opts, attempts_left)
+      {:error, _reason} = error -> error
+    end
+  end
 
-          # Server returned HTTP 429 — `make_http_request/5` calls
-          # `handle_rate_limit/2` which returns a 3-tuple
-          # `{:error, :rate_limited, retry_after: N}`. Without this clause
-          # the case below crashes with `CaseClauseError`. Surfaced
-          # 2026-05-01 — 152 OrderbookCollector / Task crashes overnight
-          # when Coinbase rate-limited the bumped 30s price-collection
-          # cadence. Surface as a 2-tuple error so existing callers
-          # (OrderbookCollector handle_fetch_error etc.) match it.
-          {:error, :rate_limited, retry_after: seconds} ->
-            hold_for_retry_after(opts, seconds)
+  defp send_attempt(method, url, headers, resolved, body, opts, attempts_left) do
+    # Every attempt reserved its tokens in `check_rate_limits/1` before it was sent, so
+    # every outcome is already counted: a 5xx retried below and a 429 consumed the
+    # venue's quota exactly as a 2xx did. Counting only successes is the incident this
+    # module's moduledoc records ("395 calls per 60s against a documented 300, while
+    # the budget panel read 83/240"). Nothing is recorded again afterwards, because a
+    # second count halves the ceiling.
+    response = make_http_request(method, url, resolved, body, opts)
 
-            wrap_exchange_error(
-              opts,
-              "Rate limited by the venue — retry after " <> to_string(seconds) <> "s"
-            )
+    case response do
+      {:ok, response} ->
+        {:ok, response}
 
-          {:error, reason} when attempts_left > 1 ->
-            if client_error?(reason) do
-              # 4xx errors are permanent — don't retry
-              wrap_exchange_error(opts, reason)
-            else
-              retry_delay = Config.opt(opts, :retry_delay, 1000)
+      # Server returned HTTP 429 — `make_http_request/5` calls
+      # `handle_rate_limit/2` which returns a 3-tuple
+      # `{:error, :rate_limited, retry_after: N}`. Without this clause
+      # the case below crashes with `CaseClauseError`. Surfaced
+      # 2026-05-01 — 152 OrderbookCollector / Task crashes overnight
+      # when Coinbase rate-limited the bumped 30s price-collection
+      # cadence. Surface as a 2-tuple error so existing callers
+      # (OrderbookCollector handle_fetch_error etc.) match it.
+      {:error, :rate_limited, retry_after: seconds} ->
+        hold_for_retry_after(opts, seconds)
 
-              # `4 - attempts_left` was a magic number hardcoding the DEFAULT
-              # `retry_attempts` (3) as `retry_attempts + 1`. It happened to stay
-              # positive only because every existing caller and every existing test used
-              # the default or something smaller. `retry_attempts` is a documented,
-              # caller-configurable option — `:retry_attempts` above — and a caller
-              # setting it to 4 or more starts `attempts_left` above `4`, so `4 -
-              # attempts_left` goes negative on the very first retry and
-              # `Process.sleep/1` raises `FunctionClauseError` in the CALLING process,
-              # uncaught, which this library does not supervise. Found 2026-09-06,
-              # the same failure shape this module's moduledoc already records for
-              # `retry_attempts: nil` (`4 - nil` via Erlang term ordering) — this is the
-              # same trap for a valid, in-range integer instead of a forwarded `nil`.
-              #
-              # Scaled by attempts actually made instead: always >= 1, whatever
-              # `retry_attempts` was configured to, and identical to the old formula's
-              # own numbers at the default of 3 (1, then 2), so no existing behaviour
-              # changes for the common case.
-              total_attempts = Config.opt(opts, :retry_attempts, 3)
-              attempts_made = total_attempts - attempts_left + 1
-              backoff_delay = retry_delay * attempts_made
-              provider = Config.opt(opts, :provider, "unknown")
-              short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
+        wrap_exchange_error(
+          opts,
+          "Rate limited by the venue — retry after " <> to_string(seconds) <> "s"
+        )
 
-              Logger.warning(
-                "[HttpClient] retry provider=#{provider} #{method} #{short_url} " <>
-                  "in #{backoff_delay}ms; reason=#{inspect(reason)}"
-              )
+      {:error, reason} when attempts_left > 1 ->
+        if client_error?(reason) do
+          # 4xx errors are permanent — don't retry
+          wrap_exchange_error(opts, reason)
+        else
+          retry_delay = Config.opt(opts, :retry_delay, 1000)
 
-              Process.sleep(backoff_delay)
+          # `4 - attempts_left` was a magic number hardcoding the DEFAULT
+          # `retry_attempts` (3) as `retry_attempts + 1`. It happened to stay
+          # positive only because every existing caller and every existing test used
+          # the default or something smaller. `retry_attempts` is a documented,
+          # caller-configurable option — `:retry_attempts` above — and a caller
+          # setting it to 4 or more starts `attempts_left` above `4`, so `4 -
+          # attempts_left` goes negative on the very first retry and
+          # `Process.sleep/1` raises `FunctionClauseError` in the CALLING process,
+          # uncaught, which this library does not supervise. Found 2026-09-06,
+          # the same failure shape this module's moduledoc already records for
+          # `retry_attempts: nil` (`4 - nil` via Erlang term ordering) — this is the
+          # same trap for a valid, in-range integer instead of a forwarded `nil`.
+          #
+          # Scaled by attempts actually made instead: always >= 1, whatever
+          # `retry_attempts` was configured to, and identical to the old formula's
+          # own numbers at the default of 3 (1, then 2), so no existing behaviour
+          # changes for the common case.
+          total_attempts = Config.opt(opts, :retry_attempts, 3)
+          attempts_made = total_attempts - attempts_left + 1
+          backoff_delay = retry_delay * attempts_made
+          provider = Config.opt(opts, :provider, "unknown")
+          short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
 
-              do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left - 1)
-            end
+          Logger.warning(
+            "[HttpClient] retry provider=#{provider} #{method} #{short_url} " <>
+              "in #{backoff_delay}ms; reason=#{inspect(reason)}"
+          )
 
-          {:error, reason} ->
-            wrap_exchange_error(opts, reason)
+          Process.sleep(backoff_delay)
+
+          do_request_with_rate_limiting(method, url, headers, body, opts, attempts_left - 1)
         end
 
+      {:error, reason} ->
+        wrap_exchange_error(opts, reason)
+    end
+  end
+
+  defp rate_limit_refusal(refused, opts) do
+    case refused do
       {:error, :rate_limit_timeout} ->
         wrap_exchange_error(opts, :rate_limit_timeout)
 

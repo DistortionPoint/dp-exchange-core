@@ -205,6 +205,47 @@ defmodule DpExchange.Core.HttpClientTest do
       refute_received {:counted, _key, _weight}
     end
 
+    test "a header function is signed only after the limiter has cleared" do
+      # Signed first and then held by a blocking limiter, two callers on an incrementing
+      # nonce were released in either order, and the earlier signature reached the venue
+      # second and was refused as a replay.
+      use_stub()
+      test = self()
+
+      headers = fn ->
+        send(test, :signed)
+        []
+      end
+
+      HttpClient.request(:get, "http://127.0.0.1:1/never", headers, nil,
+        provider: "v",
+        retry_attempts: 0
+      )
+
+      {:messages, messages} = Process.info(self(), :messages)
+      reserved = Enum.find_index(messages, &(&1 == {:counted, "v", 1}))
+      signed = Enum.find_index(messages, &(&1 == :signed))
+
+      assert reserved != nil and signed != nil
+      assert reserved < signed
+    end
+
+    test "a header function is not called at all when the limiter refuses" do
+      use_stub({:rate_limited, 1_500})
+      test = self()
+
+      HttpClient.request(
+        :get,
+        "http://127.0.0.1:1/never",
+        fn -> send(test, :signed) && [] end,
+        nil,
+        provider: "v",
+        retry_attempts: 0
+      )
+
+      refute_received :signed
+    end
+
     test "without the option only the provider's bucket is metered" do
       use_stub()
       request(provider: "v")
