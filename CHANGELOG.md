@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.56] - 2026-10-10
+
 ### Fixed
 
 - **0.3.55 made an unsignable request ask the limiter first.** A request with no credentials
