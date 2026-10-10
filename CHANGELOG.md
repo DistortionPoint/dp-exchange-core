@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.63] - 2026-10-10
+
 ### Fixed
 
 All found 2026-10-10 by reading the conformance suite. Both tighten it: a venue that was
