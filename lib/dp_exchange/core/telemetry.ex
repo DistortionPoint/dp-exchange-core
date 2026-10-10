@@ -319,10 +319,12 @@ defmodule DpExchange.Core.Telemetry do
   def endpoint(url) when is_binary(url) do
     # The fragment goes with the query, and `user:pass@` with both: userinfo is a
     # credential written into the URL itself, the one place a query-only strip missed.
+    # `[^/]*@` is greedy on purpose: a password holding a raw `@` (`user:p@ss@host`) must be
+    # stripped to the LAST `@` of the authority, or `ss@` is left in the metric label.
     url
     |> String.split(["?", "#"], parts: 2)
     |> List.first()
-    |> String.replace(~r{^([a-z][a-z0-9+.-]*://)[^/@]*@}i, "\\1")
+    |> String.replace(~r{^([a-z][a-z0-9+.-]*://)[^/]*@}i, "\\1")
     |> String.slice(0, 200)
   end
 end

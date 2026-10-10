@@ -735,6 +735,39 @@ defmodule DpExchange.Core.HttpClientTest do
                )
     end
 
+    test "a list value is refused rather than concatenated into one word" do
+      # `to_string(["BTC", "ETH"])` is "BTCETH": a well-formed query for a product that
+      # does not exist.
+      assert_raise ArgumentError, ~r/:symbols has no single query-string spelling/, fn ->
+        HttpClient.get("http://venue.test/x", [symbols: ["BTC", "ETH"]],
+          plug: fn conn -> Req.Test.json(conn, %{}) end,
+          retry_attempts: 0
+        )
+      end
+    end
+
+    test "a plain-map value is refused" do
+      assert_raise ArgumentError, fn ->
+        HttpClient.get("http://venue.test/x", [filter: %{a: 1}],
+          plug: fn conn -> Req.Test.json(conn, %{}) end,
+          retry_attempts: 0
+        )
+      end
+    end
+
+    test "keys are form-encoded, not interpolated raw" do
+      plug = fn conn ->
+        assert conn.query_string == "a+b=1&c%26d=x%3Dy"
+        Req.Test.json(conn, %{})
+      end
+
+      assert {:ok, _response} =
+               HttpClient.get("http://venue.test/x", [{"a b", 1}, {"c&d", "x=y"}],
+                 plug: plug,
+                 retry_attempts: 0
+               )
+    end
+
     test "accepts a map of parameters" do
       plug = fn conn ->
         assert conn.query_string =~ "a=1"
@@ -1019,6 +1052,38 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert_received :signed
       refute_received :signed
+    end
+  end
+
+  describe "the :exception event carries the documented metadata" do
+    test "stacktrace and status are present when the request raised" do
+      use_stub()
+      provider = "exc-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-exception-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:exception_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:error, {:exchange_error, ^provider, "Request exception: " <> _rest}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 provider: provider,
+                 plug: fn _conn -> raise "boom" end,
+                 retry_attempts: 1
+               )
+
+      assert_received {:exception_event, metadata}
+      assert is_list(metadata.stacktrace)
+      assert metadata.status == nil
+      assert metadata.result == :exception
     end
   end
 end

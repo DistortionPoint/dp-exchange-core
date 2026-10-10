@@ -133,6 +133,17 @@ defmodule DpExchange.Core.TelemetryTest do
                "https://api.test/v1/orders"
     end
 
+    test "userinfo is removed up to the last @, even when the password holds a raw @" do
+      assert Telemetry.endpoint("https://user:p@ss@api.test/v1/orders") ==
+               "https://api.test/v1/orders"
+
+      assert Telemetry.endpoint("https://user:pass@api.test/v1/orders") ==
+               "https://api.test/v1/orders"
+
+      assert Telemetry.endpoint("https://api.test/v1/users/a@b.com") ==
+               "https://api.test/v1/users/a@b.com"
+    end
+
     test "a URL with no query is unchanged" do
       assert Telemetry.endpoint("https://api.test/v1/orders") == "https://api.test/v1/orders"
     end

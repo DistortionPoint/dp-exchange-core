@@ -208,7 +208,9 @@ defmodule DpExchange.Core.HttpClient do
 
   ## Parameters
   - `url`: Base URL for the request
-  - `params`: Query parameters as keyword list or map
+  - `params`: Query parameters as keyword list or map. `nil` values are dropped. Keys and
+    values are form-encoded. A list, tuple or plain-map value raises `ArgumentError`: it has
+    no single spelling, and the venue decides between repeated keys and a comma join.
   - `opts`: Additional options
 
   ## Returns
@@ -216,7 +218,7 @@ defmodule DpExchange.Core.HttpClient do
   - `{:error, reason}` on failure
   """
   @spec get(String.t(), keyword() | map(), rate_limited_request_options()) ::
-          {:ok, any()} | {:error, String.t()}
+          {:ok, any()} | {:error, request_error()}
   def get(url, params \\ [], opts \\ []) do
     query_string = build_query_string(params)
     full_url = if query_string == "", do: url, else: "#{url}?#{query_string}"
@@ -394,13 +396,28 @@ defmodule DpExchange.Core.HttpClient do
   defp build_query_string(params) when is_list(params) do
     params
     |> Enum.filter(fn {_k, v} -> v != nil end)
-    |> Enum.map(fn {k, v} -> "#{k}=#{URI.encode_www_form(to_string(v))}" end)
-    |> Enum.join("&")
+    |> Enum.map_join("&", fn {k, v} ->
+      URI.encode_www_form(to_string(k)) <> "=" <> URI.encode_www_form(query_value(k, v))
+    end)
   end
 
   defp build_query_string(params) when is_map(params) do
     params |> Map.to_list() |> build_query_string()
   end
+
+  # **A value with no single query spelling is refused, never flattened.** `to_string/1` on
+  # a list concatenated it, so `[symbols: ["BTC", "ETH"]]` was sent as `symbols=BTCETH`: a
+  # well-formed request for a product that does not exist, answered as an ordinary 404 or an
+  # empty result. Whether a venue wants repeated keys or a comma join is the venue's call,
+  # so the venue builds that value itself. Keys are encoded too; they were interpolated raw.
+  defp query_value(key, value)
+       when is_list(value) or is_tuple(value) or (is_map(value) and not is_struct(value)) do
+    raise ArgumentError,
+          "query parameter #{inspect(key)} has no single query-string spelling: " <>
+            inspect(value) <> ". Encode lists and maps in the venue before calling get/3."
+  end
+
+  defp query_value(_key, value), do: to_string(value)
 
   # **Headers may be a function, called again for every attempt.** A venue that signs with
   # a timestamp or a one-time nonce cannot have its request retried byte for byte:
@@ -705,9 +722,15 @@ defmodule DpExchange.Core.HttpClient do
         # error RESULT is the venue answering badly; an exception is this package failing to
         # ask. Folding them together makes a client-side bug indistinguishable from a venue
         # outage on every dashboard built from these events.
+        #
+        # `:stacktrace` and `:status` are part of the documented `:exception` metadata
+        # (`Core.Telemetry`) and were never set: a handler matching `%{stacktrace: _}` never
+        # fired, and one grouping by `:status` saw the key absent rather than `nil`.
         Telemetry.request_exception(start_time, metadata,
           kind: :error,
           reason: inspect(error),
+          stacktrace: __STACKTRACE__,
+          status: nil,
           result: :exception
         )
 

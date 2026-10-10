@@ -21,6 +21,31 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+All found 2026-10-10 by reading the code paths.
+
+- **`Types.Validate`: a NaN or Infinity inside a plain map was not refused.** The scan
+  descended into lists and tuples but not maps, so `VolumeProfile`'s `buy_at_price` /
+  `sell_at_price`, `OptionChain.expiries` (Decimal strikes as keys) and
+  `StakingBalance.by_provider` carried a NaN straight past `new/1`, and
+  `VolumeProfile.point_of_control/1` then raised `Decimal.Error` in the consumer's process.
+  Map keys and values are now scanned; structs other than `Decimal`/`NaiveDateTime` are
+  still not descended into.
+- **`HttpClient`: the `[:dp_exchange, :request, :exception]` event lacked `:stacktrace` and
+  `:status`**, both documented in `Core.Telemetry`. A handler matching on either never saw
+  them. `:stacktrace` is the rescued stacktrace and `:status` is `nil`. `get/3`'s `@spec`
+  also named `{:error, String.t()}` though it returns `{:exchange_error, provider, reason}`
+  whenever `:provider` is given; it now uses `request_error()`.
+- **`Telemetry.endpoint/1`: a raw `@` in a URL password left the tail of the password in the
+  label.** `https://user:p@ss@host/x` was stripped to `https://ss@host/x`. Userinfo is now
+  stripped up to the last `@` of the authority.
+- **`HttpClient.get/3`: a list query value was concatenated into one word.** `to_string/1`
+  turned `[symbols: ["BTC", "ETH"]]` into `symbols=BTCETH`, a well-formed request for a
+  product that does not exist. A list, tuple or plain-map value now raises `ArgumentError`;
+  the venue chooses repeated keys or a comma join and passes the string. Keys are now
+  form-encoded as well; they were interpolated raw.
+
 ## [0.3.61] - 2026-10-10
 
 ### Fixed

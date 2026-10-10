@@ -685,6 +685,31 @@ defmodule DpExchange.Core.Types.ValidateTest do
       end
     end
 
+    test "a NaN volume inside a VolumeProfile price map is refused" do
+      assert_raise ArgumentError, ~r/buy_at_price.*NaN/, fn ->
+        VolumeProfile.new(
+          symbol: "AAPL",
+          timeframe: "1d",
+          opened_at: @ts,
+          provider: :reference,
+          buy_at_price: %{"100" => Decimal.new("NaN")}
+        )
+      end
+    end
+
+    test "finite price maps still build" do
+      profile =
+        VolumeProfile.new(
+          symbol: "AAPL",
+          timeframe: "1d",
+          opened_at: @ts,
+          provider: :reference,
+          buy_at_price: %{"100" => Decimal.new("5")}
+        )
+
+      assert VolumeProfile.point_of_control(profile) == "100"
+    end
+
     test "finite levels still build" do
       bids = [{Decimal.new("100"), Decimal.new("1")}]
       assert %OrderBook{bids: ^bids} = OrderBook.new(Keyword.put(@book, :bids, bids))

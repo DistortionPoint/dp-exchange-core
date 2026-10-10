@@ -102,5 +102,16 @@ defmodule DpExchange.Core.Types.Validate do
   defp refuse_value!(module, field, value) when is_tuple(value),
     do: value |> Tuple.to_list() |> Enum.each(&refuse_value!(module, field, &1))
 
+  # Plain maps too, keys and values: `VolumeProfile.buy_at_price`, `OptionChain.expiries`
+  # (Decimal strikes as keys) and `StakingBalance.by_provider` carry Decimals inside maps,
+  # and a NaN there passed the scan and then raised in `Decimal.compare/2` or `add/2` inside
+  # the consumer (`VolumeProfile.point_of_control/1`). Structs are skipped, as above.
+  defp refuse_value!(module, field, value) when is_map(value) and not is_struct(value) do
+    Enum.each(value, fn {key, inner} ->
+      refuse_value!(module, field, key)
+      refuse_value!(module, field, inner)
+    end)
+  end
+
   defp refuse_value!(_module, _field, _value), do: :ok
 end
