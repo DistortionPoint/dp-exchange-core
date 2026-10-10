@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.55] - 2026-10-10
+
 ### Fixed
 
 - **`HttpClient` signed a request before the limiter's wait, not after.** A header function
