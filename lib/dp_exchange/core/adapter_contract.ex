@@ -390,7 +390,10 @@ defmodule DpExchange.Core.AdapterContract do
           id = @venue.runtime_id()
           segment = @venue |> Module.split() |> List.last() |> Macro.underscore()
 
-          assert is_atom(id) and id not in [nil, true, false] and Atom.to_string(id) == segment,
+          # `to_string/1` compared with the segment: `nil`, `true` and `false` stringify to
+          # words no module segment is. Comparing `id` with those atoms directly warns under
+          # the type checker, which knows each venue's literal `runtime_id/0`.
+          assert is_atom(id) and to_string(id) == segment,
                  "runtime_id/0 is #{inspect(id)}; #{inspect(@venue)} names #{inspect(segment)}"
         end
 
