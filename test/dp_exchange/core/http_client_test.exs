@@ -503,6 +503,25 @@ defmodule DpExchange.Core.HttpClientTest do
                get(plug: responding(200, %{ok: true}))
     end
 
+    test "decode_body: false hands back the bytes, so a JSON-number amount keeps its digits" do
+      raw = ~s({"amount":1234.567890123456789})
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, raw)
+      end
+
+      # Control: Req's default float decode loses the tail the venue sent.
+      assert {:ok, %{body: %{"amount" => float}}} = get(plug: plug)
+      refute Decimal.equal?(Decimal.from_float(float), Decimal.new("1234.567890123456789"))
+
+      assert {:ok, %{status: 200, body: ^raw}} = get(plug: plug, decode_body: false)
+
+      assert {:ok, %{"amount" => exact}} = Jason.decode(raw, floats: :decimals)
+      assert Decimal.equal?(exact, Decimal.new("1234.567890123456789"))
+    end
+
     test "4xx is a client error and is not retried" do
       # A bad symbol or an unauthorized key is permanent. Retrying it burns the
       # venue's rate limit to get the same answer.

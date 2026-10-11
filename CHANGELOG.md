@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- `HttpClient.request/5` passes `:decode_body` through to `Req`. Req's default JSON decode
+  turns every number into a float, so a venue that types an amount as a JSON number lost
+  every digit past ~17 significant ones before its own decoder saw it (measured:
+  `1234.567890123456789` arrives as `1234.567890123457`). `decode_body: false` returns the bytes
+  for the venue to decode with `Jason.decode(body, floats: :decimals)`. Absent, nothing
+  changes.
+
 ## [0.3.64] - 2026-10-10
 
 ### Changed

@@ -146,6 +146,9 @@ defmodule DpExchange.Core.HttpClient do
     possibly transient, and the venue states which in the 4xx status and body. Without
     it that evidence is flattened into a message and the venue has to string-match its
     way back to it. 5xx is unaffected — a server error is not a venue's considered answer.
+  - `:decode_body` - Passed to `Req` (default: Req's, which decodes JSON with floats).
+    `false` returns the body as bytes, for a venue that types money as a JSON number and
+    must decode it without float rounding (`Jason.decode(body, floats: :decimals)`).
 
   ## Returns
   - `{:ok, http_response()}` on success, and on a 4xx when `raw_status: true`
@@ -612,7 +615,14 @@ defmodule DpExchange.Core.HttpClient do
   # request pipeline is exercised without a network. It is not a test-only escape
   # hatch: a consumer with its own transport requirements uses the same seam, and a
   # venue package with an unusual one is not forced to reimplement this pipeline.
-  defp transport_opts(opts), do: Keyword.take(opts, [:plug, :adapter, :req_adapter])
+  #
+  # `:decode_body` too. Req decodes a JSON body with floats, and a venue that types money
+  # as a JSON *number* loses every digit past ~17 significant ones before its own decoder
+  # sees it: measured, `1234.567890123456789` arrives as `1234.567890123457`. With
+  # `decode_body: false` the venue receives the bytes and decodes them itself, e.g. with
+  # `Jason.decode(body, floats: :decimals)`. Absent, Req's default is unchanged.
+  defp transport_opts(opts),
+    do: Keyword.take(opts, [:plug, :adapter, :req_adapter, :decode_body])
 
   # The one place a request actually leaves this process and comes back, which is why the
   # `[:dp_exchange, :request, :*]` events are emitted HERE and not at the public entry
