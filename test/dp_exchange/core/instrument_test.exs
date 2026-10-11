@@ -44,7 +44,26 @@ defmodule DpExchange.Core.InstrumentTest do
       assert :perp = Instrument.instrument_from("swap")
       assert :perp = Instrument.instrument_from("perp")
       assert :perp = Instrument.instrument_from("perpetual")
-      assert :perp = Instrument.instrument_from("future")
+    end
+
+    test "a bare `future` is :unknown: it cannot say perpetual from dated" do
+      assert :unknown = Instrument.instrument_from("future")
+      assert :unknown = Instrument.instrument_from("FUTURE")
+    end
+
+    test "instrument_from/2 reads the venue's expiry kind" do
+      assert :perp = Instrument.instrument_from("future", "PERPETUAL")
+      assert :future = Instrument.instrument_from("FUTURE", "expiring")
+      assert :future = Instrument.instrument_from("perp", "EXPIRING")
+    end
+
+    test "instrument_from/2 falls back to /1 when the expiry kind is unreadable" do
+      assert :unknown = Instrument.instrument_from("future", nil)
+      assert :unknown = Instrument.instrument_from("future", "unknown_kind")
+      assert :perp = Instrument.instrument_from("swap", nil)
+      assert :spot = Instrument.instrument_from("spot", "expiring")
+      assert :unknown = Instrument.instrument_from("option", "expiring")
+      assert :unknown = Instrument.instrument_from(nil, "perpetual")
     end
 
     test "an unrecognised type is :unknown, NOT :spot" do

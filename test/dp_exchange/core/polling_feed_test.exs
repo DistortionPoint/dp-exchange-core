@@ -146,8 +146,8 @@ defmodule DpExchange.Core.PollingFeedTest do
         symbols: ~w(BTC-USD ETH-USD)
       )
 
-      assert_receive {:published, %{symbol: s1}}, 500
-      assert_receive {:published, %{symbol: s2}}, 500
+      assert_receive {:published, %{symbol: s1}}, 5_000
+      assert_receive {:published, %{symbol: s2}}, 5_000
       assert Enum.sort([s1, s2]) == ~w(BTC-USD ETH-USD)
     end
 
@@ -161,7 +161,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           symbols: ~w(BTC-USD ETH-USD)
         )
 
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
 
       coverage = PollingFeed.coverage(pid)
       assert coverage["BTC-USD"] == :internal_poll
@@ -183,7 +183,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
         )
 
-      assert_receive {:refused, "DOGE-USD", "not listed"}, 500
+      assert_receive {:refused, "DOGE-USD", "not listed"}, 5_000
 
       # `status/1` is a `GenServer.call` — it cannot reply until every message already
       # queued ahead of it (here, nothing further after the refusal above) has been
@@ -203,8 +203,8 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
         )
 
-      assert_receive {:refused, "A-USD", :nope}, 500
-      assert_receive {:refused, "B-USD", :nope}, 500
+      assert_receive {:refused, "A-USD", :nope}, 5_000
+      assert_receive {:refused, "B-USD", :nope}, 5_000
       # A `GenServer.call` reply is proof of no crash by construction — it cannot answer
       # from a dead process.
       assert PollingFeed.coverage(pid) == %{}
@@ -230,8 +230,8 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert PollingFeed.status(pid).failures_since_ok == 0
 
       PollingFeed.update_symbols(pid, ["BTC-USD"])
-      assert_receive {:fetched, ["BTC-USD"]}, 500
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:fetched, ["BTC-USD"]}, 5_000
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
     end
 
     test "a successful call with zero events counts toward delivering nothing" do
@@ -256,7 +256,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       status = PollingFeed.status(pid)
 
       refute status.delivering
@@ -269,8 +269,8 @@ defmodule DpExchange.Core.PollingFeedTest do
     test "publishes each symbol independently" do
       start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD ETH-USD))
 
-      assert_receive {:published, %{symbol: _}}, 500
-      assert_receive {:published, %{symbol: _}}, 500
+      assert_receive {:published, %{symbol: _}}, 5_000
+      assert_receive {:published, %{symbol: _}}, 5_000
     end
 
     test "a refusal is reported once, through the injected callback" do
@@ -282,7 +282,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
       )
 
-      assert_receive {:refused, "DOGE-USD", "not listed: DOGE-USD"}, 500
+      assert_receive {:refused, "DOGE-USD", "not listed: DOGE-USD"}, 5_000
       # Once, not once per cycle: at a 50 ms interval several more cycles refuse in this
       # window, and each used to call `on_refusal` again.
       refute_receive {:refused, "DOGE-USD", _reason}, 300
@@ -308,9 +308,9 @@ defmodule DpExchange.Core.PollingFeedTest do
         on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
       )
 
-      assert_receive {:refused, "DOGE-USD", :not_listed}, 500
-      assert_receive {:published, %{symbol: "DOGE-USD"}}, 500
-      assert_receive {:refused, "DOGE-USD", :not_listed}, 500
+      assert_receive {:refused, "DOGE-USD", :not_listed}, 5_000
+      assert_receive {:published, %{symbol: "DOGE-USD"}}, 5_000
+      assert_receive {:refused, "DOGE-USD", :not_listed}, 5_000
     end
 
     test "a fetch that throws is a failed fetch, not a dead feed" do
@@ -325,7 +325,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       assert Process.alive?(pid)
       assert PollingFeed.status(pid).last_error == {:throw, :boom}
     end
@@ -346,7 +346,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       assert PollingFeed.status(pid).failures_since_ok >= 1
     end
   end
@@ -375,11 +375,11 @@ defmodule DpExchange.Core.PollingFeedTest do
       # A failed fetch covers nothing — checked the instant the failure happened rather
       # than at a wall-clock moment, which races the very retry this test waits for and
       # failed one run in six that way.
-      assert_receive :first_fetch_failed, 500
+      assert_receive :first_fetch_failed, 5_000
       assert PollingFeed.coverage(pid) == %{}
 
       # It is retried rather than dropped.
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
       assert PollingFeed.coverage(pid)["BTC-USD"] == :internal_poll
     end
 
@@ -393,7 +393,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       assert PollingFeed.coverage(pid) == %{}
     end
   end
@@ -409,7 +409,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       status = PollingFeed.status(pid)
 
       refute status.delivering
@@ -422,7 +422,7 @@ defmodule DpExchange.Core.PollingFeedTest do
     test "a delivering feed reports it" do
       pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
 
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
       status = PollingFeed.status(pid)
 
       assert status.delivering
@@ -440,7 +440,7 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
 
       pid = start_feed(fetch: fetch, symbols: ~w(BTC-USD))
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
       Agent.update(up, fn _up -> false end)
 
       # Past the coverage window (2 intervals of 50 ms), measured from the last success.
@@ -516,10 +516,10 @@ defmodule DpExchange.Core.PollingFeedTest do
   describe "update_symbols/2" do
     test "adds symbols and drops coverage for removed ones" do
       pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
 
       PollingFeed.update_symbols(pid, ~w(ETH-USD))
-      assert_receive {:published, %{symbol: "ETH-USD"}}, 500
+      assert_receive {:published, %{symbol: "ETH-USD"}}, 5_000
 
       # BTC-USD left the scope, so its coverage goes with it rather than lingering
       # as a stale claim of delivery.
@@ -551,7 +551,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 10_000
         )
 
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
       PollingFeed.update_symbols(pid, ~w(BTC-USD))
 
       # `update_symbols/2` is a cast; `status/1` right after it is a call, and a
@@ -601,7 +601,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 50
         )
 
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
 
       for _cycle <- 1..3 do
         PollingFeed.update_symbols(pid, ~w(ETH-USD))
@@ -651,13 +651,13 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 60_000
         )
 
-      assert_receive {:fetching, task}
+      assert_receive {:fetching, task}, 5_000
 
       PollingFeed.update_symbols(pid, ~w(BTC-USD))
       _sync = PollingFeed.status(pid)
       send(task, :release)
 
-      assert_receive {:published, %{symbol: "BTC-USD"}}
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
       refute_receive {:published, %{symbol: "ETH-USD"}}, 100
       assert Map.keys(PollingFeed.coverage(pid)) == ["BTC-USD"]
     end
@@ -671,7 +671,7 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
 
       pid = start_feed(symbols: ~w(ETH-USD), fetch: fetch, interval_ms: 60_000)
-      assert_receive {:fetching, task}
+      assert_receive {:fetching, task}, 5_000
 
       PollingFeed.update_symbols(pid, [])
       _sync = PollingFeed.status(pid)
@@ -710,7 +710,7 @@ defmodule DpExchange.Core.PollingFeedTest do
       )
 
       refute_receive {:published, _event}, 150
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
     end
 
     test "an explicit nil falls back to the default instead of crashing the feed" do
@@ -759,7 +759,7 @@ defmodule DpExchange.Core.PollingFeedTest do
            symbols: ~w(BTC-USD)}
         )
 
-      assert_receive {:published, _event}, 500
+      assert_receive {:published, _event}, 5_000
       # The reschedule inside `handle_info` is where the crash happened, immediately
       # after the publish — a synchronous call right after the publish forces that
       # same `handle_info` to have fully returned (a GenServer cannot answer a call
@@ -784,7 +784,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      assert_receive {:notice, _notice}, 500
+      assert_receive {:notice, _notice}, 5_000
       assert PollingFeed.status(pid).failures_since_ok >= 1
     end
 
@@ -918,8 +918,8 @@ defmodule DpExchange.Core.PollingFeedTest do
           interval_ms: 50
         )
 
-      assert_receive {:attempt, "BTC-USD"}, 500
-      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 5_000
+      assert_receive {:attempt, "BTC-USD"}, 5_000
       assert Process.alive?(pid)
     end
 
@@ -934,7 +934,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         fetch_timeout_ms: 500
       )
 
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
     end
   end
 
@@ -949,7 +949,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         on_notice: fn notice -> send(test, {:notice, notice}) end
       )
 
-      assert_receive {:notice, notice}, 1_000
+      assert_receive {:notice, notice}, 5_000
       assert notice.provider == "robinhood"
     end
 
@@ -973,7 +973,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         on_notice: fn notice -> send(test, {:notice, notice}) end
       )
 
-      assert_receive {:notice, notice}, 1_000
+      assert_receive {:notice, notice}, 5_000
       assert notice.provider == :schwab
       assert notice.details.label == "schwab-fallback-poll"
       assert notice.message =~ "schwab-fallback-poll"
@@ -995,9 +995,9 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       # The first full sweep: one failed attempt per symbol, in whatever order the
       # staggered start times deliver them.
-      for _attempt <- 1..3, do: assert_receive({:attempt, _symbol}, 500)
+      for _attempt <- 1..3, do: assert_receive({:attempt, _symbol}, 5_000)
 
-      assert_receive {:notice, notice}, 500
+      assert_receive {:notice, notice}, 5_000
 
       assert %Notice{kind: :coverage_change, severity: :warning} = notice
       assert notice.provider == "polling-feed"
@@ -1007,7 +1007,7 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       # The outage continues for two more full sweeps' worth of attempts. No second
       # notice — this is a transition, fired once, not a per-tick or per-sweep signal.
-      for _attempt <- 1..6, do: assert_receive({:attempt, _symbol}, 500)
+      for _attempt <- 1..6, do: assert_receive({:attempt, _symbol}, 5_000)
       refute_receive {:notice, _}, 200
     end
 
@@ -1030,18 +1030,18 @@ defmodule DpExchange.Core.PollingFeedTest do
         on_notice: fn notice -> send(test, {:notice, notice}) end
       )
 
-      assert_receive {:notice, dead_notice}, 500
+      assert_receive {:notice, dead_notice}, 5_000
       assert %Notice{kind: :coverage_change, severity: :warning} = dead_notice
 
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
 
-      assert_receive {:notice, recovered_notice}, 500
+      assert_receive {:notice, recovered_notice}, 5_000
       assert %Notice{kind: :coverage_change, severity: :info} = recovered_notice
       assert recovered_notice.details.label == "polling-feed"
       assert recovered_notice.details.consecutive_failures == 1
 
       # Steady-state delivery afterward raises no further notice.
-      assert_receive {:published, %{symbol: "BTC-USD"}}, 500
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
       refute_receive {:notice, _}, 200
     end
 
@@ -1057,8 +1057,8 @@ defmodule DpExchange.Core.PollingFeedTest do
           symbols: ~w(BTC-USD)
         )
 
-      assert_receive {:attempt, "BTC-USD"}, 500
-      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 5_000
+      assert_receive {:attempt, "BTC-USD"}, 5_000
       assert Process.alive?(pid)
     end
 
@@ -1078,8 +1078,8 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: nil
         )
 
-      assert_receive {:attempt, "BTC-USD"}, 500
-      assert_receive {:attempt, "BTC-USD"}, 500
+      assert_receive {:attempt, "BTC-USD"}, 5_000
+      assert_receive {:attempt, "BTC-USD"}, 5_000
       assert Process.alive?(pid)
     end
   end
@@ -1150,7 +1150,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         fetch: fn symbol -> {:ok, quote_for(symbol)} end
       )
 
-      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}, 2_000
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}, 5_000
       assert measurements.count == 1
       refute Map.has_key?(measurements, :bytes)
       # The struct names its own kind — never a channel name, never a subscription intent.
@@ -1227,16 +1227,16 @@ defmodule DpExchange.Core.PollingFeedTest do
           end
         )
 
-      assert_receive {:fetching, first, task}, 1_000
+      assert_receive {:fetching, first, task}, 5_000
       [other] = ~w(A B) -- [first]
 
       PollingFeed.update_symbols(feed, [first])
       _status = PollingFeed.status(feed)
       send(task, :go)
-      assert_receive {:published, %{symbol: ^first}}, 1_000
+      assert_receive {:published, %{symbol: ^first}}, 5_000
 
       PollingFeed.update_symbols(feed, [first, other])
-      assert_receive {:fetching, ^other, _task}, 1_000
+      assert_receive {:fetching, ^other, _task}, 5_000
     end
 
     test "a per-symbol event for a different symbol is a failure, not a delivery" do
@@ -1290,7 +1290,7 @@ defmodule DpExchange.Core.PollingFeedTest do
         fetch: fn symbol -> {:ok, quote_for(symbol)} end
       )
 
-      assert_receive {:telemetry, [:dp_exchange, :link, :event], _measurements, metadata}, 2_000
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _measurements, metadata}, 5_000
       assert metadata.provider == provider
     end
   end

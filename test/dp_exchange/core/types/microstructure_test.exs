@@ -169,6 +169,17 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
              ) == "aaa"
     end
 
+    test "a NaN or Infinity price key is unreadable and does not raise in the tie-break" do
+      for bad <- ["NaN", "Infinity", "-Infinity"] do
+        assert VolumeProfile.point_of_control(
+                 profile(%{
+                   buy_at_price: %{bad => Decimal.new("100"), "99" => Decimal.new("100")},
+                   sell_at_price: %{}
+                 })
+               ) == "99"
+      end
+    end
+
     test "one-sided volume still has a point of control" do
       assert VolumeProfile.point_of_control(
                profile(%{buy_at_price: %{"24.30" => Decimal.new("5")}, sell_at_price: %{}})

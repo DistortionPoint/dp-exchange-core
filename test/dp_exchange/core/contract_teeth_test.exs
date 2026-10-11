@@ -545,12 +545,14 @@ defmodule DpExchange.Core.ContractTeethTest do
 
     test "it pushes on subscribe, as a REST-only venue would" do
       assert :ok = ReferenceVenue.subscribe(~w(BTC-USD), to: self())
-      assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Types.Quote{}}
+      assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Types.Quote{}}, 5_000
     end
 
     test "it emits notices on its own channel" do
       assert :ok = ReferenceVenue.subscribe_notices(to: self())
-      assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{kind: :link_up}}
+
+      assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{kind: :link_up}},
+                     5_000
     end
   end
 
@@ -813,7 +815,7 @@ defmodule DpExchange.Core.ContractTeethTest do
     test "a raw, undecoded payload is caught" do
       assert :ok = Broken.Subscribe.RawPayload.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, _runtime_id, payload}, 500
+      assert_receive {:dp_exchange, _runtime_id, payload}, 5_000
 
       refute is_struct(payload),
              "this fixture pushes a bare map on purpose — the exact 'raw JSON forwarded " <>
@@ -825,7 +827,7 @@ defmodule DpExchange.Core.ContractTeethTest do
       venue = Broken.Subscribe.WrongTag
       assert :ok = venue.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, runtime_id, %DpExchange.Core.Types.Quote{}}, 500
+      assert_receive {:dp_exchange, runtime_id, %DpExchange.Core.Types.Quote{}}, 5_000
 
       refute runtime_id == venue.runtime_id(),
              "this fixture tags its message with a hardcoded atom on purpose — a caller " <>
@@ -836,7 +838,7 @@ defmodule DpExchange.Core.ContractTeethTest do
     test "the reference venue satisfies both halves" do
       assert :ok = DpExchange.Core.ReferenceVenue.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, runtime_id, payload}, 500
+      assert_receive {:dp_exchange, runtime_id, payload}, 5_000
 
       assert runtime_id == DpExchange.Core.ReferenceVenue.runtime_id()
       assert %DpExchange.Core.Types.Quote{} = payload

@@ -123,6 +123,28 @@ defmodule DpExchange.Core.NoticeTest do
       end
     end
 
+    test "a credential-shaped key nested in maps, lists or keyword pairs is refused" do
+      for details <- [
+            %{request: %{headers: %{"Authorization" => "Bearer x"}}},
+            %{attempts: [%{ok: false}, %{api_key: "k"}]},
+            %{opts: [secret: "s"]},
+            %{a: %{b: [%{c: %{password: "p"}}]}}
+          ] do
+        assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+          Notice.new(:credentials_rejected, :v, details: details)
+        end
+      end
+    end
+
+    test "a struct value and a credential-free nested payload are accepted" do
+      notice =
+        Notice.new(:data_quality, :v,
+          details: %{body: %{code: 7, items: [%{id: 1}]}, at: ~U[2026-08-27 12:00:00Z]}
+        )
+
+      assert notice.details.body.code == 7
+    end
+
     test "naming WHICH credential failed is allowed — that is the useful part" do
       notice =
         Notice.new(:credentials_rejected, :v,

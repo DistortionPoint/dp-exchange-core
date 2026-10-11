@@ -1446,8 +1446,8 @@ defmodule DpExchange.Core.AdapterContract do
           # is a flake in every one of them, in a shared assertion whose whole purpose is to
           # be trusted. A conformance check that fails at random is one people learn to
           # re-run rather than read.
-          assert_receive :ready, 2_000
-          assert_receive :ready, 2_000
+          assert_receive :ready, 5_000
+          assert_receive :ready, 5_000
           send(a.pid, :go)
           send(b.pid, :go)
 
@@ -1786,7 +1786,7 @@ defmodule DpExchange.Core.AdapterContract do
             assert :ok = @fake.subscribe(@sample_pairs, opts)
 
             assert_receive {:dp_exchange, runtime_id, payload},
-                           500,
+                           5_000,
                            "subscribe/2 returned :ok for #{inspect(@sample_pairs)} but " <>
                              "delivered nothing — a caller has no way to tell that from " <>
                              "a quiet market"
@@ -2464,7 +2464,7 @@ defmodule DpExchange.Core.AdapterContract do
         fake.subscribe([String.downcase(pair)], opts)
 
         assert_receive {:dp_exchange, _venue, %{symbol: ^pair}},
-                       1_000,
+                       5_000,
                        "subscribe/2 with #{inspect(String.downcase(pair))} delivered nothing " <>
                          "under #{inspect(pair)}. The real facade upper-cases subscribed " <>
                          "symbols; the fake must too, or it certifies silence."
@@ -2573,7 +2573,7 @@ defmodule DpExchange.Core.AdapterContract do
                  "`DpExchange.Core.Config.opt/3`, not `Keyword.get/3`."
 
         assert_receive {:dp_exchange, _venue, _payload},
-                       1_000,
+                       5_000,
                        "subscribe/2 with `to: nil` delivered nothing to the caller. A `nil` " <>
                          "subscriber is delivered to nobody, and answers `:ok` while doing it."
       end

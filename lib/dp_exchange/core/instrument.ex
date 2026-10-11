@@ -54,7 +54,7 @@ defmodule DpExchange.Core.Instrument do
     status: :unknown
   ]
 
-  @type instrument_type :: :spot | :perp | :unknown
+  @type instrument_type :: :spot | :perp | :future | :unknown
   @type status :: :tradable | :delisted | :unknown
 
   @type t :: %__MODULE__{
@@ -90,23 +90,51 @@ defmodule DpExchange.Core.Instrument do
   Normalise a venue's product-type string.
 
   Recognises the forms the four venues actually publish. Anything else is
-  `:unknown` — the whole point is that an unrecognised type is visible.
+  `:unknown` — the whole point is that an unrecognised type is visible. That includes a
+  bare `"future"`, which may be dated or perpetual: use `instrument_from/2` with the
+  venue's expiry kind.
   """
   @spec instrument_from(String.t() | nil) :: instrument_type()
   def instrument_from(type) when is_binary(type) do
     case String.downcase(type) do
       "spot" -> :spot
-      # Gemini publishes `swap` for its 13 perpetuals; Coinbase uses
-      # `future` / `perpetual` on its derivatives venue.
+      # Gemini publishes `swap` for its 13 perpetuals.
       "swap" -> :perp
       "perp" -> :perp
       "perpetual" -> :perp
-      "future" -> :perp
+      # NOT `:perp`. A bare `future` is a dated contract on some venues and a perpetual
+      # on others (Coinbase's `product_type: "FUTURE"` covers both, told apart only by
+      # `future_product_details.contract_expiry_type`). The string alone cannot say which,
+      # so it is `:unknown` — visible — until `instrument_from/2` is given the expiry kind.
       _unrecognised -> :unknown
     end
   end
 
   def instrument_from(_other), do: :unknown
+
+  @doc """
+  Normalise a venue's product-type string together with the venue's own statement of
+  whether the contract expires.
+
+  `expiry_kind` is the venue's word, case-insensitive: `"perpetual"` gives `:perp` and
+  `"expiring"` gives `:future`, whatever `type` says, provided `type` is itself a
+  derivative (`"future"`, `"perp"`, `"perpetual"`, `"swap"`). Anything else, including `nil`,
+  falls back to `instrument_from/1`, so `"future"` with no readable expiry kind is
+  `:unknown`, never a guess. A `"spot"` or unrecognised `type` is never turned into a
+  derivative by an expiry kind.
+  """
+  @spec instrument_from(String.t() | nil, String.t() | nil) :: instrument_type()
+  def instrument_from(type, expiry_kind) when is_binary(type) and is_binary(expiry_kind) do
+    derivative? = String.downcase(type) in ["future", "perp", "perpetual", "swap"]
+
+    case {derivative?, String.downcase(expiry_kind)} do
+      {true, "perpetual"} -> :perp
+      {true, "expiring"} -> :future
+      _other -> instrument_from(type)
+    end
+  end
+
+  def instrument_from(type, _expiry_kind), do: instrument_from(type)
 
   @doc """
   Normalise a venue's listing-status string.

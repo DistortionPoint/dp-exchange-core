@@ -432,7 +432,7 @@ defmodule DpExchange.Core.FanoutTest do
   # and a dead one are exactly what this test needs to tell apart.
   defp drain(pid) do
     send(pid, {:drain, self()})
-    assert_receive :drained, 1_000
+    assert_receive :drained, 5_000
   end
 
   describe "a subscriber on another node (found 2026-10-10)" do

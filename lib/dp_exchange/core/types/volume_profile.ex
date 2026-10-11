@@ -151,7 +151,9 @@ defmodule DpExchange.Core.Types.VolumeProfile do
   # "12abc" as 12, which is a value invented from a key this module cannot actually read.
   defp parsed_price(price) when is_binary(price) do
     case Decimal.parse(price) do
-      {decimal, ""} -> decimal
+      # "NaN" and "Infinity" parse in full but make `Decimal.compare/2` raise, so a key
+      # spelled that way is unreadable here like any other non-number.
+      {%Decimal{coef: coef} = decimal, ""} when is_integer(coef) -> decimal
       _partial_or_error -> nil
     end
   end

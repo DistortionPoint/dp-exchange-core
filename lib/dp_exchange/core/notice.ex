@@ -311,14 +311,12 @@ defmodule DpExchange.Core.Notice do
   # walk that table to exhaustion and take the whole node down — which a guard whose
   # entire purpose is to make notices SAFE must not itself become a way to do.
   defp reject_credentials!(details) when is_map(details) do
-    offending =
-      details
-      |> Map.keys()
-      |> Enum.filter(&credential_key?/1)
+    offending = details |> offending_keys() |> Enum.uniq()
 
-    # Top level only, deliberately. A nested map is often the venue's own decoded payload
-    # (`dp_exchange_webull` puts its broker notice body there), and raising on a key inside
-    # it would let one venue message crash the transport that received it.
+    # Any depth. This was top level only, on the reasoning that a nested map is often the
+    # venue's own decoded payload and raising on it would crash the transport that received
+    # it. But a credential nested in that payload reaches a public issue just the same, so
+    # the venue strips or renames the key instead (found 2026-10-11).
 
     if offending != [] do
       raise ArgumentError,
@@ -333,6 +331,27 @@ defmodule DpExchange.Core.Notice do
   defp reject_credentials!(other) do
     raise ArgumentError, "notice details must be a map, got #{inspect(other)}"
   end
+
+  # Credential-shaped keys at ANY depth, through plain maps, lists and `{key, value}` pairs
+  # (a keyword list). `%{request: %{headers: %{authorization: ...}}}` passed the top-level
+  # check and put the value in a public issue. Structs (a `DateTime`, say) are not entered.
+  defp offending_keys(%_struct{}), do: []
+
+  defp offending_keys(map) when is_map(map) do
+    Enum.flat_map(map, fn {key, value} ->
+      own = if credential_key?(key), do: [key], else: []
+      own ++ offending_keys(value)
+    end)
+  end
+
+  defp offending_keys(list) when is_list(list), do: Enum.flat_map(list, &offending_keys/1)
+
+  defp offending_keys({key, value}) do
+    own = if credential_key?(key), do: [key], else: []
+    own ++ offending_keys(value)
+  end
+
+  defp offending_keys(_scalar), do: []
 
   # Only an atom or a binary can be a credential's NAME. This ran `to_string/1` on every key,
   # and a map key is any term: a `{symbol, side}` tuple, a pid or a reference has no

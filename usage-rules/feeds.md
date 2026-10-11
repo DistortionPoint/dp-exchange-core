@@ -208,6 +208,11 @@ learns it by diffing and says so with `observed: true`. **A vanished pair is not
 of a delisting**, and `Instrument` resolves unrecognised status to `:unknown`, never to
 `:tradable`.
 
+The same holds for the instrument type. `Instrument.instrument_from/1` maps a bare
+`"future"` to `:unknown`, because it may be dated or perpetual. A venue that publishes the
+expiry kind (Coinbase's `contract_expiry_type`, `PERPETUAL` or `EXPIRING`) calls
+`Instrument.instrument_from/2`, which answers `:perp` or `:future`.
+
 ## Telemetry is the other channel, and the line matters
 
 **Telemetry is measurement you aggregate. A notice is a condition you act on.**

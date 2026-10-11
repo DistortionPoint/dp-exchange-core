@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING-ish: `Instrument.instrument_from("future")` is now `:unknown`, not `:perp`.**
+  A bare `future` is dated on some venues and perpetual on others (Coinbase's
+  `product_type: "FUTURE"` covers both, told apart by `future_product_details.
+  contract_expiry_type`, `PERPETUAL` or `EXPIRING`). Calling a dated future a perpetual was a
+  nearby substitute. `"swap"`, `"perp"` and `"perpetual"` stay `:perp`. `instrument_type`
+  gains `:future`, and the new `Instrument.instrument_from/2` takes the type plus the venue's
+  expiry kind: `"perpetual"` gives `:perp`, `"expiring"` gives `:future`, anything else falls
+  back to `instrument_from/1`. A venue that fed Coinbase's `FUTURE` to `instrument_from/1`
+  must move to `/2` or its derivatives become `:unknown`.
+- **`Notice.new/3` refuses a credential-shaped key at any depth in `details`,** through maps,
+  lists and keyword pairs. It was top level only, so `%{headers: %{authorization: ...}}`
+  reached a public issue. A venue that nests its decoded broker payload under `details` and
+  trips this must drop or rename the key before building the notice.
+
+### Fixed
+
+- **Test waits on real timers and spawned processes use 5 s.** Every `assert_receive` in
+  `polling_feed_test.exs`, `contract_teeth_test.exs` and `fanout_test.exs` that waited 100 ms
+  to 2 s on a timer or a spawned process now waits 5 s. Waits for already-sent messages are
+  unchanged.
+
+- **`VolumeProfile.point_of_control/1` raised on a price key spelled `"NaN"` or
+  `"Infinity"`.** `Decimal.parse/1` reads both in full, so the tie-break handed a non-finite
+  `Decimal` to `Decimal.compare/2`, which raises, inside the consumer's process. Such a key is
+  now unreadable like any other non-number: it loses the tie to a real price.
+- **Conformance assertions 13, 20, 27 and 29 waited 0.5 to 2 seconds for a message** from a
+  spawned task or a fake's delivery. Those macros compile into every venue's suite, where a
+  loaded CI machine turned a slow spawn into a failure. The margin is now 5 seconds; a
+  passing run is not slower. No assertion newly fails a venue.
+
 ## [0.3.69] - 2026-10-11
 
 ### Added
@@ -45,7 +77,7 @@ an acceptable changelog line.
   allowed answers and not failures; a wrong-length batch, an unreadable batch entry, a
   `replace_order/4` refusal and an un-allowed `close_position/3` shape fail closed. A venue
   whose fake breaks on these calls will newly fail 31. Violations gain a `:minted_by` key.
-  Still 31 assertions. Written without `mix`; not run.
+  Still 31 assertions.
 - **`Order.new/1` refuses a `side`, `order_type` or `status` outside the atoms its types
   state** (`nil` still allowed: "the venue's word, or nothing"). `:canceled` or `"OPEN"` built
   and matched no branch of a consumer's `case`. No venue calls `Order.new/1`; struct
