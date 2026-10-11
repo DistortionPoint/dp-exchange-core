@@ -251,7 +251,16 @@ defmodule DpExchange.Core.AdapterContract do
     {:get_fx_rate, 3} => [:fx_pair, :at, :opts],
     {:get_financials, 3} => [:symbol, :statement_kind, :opts],
     {:create_watchlist, 3} => [:name, :symbols, :opts],
-    {:rename_account, 3} => [:account_id, :name, :opts]
+    {:rename_account, 3} => [:account_id, :name, :opts],
+    # **Found 2026-10-11 reading the table against the spec once more.** `subscribe/2`,
+    # `unsubscribe/2` and `update_symbols/2` take a LIST of symbols and were shaped by arity as
+    # `(symbol, opts)`, so every fake-driven assertion that walks the callbacks handed them a
+    # bare string; the fake raised in `Enum.map/2` and the raise was taken for an answer.
+    # `add_payment_method/2` takes a details MAP and was handed a string the same way.
+    {:subscribe, 2} => [:symbols, :opts],
+    {:unsubscribe, 2} => [:symbols, :opts],
+    {:update_symbols, 2} => [:symbols, :opts],
+    {:add_payment_method, 2} => [:payment_details, :opts]
   }
 
   @order_arg_kinds [:order_request, :order_requests, :order_changes]
@@ -300,6 +309,74 @@ defmodule DpExchange.Core.AdapterContract do
       {:ok, shape} -> shape
       :error -> Map.get(@arg_shapes, {kind, arity}, List.duplicate(:opts, arity))
     end
+  end
+
+  @doc """
+  What is wrong with a fake's answer to an endpoint its `capabilities/0` declares active,
+  or `nil` when nothing is.
+
+    * `:not_supported` — the fake answered `{:error, :not_supported}`: the declaration and the
+      behaviour disagree (assertion 12, over-declaring).
+    * `:raised` — the call raised. `{:raised, error}` is how the suite's `call_on/3` reports
+      it. A raise is not an answer, and treating it as one let a fake that crashed on every
+      endpoint pass "does not answer :not_supported".
+
+  Any other answer, refusals and errors included, is not this check's business.
+  """
+  @spec active_endpoint_fault(term()) :: nil | :not_supported | :raised
+  def active_endpoint_fault({:error, :not_supported}), do: :not_supported
+  def active_endpoint_fault({:raised, _error}), do: :raised
+  def active_endpoint_fault(_answer), do: nil
+
+  @doc """
+  Whether `result` is a success that gave assertion 5 a struct to check: `{:ok, struct}` or
+  `{:ok, [struct | _]}`.
+
+  Assertion 5 takes a refusal, an error and an empty list as "not a success, so nothing to
+  compare", which is right for each answer alone. Across a whole fake it is not: a fake that
+  refused every endpoint (a missing `endpoint_opts:`) or returned `{:ok, []}` everywhere
+  passed the group having compared nothing. The group requires at least one answer for which
+  this is `true`.
+  """
+  @spec struct_answer?(term()) :: boolean()
+  def struct_answer?({:ok, %_struct{}}), do: true
+  def struct_answer?({:ok, [%_struct{} | _rest]}), do: true
+  def struct_answer?(_result), do: false
+
+  # `test_connection/2` and `get_rate_limit_status/2` are the only two name-based exemptions
+  # from assertion 17, and both for the same reason: their own callback doc types the
+  # credential `credentials() | nil`. The contract, not a venue's choice, says a missing
+  # credential is an expected input there, because both mean "can I reach the venue at all"
+  # rather than "give me this venue's data". A denylist of two, not an allowlist of what to
+  # check, so it cannot rot into a list nobody updates.
+  @credential_gate_exempt ~w(test_connection get_rate_limit_status)a
+
+  @doc """
+  The endpoints assertion 17 asks a `credential_benefit: :required` venue's fake to refuse
+  when called with credentials stripped.
+
+  Every facade callback that is **answerable** (not `child_spec/1` or `start_link/1`, which
+  start something), **active** in `caps`, not one of the two whose own doc types the
+  credential `credentials() | nil`, not declared in `Capabilities.no_venue_contact`, and not
+  `market_status/1` on a venue whose `asset_classes` are exactly `[:crypto]` (crypto trades
+  continuously, so there is no session for a credential to gate).
+
+  This is public, and the assertion calls it, so that the selection can be shown to fail:
+  the previous tests of this decision rebuilt it by hand beside the fixtures and asserted
+  what the fixtures did, so no change to the decision could break them. The assertion also
+  refuses an **empty** result, because a loop over no endpoints reports green having
+  examined none.
+  """
+  @spec credential_gated_endpoints(DpExchange.Core.Capabilities.t(), [atom()]) ::
+          [{atom(), arity()}]
+  def credential_gated_endpoints(%DpExchange.Core.Capabilities{} = caps, asset_classes) do
+    for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:callbacks),
+        name not in [:child_spec, :start_link],
+        name not in @credential_gate_exempt,
+        not (name == :market_status and asset_classes == [:crypto]),
+        not DpExchange.Core.Capabilities.no_venue_contact?(caps, {name, arity}),
+        DpExchange.Core.Capabilities.active?(caps, {name, arity}),
+        do: {name, arity}
   end
 
   @doc """
@@ -395,6 +472,7 @@ defmodule DpExchange.Core.AdapterContract do
       identity(),
       symbol_round_trip(opts),
       agreement(),
+      agreement_active(),
       both_endpoints(),
       coverage_routes(),
       coverage_by_kind(),
@@ -417,12 +495,14 @@ defmodule DpExchange.Core.AdapterContract do
       lower_case_subscription(),
       fake_round_trip(),
       return_types(),
+      return_type_helpers(),
       helpers(),
       arg_helpers(),
       subscription_set_helpers(),
       credential_gate_helpers(),
       order_arg_helpers(),
       value_arg_helpers(),
+      value_arg_more_helpers(),
       process_helpers(),
       process_walk_helpers()
     ]
@@ -844,7 +924,15 @@ defmodule DpExchange.Core.AdapterContract do
                      "{:error, :not_supported} — the atom, never the string"
           end
         end
+      end
+    end
+  end
 
+  # The second half of group 12, apart from `agreement/0` so neither quoted block passes
+  # credo's length ceiling.
+  defp agreement_active do
+    quote location: :keep do
+      describe "12. capabilities and behaviour agree — active endpoints" do
         test "an active endpoint does not answer :not_supported" do
           # Under-declaring hides working functionality; over-declaring fails in the
           # caller's hands. Only checking one direction leaves the other open.
@@ -870,13 +958,42 @@ defmodule DpExchange.Core.AdapterContract do
           # default and invisible to the old enumeration regardless — under-declaring by
           # silence passed the exact check that catches under-declaring by a wrong value.
           # See `DpExchange.Core.ContractTeethTest`'s `Broken.SilentlyUnsupported`.
+          # An `@optional_callbacks` entry the fake does not define at all is not a raise to
+          # report: leaving it out is what "optional" allows (see `Venue`'s moduledoc).
+          optional = Venue.behaviour_info(:optional_callbacks)
+          Code.ensure_loaded(@fake)
+
           for endpoint <- Venue.behaviour_info(:callbacks),
               answerable?(endpoint),
-              Capabilities.active?(caps, endpoint) do
-            refute call_on(@fake, endpoint) == {:error, :not_supported},
-                   "#{inspect(endpoint)} is active (declared, or by the undeclared-is-" <>
-                     "experimental default) but the fake answered :not_supported — the " <>
-                     "fake and the declaration disagree"
+              Capabilities.active?(caps, endpoint),
+              endpoint not in optional or
+                function_exported?(@fake, elem(endpoint, 0), elem(endpoint, 1)) do
+            result = call_on(@fake, endpoint)
+
+            # A raise is not an answer. `call_on/3` returns it as `{:raised, error}`, which
+            # is `!= {:error, :not_supported}`, so a fake that crashed on an active
+            # endpoint used to pass this check for the wrong reason (the same hole assertion
+            # 5's `wrong_type/2` closes for struct-typed callbacks). The decision is
+            # `AdapterContract.active_endpoint_fault/1`, public so it can be shown to fail.
+            case DpExchange.Core.AdapterContract.active_endpoint_fault(result) do
+              nil ->
+                :ok
+
+              :not_supported ->
+                flunk(
+                  "#{inspect(endpoint)} is active (declared, or by the undeclared-is-" <>
+                    "experimental default) but the fake answered :not_supported — the " <>
+                    "fake and the declaration disagree"
+                )
+
+              :raised ->
+                flunk(
+                  "#{inspect(endpoint)} is active but the fake RAISED instead of " <>
+                    "answering: #{inspect(result, limit: 8)}. A raise is not a " <>
+                    "{:error, _} — if the call needs an option, declare it in " <>
+                    "`endpoint_opts:`; if the venue cannot serve it, declare it :unsupported"
+                )
+            end
           end
         end
 
@@ -1602,7 +1719,7 @@ defmodule DpExchange.Core.AdapterContract do
           #
           # `answerable?/1` drops `child_spec/1` and `start_link/1` — calling `start_link`
           # on even a FAKE could start a real process, which no assertion in this suite
-          # should ever risk. `@credential_gate_exempt` (`credential_gate_helpers/0`)
+          # should ever risk. `credential_gated_endpoints/2` (the same drop, kept there)
           # drops exactly two more: `test_connection/2` and `get_rate_limit_status/2`,
           # because their OWN callback doc types the credential `credentials() | nil` —
           # the contract itself, not a venue's choice, says a missing credential is
@@ -1640,7 +1757,7 @@ defmodule DpExchange.Core.AdapterContract do
           # broker-tier credential this contract's `credentials()` does not model — out
           # of reach regardless of what any caller supplies.
           #
-          # `market_status_crypto_exempt?/2` (`credential_gate_helpers/0`) is that
+          # The `market_status/1` clause of `credential_gated_endpoints/2` is that
           # narrower exemption, skipped only when `@venue.asset_classes() == [:crypto]`.
           # Webull serves five asset classes and does not qualify — its `market_status/1`
           # is checked like any other endpoint, and it satisfies the check by declaring
@@ -1654,7 +1771,7 @@ defmodule DpExchange.Core.AdapterContract do
           #
           # ## `get_fees/2`, and `Capabilities.no_venue_contact` (2026-09-07)
           #
-          # `market_status_crypto_exempt?/2` above is grounded in a per-VENUE fact (the
+          # The `market_status/1` exemption above is grounded in a per-VENUE fact (the
           # asset class serves no session for a credential to gate). This one is
           # grounded in a per-ENDPOINT fact that no asset-class or venue-identity
           # predicate can express: `dp_exchange_webull`'s `get_fees/2` answers a flat
@@ -1677,29 +1794,9 @@ defmodule DpExchange.Core.AdapterContract do
           # does not. This assertion trusts the declaration; it is the venue's
           # moduledoc and code review that keep it honest, the same trust this suite
           # already places in `credential_benefit` itself.
-          caps = @venue.capabilities()
-
-          if caps.credential_benefit == :required do
-            assert @fake,
-                   "pass `fake:` to run this assertion. It never dials out — only the " <>
-                     "fake is called — but it needs the venue's in-process fake to " <>
-                     "call against."
-
-            for {name, arity} <- Venue.behaviour_info(:callbacks),
-                answerable?({name, arity}),
-                credential_gated?(name),
-                not market_status_crypto_exempt?(name, @venue),
-                not Capabilities.no_venue_contact?(caps, {name, arity}),
-                Capabilities.active?(caps, {name, arity}) do
-              args = stripped_credential_args(name, arity)
-
-              refute match?({:ok, _}, call_on(@fake, {name, arity}, args)),
-                     "#{inspect({name, arity})} answered {:ok, _} with credentials " <>
-                       "stripped, but #{inspect(@venue)} declares credential_benefit: " <>
-                       ":required — a fake that succeeds without credentials certifies " <>
-                       "consumer code that forgot to supply them"
-            end
-          end
+          # The body is `assert_credential_gate/2` (`credential_gate_helpers/0`), apart so
+          # this quoted block stays under credo's length ceiling.
+          assert_credential_gate(@venue, @fake)
         end
       end
     end
@@ -2293,10 +2390,28 @@ defmodule DpExchange.Core.AdapterContract do
       defp assert_promised_types(fake, venue) do
         caps = venue.capabilities()
 
-        violations =
+        answers =
           for {{name, arity}, modules} <- DpExchange.Core.AdapterContract.promised_types(),
-              Capabilities.active?(caps, {name, arity}),
-              result = call_on(fake, {name, arity}, endpoint_args(name, arity)),
+              Capabilities.active?(caps, {name, arity}) do
+            result = call_on(fake, {name, arity}, endpoint_args(name, arity))
+            {name, arity, modules, result}
+          end
+
+        # **A group whose every active endpoint was refused checked no struct at all**, and
+        # `wrong_type/2` takes a refusal as "not a success, so nothing to compare". A fake
+        # refusing everything (a missing `endpoint_opts:`) therefore passed this group.
+        assert answers == [] or
+                 Enum.any?(answers, fn {_name, _arity, _modules, result} ->
+                   DpExchange.Core.AdapterContract.struct_answer?(result)
+                 end),
+               "every active endpoint that promises a Core.Types struct was refused, failed " <>
+                 "or answered an empty list, so no struct was checked and this group passes " <>
+                 "for having looked at nothing. Declare what the fake needs in " <>
+                 "`endpoint_opts:`, or give its fixture a row. Answers: " <>
+                 inspect(Enum.map(answers, fn {n, a, _m, r} -> {n, a, elem_tag(r)} end))
+
+        violations =
+          for {name, arity, modules, result} <- answers,
               violation = wrong_type(result, modules),
               violation != nil do
             "  #{name}/#{arity} promises #{inspect(modules)} and answered #{violation}"
@@ -2307,6 +2422,15 @@ defmodule DpExchange.Core.AdapterContract do
                  "consumer matching the struct, or reading its fields, breaks on this venue " <>
                  "only:\n" <> Enum.join(violations, "\n")
       end
+    end
+  end
+
+  # What assertion 5 makes of one answer, apart from `return_types/0` so neither quoted
+  # block passes credo's complexity ceiling.
+  defp return_type_helpers do
+    quote location: :keep do
+      defp elem_tag(result) when is_tuple(result), do: elem(result, 0)
+      defp elem_tag(_result), do: :other
 
       defp wrong_type({:ok, %module{}}, modules),
         do: if(module in modules, do: nil, else: inspect(module))
@@ -2811,6 +2935,7 @@ defmodule DpExchange.Core.AdapterContract do
                   :statement_kind,
                   :name,
                   :symbols,
+                  :payment_details,
                   :account_id
                 ],
            do: value_arg(kind)
@@ -2891,41 +3016,66 @@ defmodule DpExchange.Core.AdapterContract do
       defp value_arg(:address), do: "contract-address"
       defp value_arg(:fx_pair), do: "EUR-USD"
       defp value_arg(:at), do: ~U[2026-01-02 15:00:00Z]
+    end
+  end
+
+  # The rest of `value_arg/1`'s clauses, apart so neither block passes credo's complexity
+  # ceiling. Same function, same order: `__using__/1` expands the two blocks adjacently.
+  defp value_arg_more_helpers do
+    quote location: :keep do
       defp value_arg(:statement_kind), do: :income
       defp value_arg(:name), do: "contract-name"
       defp value_arg(:symbols), do: [sample_symbol()]
+      defp value_arg(:payment_details), do: %{"type" => "bank", "name" => "contract-method"}
       defp value_arg(:account_id), do: "contract-account-1"
     end
   end
 
   defp credential_gate_helpers do
     quote location: :keep do
-      # `test_connection/2` and `get_rate_limit_status/2` are the only two exemptions,
-      # and both for the same reason: their own callback doc explicitly types the
-      # credential `credentials() | nil` — the CONTRACT itself, not a venue's
-      # implementation choice, says a missing credential is an expected input, because
-      # both mean "can I reach the venue at all" rather than "give me this venue's
-      # data". Nothing else in the behaviour has that property in its type. This is a
-      # denylist of two, not an allowlist of what to check — see "17. credential gate"'s
-      # own comment for why that direction is the one that does not rot.
-      @credential_gate_exempt ~w(test_connection get_rate_limit_status)a
+      defp assert_credential_gate(venue, fake) do
+        caps = venue.capabilities()
 
-      defp credential_gated?(name), do: name not in @credential_gate_exempt
+        if caps.credential_benefit == :required do
+          assert fake,
+                 "pass `fake:` to run this assertion. It never dials out — only the " <>
+                   "fake is called — but it needs the venue's in-process fake to " <>
+                   "call against."
 
-      # `market_status/1`'s own doc makes an unconditional claim for exactly one class of
-      # venue — "crypto venues answer `:open`" — because crypto has no exchange-mandated
-      # trading session for a credential to gate. That is a different claim from
-      # `test_connection/2`/`get_rate_limit_status/2`'s `credentials() | nil` typing, so
-      # it is not folded into `@credential_gate_exempt` above: `dp_exchange_schwab`'s
-      # real `market_status/1` is itself authenticated, and a name-based exemption would
-      # silence assertion 17's protection there to accommodate venues where this callback
-      # never touches the venue at all. Scoped instead to exactly the venues the doc's
-      # claim is actually about — see "17. credential gate"'s own comment for the full
-      # argument.
-      defp market_status_crypto_exempt?(:market_status, venue),
-        do: venue.asset_classes() == [:crypto]
+          # The selection is `AdapterContract.credential_gated_endpoints/2`, public so the
+          # decision itself can be shown to fail. See its doc for the exemptions.
+          gated =
+            DpExchange.Core.AdapterContract.credential_gated_endpoints(
+              caps,
+              venue.asset_classes()
+            )
 
-      defp market_status_crypto_exempt?(_name, _venue), do: false
+          # A loop over nothing passes: a venue that is `:required` and exempts or declares
+          # away ALL of its endpoints has had this assertion examine none.
+          assert gated != [],
+                 "#{inspect(venue)} declares credential_benefit: :required but no active " <>
+                   "endpoint is left for the credential gate to check, so it passes having " <>
+                   "checked nothing. Declare at least one credentialed endpoint active."
+
+          for {name, arity} <- gated do
+            args = stripped_credential_args(name, arity)
+
+            refute match?({:ok, _}, call_on(fake, {name, arity}, args)),
+                   "#{inspect({name, arity})} answered {:ok, _} with credentials " <>
+                     "stripped, but #{inspect(venue)} declares credential_benefit: " <>
+                     ":required — a fake that succeeds without credentials certifies " <>
+                     "consumer code that forgot to supply them"
+          end
+        end
+      end
+
+      # The selection of WHICH endpoints are gated (the two `credentials() | nil` callbacks, a
+      # crypto-only `market_status/1`, `no_venue_contact`) is
+      # `AdapterContract.credential_gated_endpoints/2`. `market_status/1`'s own doc claims
+      # "crypto venues answer `:open`" because crypto has no session for a credential to
+      # gate; that is scoped to `asset_classes() == [:crypto]` rather than folded into the
+      # name exemptions, so `dp_exchange_schwab`'s authenticated `market_status/1` stays
+      # covered.
 
       # The same shape `endpoint_args/2` builds, with every credential position
       # emptied — positional where the venue's arg shape carries one (`@credentialed`,

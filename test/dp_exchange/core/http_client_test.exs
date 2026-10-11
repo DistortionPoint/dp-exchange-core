@@ -1340,5 +1340,34 @@ defmodule DpExchange.Core.HttpClientTest do
       assert metadata.status == nil
       assert metadata.result == :exception
     end
+
+    test "a transport that exits is an error tuple and an :exception event, not an exit" do
+      use_stub()
+      provider = "exit-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-exit-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:exit_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:error, {:exchange_error, ^provider, "Request exception: " <> _rest}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 provider: provider,
+                 plug: fn _conn -> exit(:transport_gone) end,
+                 retry_attempts: 1
+               )
+
+      assert_received {:exit_event, metadata}
+      assert metadata.kind == :exit
+      assert metadata.result == :exception
+    end
   end
 end

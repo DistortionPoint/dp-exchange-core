@@ -21,6 +21,49 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Core.PollingFeed` no longer crashes when its failure reason holds a credential-shaped
+  key.** 0.3.7x made `Notice.new/3` refuse a credential-shaped key at any depth of `details`,
+  and the delivering-nothing notice put the fetch's raw `{:error, reason}` into
+  `details.last_error`. A decoded venue error body keyed `"signature"` or `"token"` (an
+  ordinary 401 shape), or a `{:bad_fetch_result, answer}` holding one, therefore raised
+  `ArgumentError` out of `record_failure/3` inside the feed, which restarted from its static
+  start opts and lost every `update_symbols/2` scope, on the exact path that reports an
+  outage. A scalar reason (atom, string, number) travels as it was; anything structured is
+  carried as bounded text (`inspect/2`, `limit: 20`, `printable_limit: 512`). `status/1`'s
+  `last_error` is unchanged and still the raw term.
+- **`Core.HttpClient` catches an `exit` from the transport.** Only a raise was caught, so a
+  pool-checkout timeout or a transport process that was not running exited the CALLING venue
+  process and skipped `[:dp_exchange, :request, :exception]`. It is now
+  `{:error, "Request exception: ..."}` (wrapped in `{:exchange_error, provider, _}` when
+  `:provider` is given), reported with `kind: :exit`.
+- **`Core.Fanout.resolve/1` and `deliver/4` treat a name registered to a port as nobody.**
+  `Process.whereis/1` answers a port for such a name and `Process.info/2` raised on it inside
+  the feed fanning out to every other subscriber.
+
+### Changed
+
+- **`AdapterContract` assertions that could pass having checked nothing now fail.**
+  - Assertion 5 requires at least one active struct-typed endpoint to have answered with a
+    struct (or a non-empty list of them). A fake refusing every endpoint, or answering
+    `{:ok, []}` everywhere, passed having compared nothing.
+  - Assertion 12 ("an active endpoint does not answer `:not_supported`") also fails when the
+    fake RAISES. A raise is `!= {:error, :not_supported}`, so a fake crashing on every
+    endpoint passed. **BREAKING ONLY FOR A FAKE THAT RAISES on a call the suite makes**; the
+    call shapes below are corrected so a conforming fake is not caught by them.
+  - Assertion 17 refuses an empty selection: a `credential_benefit: :required` venue with no
+    endpoint left to check (all exempt or declared away) passed having examined none.
+  - `subscribe/2`, `unsubscribe/2` and `update_symbols/2` are now called with a list of
+    symbols and `add_payment_method/2` with a details map. By arity alone they were handed a
+    bare symbol string, so a fake raised in `Enum.map/2` or `Map.merge/2` and the raise was
+    taken for an answer.
+- **New public decisions, so the teeth tests exercise the suite and not a copy of it:**
+  `AdapterContract.credential_gated_endpoints/2` (assertion 17's selection),
+  `active_endpoint_fault/1` (assertion 12) and `struct_answer?/1` (assertion 5). The earlier
+  `ContractTeethTest` cases for these called the broken fixture and asserted what the fixture
+  did, so no change to the suite could fail them.
+
 ## [0.3.75] - 2026-10-11
 
 ### Changed

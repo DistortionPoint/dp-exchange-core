@@ -1070,6 +1070,27 @@ defmodule DpExchange.Core.PollingFeedTest do
       refute_receive {:notice, _}, 200
     end
 
+    test "a failure reason holding a credential-shaped key is carried as text, not a crash" do
+      # `Notice.new/3` refuses a credential-shaped key at any depth. A decoded venue error
+      # body keyed "token" or "signature" reached it raw and raised inside the feed.
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn symbol ->
+            send(test, {:attempt, symbol})
+            {:error, %{"signature" => "should-not-travel", "message" => "bad"}}
+          end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, notice}, 5_000
+      assert is_binary(notice.details.last_error)
+      assert Process.alive?(pid)
+      assert PollingFeed.status(pid).failures_since_ok >= 1
+    end
+
     test "emits a recovery notice, distinct from the dead one, when the feed resumes delivering" do
       test = self()
       counter = :counters.new(1, [])

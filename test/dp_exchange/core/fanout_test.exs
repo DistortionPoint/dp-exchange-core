@@ -257,6 +257,17 @@ defmodule DpExchange.Core.FanoutTest do
       assert queue_len(subscriber) == 1
     end
 
+    test "a name a port is registered under is nobody, not a crash in deliver/4" do
+      name = :"fanout_port_name_#{System.unique_integer([:positive])}"
+      port = Port.open({:spawn, "cat"}, [:binary])
+      # Linked to this test process, which closes it when the test ends.
+      Process.register(port, name)
+
+      assert Fanout.resolve(name) == nil
+      assert {0, dropping, []} = Fanout.deliver([name], :payload, MapSet.new())
+      assert Enum.empty?(dropping)
+    end
+
     test "a name nothing answers to resolves to nil" do
       assert Fanout.resolve(:no_process_answers_to_this_name) == nil
     end

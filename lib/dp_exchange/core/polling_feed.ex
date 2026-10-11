@@ -951,7 +951,11 @@ defmodule DpExchange.Core.PollingFeed do
       Notice.new(:coverage_change, state.provider,
         severity: :warning,
         message: "#{state.label} has delivered nothing in #{failures} consecutive attempts",
-        details: %{label: state.label, consecutive_failures: failures, last_error: reason}
+        details: %{
+          label: state.label,
+          consecutive_failures: failures,
+          last_error: notice_reason(reason)
+        }
       )
 
     guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
@@ -960,6 +964,21 @@ defmodule DpExchange.Core.PollingFeed do
     Telemetry.link_down(state.provider, inspect(reason, limit: 20, printable_limit: 512))
     %{state | notice_state: :dead}
   end
+
+  # **What a fetch's failure reason becomes inside a notice's `details`.** `Notice.new/3`
+  # refuses a credential-shaped key at ANY depth (a credential nested in a payload reaches a
+  # public issue as surely as a top-level one), and a fetch's `{:error, reason}` is whatever
+  # the venue or the caller's decoder produced: a `{:bad_fetch_result, answer}` or a decoded
+  # error body keyed `"signature"` or `"token"` is an ordinary 401 shape. Passed through
+  # raw, that raised `ArgumentError` out of `record_failure/3` inside this GenServer, which
+  # restarted it from its static start opts and lost every `update_symbols/2` scope, on the
+  # exact path that exists to report an outage. A scalar reason (an atom, a string, a number)
+  # has no keys and travels as it was; anything structured is carried as bounded text, the
+  # same shape `Telemetry.link_down/2` already sends for it.
+  defp notice_reason(reason) when is_atom(reason) or is_number(reason), do: reason
+  defp notice_reason(reason) when is_binary(reason), do: reason
+
+  defp notice_reason(reason), do: inspect(reason, limit: 20, printable_limit: 512)
 
   # How stale the newest success may be before the feed counts as delivering
   # nothing. Generous against the slowest interval in the fleet so an ordinary

@@ -499,7 +499,7 @@ Two things it deliberately does **not** do:
   mechanism rather than reusing either of the first two: it is not exempt by name (a
   `:credentialed`-style list, correctly retired for rotting), and it is not exempt by
   asset class (`get_fees/2` answers a flat crypto spread even though this venue is not
-  crypto-only, so `market_status_crypto_exempt?/2`'s ground does not apply). What
+  crypto-only, so `credential_gated_endpoints/2`'s crypto-only `market_status/1` ground does not apply). What
   actually distinguishes it is a fact about the ENDPOINT, not the venue: it answers a
   rate captured from Webull's own published pricing and never builds a request, so no
   credential could change what it returns. `Capabilities.no_venue_contact` names that

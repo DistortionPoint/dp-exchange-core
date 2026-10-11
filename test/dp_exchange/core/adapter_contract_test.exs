@@ -190,6 +190,39 @@ defmodule DpExchange.Core.AdapterContractTest do
       assert shape.(:get_financials, 3, false) == [:symbol, :statement_kind, :opts]
     end
 
+    test "the streaming calls take a list of symbols and add_payment_method/2 a map" do
+      # By arity alone each was handed a bare symbol string, the fake raised in `Enum.map/2`
+      # or `Map.merge/2`, and assertion 12 accepted the raise as an answer.
+      shape = &DpExchange.Core.AdapterContract.arg_shape/3
+
+      for name <- ~w(subscribe unsubscribe update_symbols)a do
+        assert shape.(name, 2, false) == [:symbols, :opts]
+      end
+
+      assert shape.(:add_payment_method, 2, false) == [:payment_details, :opts]
+    end
+
+    test "struct_answer?/1 is true only for a success that holds a struct to compare" do
+      check = &DpExchange.Core.AdapterContract.struct_answer?/1
+
+      top = %DpExchange.Core.Types.TopOfBook{
+        symbol: "BTC-USD",
+        observed_at: ~U[2026-10-11 12:00:00Z],
+        provider: :contract_test
+      }
+
+      assert check.({:ok, top})
+      assert check.({:ok, [top]})
+
+      refute check.({:ok, []})
+      refute check.({:ok, %{raw: "map"}})
+      refute check.({:error, :timeout})
+      refute check.({:refused, :not_listed})
+      refute check.({:raised, %ArgumentError{}})
+      refute check.({:exit, :boom})
+      refute check.(:ok)
+    end
+
     test "every callback's shape has exactly its arity" do
       credentialed = DpExchange.Core.AdapterContract.credentialed_callbacks()
 

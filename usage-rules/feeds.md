@@ -309,7 +309,11 @@ function, same shape as `:on_refusal`, called with a `%Core.Notice{kind: :covera
 the instant the feed crosses INTO delivering-nothing, and a second, `severity: :info`
 notice the instant it crosses back OUT. It fires once per transition — not once per failed
 fetch and not once per sweep while an outage continues — so a 342-symbol feed retrying
-every symbol every cycle does not turn one outage into a notice storm. `:on_notice`
+every symbol every cycle does not turn one outage into a notice storm. The dead notice's
+`details.last_error` is the failure reason as it was when it is an atom, a string or a number,
+and bounded text (`inspect/2`) when it is anything structured, because a notice refuses a
+credential-shaped key at any depth and a venue's decoded error body can hold one; `status/1`
+still returns the raw term. `:on_notice`
 defaults to a no-op: a venue that has not wired it to its own `subscribe_notices/1`
 fanout yet still gets a working feed, not a crash.
 

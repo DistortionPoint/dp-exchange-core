@@ -225,7 +225,7 @@ defmodule DpExchange.Core.Fanout do
     if Process.alive?(pid), do: pid
   end
 
-  def resolve(name) when is_atom(name), do: Process.whereis(name)
+  def resolve(name) when is_atom(name), do: registered_pid(name)
 
   @typedoc """
   Monitor references for subscribers that are raw pids, keyed by pid.
@@ -390,7 +390,17 @@ defmodule DpExchange.Core.Fanout do
   # `resolve/1` itself is unchanged and still public: a venue's notice path has no second
   # call to lean on, and the two must agree on what counts as reachable.
   defp delivery_pid(pid) when is_pid(pid), do: pid
-  defp delivery_pid(name) when is_atom(name), do: Process.whereis(name)
+  defp delivery_pid(name) when is_atom(name), do: registered_pid(name)
+
+  # `Process.whereis/1` answers a port for a name a port is registered under. `Process.info/2`
+  # raises on one, inside the feed that is fanning out to every other subscriber, so a name that
+  # is not held by a process is the same answer as a name nothing holds: nobody to send to.
+  defp registered_pid(name) do
+    case Process.whereis(name) do
+      pid when is_pid(pid) -> pid
+      _port_or_nil -> nil
+    end
+  end
 
   # **Hysteresis: a subscriber being dropped resumes only below half the bound.** It used to
   # resume the moment its queue was one under `max`. A consumer hovering at the bound then

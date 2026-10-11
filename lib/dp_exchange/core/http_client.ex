@@ -856,6 +856,22 @@ defmodule DpExchange.Core.HttpClient do
         )
 
         {:error, "Request exception: #{inspect(error)}"}
+    catch
+      # **An exit is not a raise, and `rescue` does not see it.** A pool checkout that times
+      # out, a transport process that is not running, or a linked process dying all leave the
+      # transport with `exit/1`. It passed through here, skipped the `:exception` event and
+      # exited the CALLING venue process, which this library does not supervise, in place of
+      # the `{:error, _}` every other transport failure becomes. Reported with `kind: :exit`.
+      :exit, reason ->
+        Telemetry.request_exception(start_time, metadata,
+          kind: :exit,
+          reason: inspect(reason),
+          stacktrace: __STACKTRACE__,
+          status: nil,
+          result: :exception
+        )
+
+        {:error, "Request exception: #{inspect(reason)}"}
     end
   end
 

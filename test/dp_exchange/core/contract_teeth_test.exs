@@ -399,7 +399,14 @@ end
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{Capabilities, ReferenceVenue, UnwiredCheck, UnwiredFixture, Venue}
+  alias DpExchange.Core.{
+    AdapterContract,
+    Capabilities,
+    ReferenceVenue,
+    UnwiredCheck,
+    UnwiredFixture,
+    Venue
+  }
 
   describe "assertion 12 catches both directions of disagreement" do
     test "over-declaring is caught" do
@@ -410,6 +417,22 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert Broken.OverDeclares.get_transfers(%{}, []) == {:error, :not_supported},
              "declared active, answers not_supported — the suite must reject this"
+
+      # The decision the suite makes about that answer, not only the fixture's own.
+      assert AdapterContract.active_endpoint_fault(Broken.OverDeclares.get_transfers(%{}, [])) ==
+               :not_supported
+    end
+
+    test "a fake that RAISES on an active endpoint is caught, and refusals are not" do
+      # `call_on/3` reports a raise as `{:raised, error}`; that is not `{:error, :not_supported}`
+      # so the old `refute result == {:error, :not_supported}` passed it.
+      assert AdapterContract.active_endpoint_fault({:raised, %ArgumentError{}}) == :raised
+
+      assert AdapterContract.active_endpoint_fault({:error, :not_supported}) == :not_supported
+      assert AdapterContract.active_endpoint_fault({:error, "not_supported"}) == nil
+      assert AdapterContract.active_endpoint_fault({:refused, :not_listed}) == nil
+      assert AdapterContract.active_endpoint_fault({:ok, []}) == nil
+      assert AdapterContract.active_endpoint_fault(:ok) == nil
     end
 
     test "under-declaring is caught" do
@@ -704,11 +727,7 @@ defmodule DpExchange.Core.ContractTeethTest do
       caps = Broken.CredentialGate.NeverChecks.capabilities()
       assert caps.credential_benefit == :required
 
-      gated_and_active =
-        for {name, arity} <- Venue.behaviour_info(:callbacks),
-            name in @credential_gated,
-            Capabilities.active?(caps, {name, arity}),
-            do: {name, arity}
+      gated_and_active = AdapterContract.credential_gated_endpoints(caps, [:equity])
 
       assert {:get_balances, 2} in gated_and_active
 
@@ -742,6 +761,17 @@ defmodule DpExchange.Core.ContractTeethTest do
       # documented behaviour, not the defect this assertion exists to catch.
       refute :test_connection in @credential_gated
 
+      # And the decision itself, which is what the suite calls: neither `credentials() | nil`
+      # callback is ever selected, on any venue, however it declares them.
+      all_active = Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+      selected = AdapterContract.credential_gated_endpoints(all_active, [:equity])
+
+      refute Enum.any?(selected, fn {name, _arity} ->
+               name in [:test_connection, :get_rate_limit_status, :child_spec, :start_link]
+             end)
+
+      assert {:get_balances, 2} in selected
+
       assert match?(
                {:ok, _},
                Broken.CredentialGate.Conforming.test_connection(nil, [])
@@ -759,6 +789,11 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert caps.credential_benefit == :required
       assert venue.asset_classes() == [:crypto]
 
+      refute {:market_status, 1} in AdapterContract.credential_gated_endpoints(
+               caps,
+               venue.asset_classes()
+             )
+
       assert match?({:ok, _}, venue.market_status(credentials: %{})),
              "a crypto-only venue answers :open with no credential by design — the " <>
                "gate must not flag this callback here"
@@ -770,6 +805,11 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert caps.credential_benefit == :required
       assert venue.asset_classes() != [:crypto]
+
+      assert {:market_status, 1} in AdapterContract.credential_gated_endpoints(
+               caps,
+               venue.asset_classes()
+             )
 
       assert match?({:ok, _}, venue.market_status(credentials: %{})),
              "this fixture answers :ok with stripped credentials on purpose — a venue " <>
@@ -787,6 +827,8 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert caps.credential_benefit == :required
       assert Capabilities.no_venue_contact?(caps, {:get_fees, 2})
 
+      refute {:get_fees, 2} in AdapterContract.credential_gated_endpoints(caps, [:equity])
+
       assert match?({:ok, _}, venue.get_fees(%{}, [])),
              "an endpoint declared no_venue_contact answers a captured or locally " <>
                "computed value with no credential by design — the gate must not flag " <>
@@ -799,6 +841,8 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert caps.credential_benefit == :required
       refute Capabilities.no_venue_contact?(caps, {:get_fees, 2})
+
+      assert {:get_fees, 2} in AdapterContract.credential_gated_endpoints(caps, [:equity])
 
       assert match?({:ok, _}, venue.get_fees(%{}, [])),
              "this fixture answers :ok with stripped credentials on purpose — with no " <>
