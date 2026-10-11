@@ -314,6 +314,12 @@ defmodule DpExchange.Core.Telemetry do
   venue present and future, and "none of them do that yet" is not a property a consumer's
   log retention should depend on. Truncated at 200 characters so an unusually long path
   cannot turn a metrics label into a memory problem.
+
+  `user:pass@` is removed too, and it fails toward not leaking: the authority is everything
+  after `://` up to the first `/` (or the end), and anything up to its last `@` is dropped.
+  A URL with no path and an `@` in its query, such as `https://host?email=a@b`, therefore
+  loses its host label (`https://b`). That is accepted over the alternative of leaking the
+  front of a password that contains a raw `?` or `#`.
   """
   @spec endpoint(String.t()) :: String.t()
   def endpoint(url) when is_binary(url) do
@@ -321,10 +327,25 @@ defmodule DpExchange.Core.Telemetry do
     # credential written into the URL itself, the one place a query-only strip missed.
     # `[^/]*@` is greedy on purpose: a password holding a raw `@` (`user:p@ss@host`) must be
     # stripped to the LAST `@` of the authority, or `ss@` is left in the metric label.
+    #
+    # Userinfo is stripped BEFORE the query and fragment are dropped. The other order left
+    # the front of a password holding a raw `?` or `#` (`user:p?ss@host`) in the label. The
+    # authority is everything after `://` up to the first `/`, and everything up to its last
+    # `@` goes.
     url
+    |> strip_userinfo()
     |> String.split(["?", "#"], parts: 2)
     |> List.first()
-    |> String.replace(~r{^([a-z][a-z0-9+.-]*://)[^/]*@}i, "\\1")
     |> String.slice(0, 200)
+  end
+
+  defp strip_userinfo(url) do
+    case Regex.run(~r{^([a-z][a-z0-9+.-]*://)([^/]*)(.*)$}is, url) do
+      [_whole, scheme, authority, rest] ->
+        scheme <> (authority |> String.split("@") |> List.last()) <> rest
+
+      nil ->
+        url
+    end
   end
 end

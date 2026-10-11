@@ -44,6 +44,7 @@ defmodule DpExchange.Core.Types.StakingTransaction do
     :provider
   ]
 
+  @types [:stake, :unstake, :reward, :other]
   @type transaction_type :: :stake | :unstake | :reward | :other
 
   @type t :: %__MODULE__{
@@ -65,7 +66,11 @@ defmodule DpExchange.Core.Types.StakingTransaction do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:type, @types)
+  end
 
   @doc """
   Whether a redemption has fully paid out.

@@ -182,6 +182,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
         Conversion.new(Keyword.put(@valid, :status, nil))
       end
     end
+
+    test "rejects a status outside its vocabulary" do
+      for bad <- ["quoted", :pending, :SETTLED] do
+        assert_raise ArgumentError, ~r/status/, fn ->
+          Conversion.new(Keyword.put(@valid, :status, bad))
+        end
+      end
+    end
   end
 
   describe "CorporateEvent.new/1" do
@@ -194,6 +202,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "rejects a nil kind" do
       assert_raise ArgumentError, ~r/kind/, fn ->
         CorporateEvent.new(Keyword.put(@valid, :kind, nil))
+      end
+    end
+
+    test "rejects a kind outside its vocabulary" do
+      for bad <- ["dividend", :merger] do
+        assert_raise ArgumentError, ~r/kind/, fn ->
+          CorporateEvent.new(Keyword.put(@valid, :kind, bad))
+        end
       end
     end
   end
@@ -280,6 +296,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
         FinancialStatement.new(Keyword.put(@valid, :line_items, nil))
       end
     end
+
+    test "rejects a kind outside its vocabulary" do
+      for bad <- ["income", :ratios] do
+        assert_raise ArgumentError, ~r/kind/, fn ->
+          FinancialStatement.new(Keyword.put(@valid, :kind, bad))
+        end
+      end
+    end
   end
 
   describe "Funding.new/1" do
@@ -355,6 +379,16 @@ defmodule DpExchange.Core.Types.ValidateTest do
       assert_raise ArgumentError, ~r/strike/, fn ->
         OptionContract.new(Keyword.put(@valid, :strike, nil))
       end
+    end
+
+    test "rejects a right outside :call and :put" do
+      for bad <- ["call", :CALL, :long] do
+        assert_raise ArgumentError, ~r/right/, fn ->
+          OptionContract.new(Keyword.put(@valid, :right, bad))
+        end
+      end
+
+      assert %OptionContract{right: :put} = OptionContract.new(Keyword.put(@valid, :right, :put))
     end
   end
 
@@ -623,6 +657,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
         StakingTransaction.new(Keyword.put(@valid, :type, nil))
       end
     end
+
+    test "rejects a type outside its vocabulary" do
+      for bad <- ["stake", :restake] do
+        assert_raise ArgumentError, ~r/type/, fn ->
+          StakingTransaction.new(Keyword.put(@valid, :type, bad))
+        end
+      end
+    end
   end
 
   describe "TopOfBook.new/1" do
@@ -748,6 +790,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
         Withdrawal.new(Keyword.put(@valid, :amount, nil))
       end
     end
+
+    test "rejects a status outside its vocabulary" do
+      for bad <- ["requested", :settled] do
+        assert_raise ArgumentError, ~r/status/, fn ->
+          Withdrawal.new(Keyword.put(@valid, :status, bad))
+        end
+      end
+    end
   end
 
   describe "unrepresentable values inside a level (found 2026-10-10)" do
@@ -797,6 +847,14 @@ defmodule DpExchange.Core.Types.ValidateTest do
         )
 
       assert VolumeProfile.point_of_control(profile) == "100"
+    end
+
+    test "an improper list is an ArgumentError naming the field, not a FunctionClauseError" do
+      bids = [{Decimal.new("100"), Decimal.new("1")} | :tail]
+
+      assert_raise ArgumentError, ~r/bids.*improper list/, fn ->
+        OrderBook.new(Keyword.put(@book, :bids, bids))
+      end
     end
 
     test "finite levels still build" do

@@ -144,6 +144,23 @@ defmodule DpExchange.Core.TelemetryTest do
                "https://api.test/v1/users/a@b.com"
     end
 
+    test "userinfo holding a raw ? or # leaves no part of the password behind" do
+      assert Telemetry.endpoint("https://user:p?ss@host/path") == "https://host/path"
+      assert Telemetry.endpoint("https://user:p#ss@host/x") == "https://host/x"
+    end
+
+    test "an @ in the query of a URL with a path is not userinfo" do
+      assert Telemetry.endpoint("https://host/p?email=a@b") == "https://host/p"
+    end
+
+    test "a path-less URL with an @ in its query fails toward not leaking" do
+      assert Telemetry.endpoint("https://host?email=a@b") == "https://b"
+    end
+
+    test "a relative or schemeless value is only stripped of its query" do
+      assert Telemetry.endpoint("/v1/x?token=SECRET") == "/v1/x"
+    end
+
     test "a URL with no query is unchanged" do
       assert Telemetry.endpoint("https://api.test/v1/orders") == "https://api.test/v1/orders"
     end

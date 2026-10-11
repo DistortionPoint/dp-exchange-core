@@ -50,6 +50,7 @@ defmodule DpExchange.Core.Types.Conversion do
     :provider
   ]
 
+  @statuses [:quoted, :committed, :settled, :expired, :failed, :cancelled]
   @type status :: :quoted | :committed | :settled | :expired | :failed | :cancelled
 
   @type t :: %__MODULE__{
@@ -72,7 +73,11 @@ defmodule DpExchange.Core.Types.Conversion do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:status, @statuses)
+  end
 
   @doc """
   Whether a quote has passed its stated expiry, as at `now`.

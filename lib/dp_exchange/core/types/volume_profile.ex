@@ -93,19 +93,24 @@ defmodule DpExchange.Core.Types.VolumeProfile do
         nil
 
       levels ->
-        # An explicit comparator, because `Decimal` in a sort key would be compared by
-        # Erlang term order — which orders the struct's fields, not the number. That
-        # silently returns the wrong level and looks like it worked.
+        # One pass for the best level, not a sort of all of them: a profile holds a level per
+        # tick and only the head of the sorted list was ever used. The comparison is the same
+        # order the sort used. An explicit comparator, because `Decimal` in a sort key would
+        # be compared by Erlang term order — which orders the struct's fields, not the number.
+        # That silently returns the wrong level and looks like it worked.
         levels
-        |> Enum.sort(fn {price_a, volume_a}, {price_b, volume_b} ->
-          case Decimal.compare(volume_a, volume_b) do
-            :gt -> true
-            :lt -> false
-            :eq -> lower_price?(price_a, price_b)
-          end
+        |> Enum.reduce(fn candidate, best ->
+          if better_level?(candidate, best), do: candidate, else: best
         end)
-        |> hd()
         |> elem(0)
+    end
+  end
+
+  defp better_level?({price_a, volume_a}, {price_b, volume_b}) do
+    case Decimal.compare(volume_a, volume_b) do
+      :gt -> true
+      :lt -> false
+      :eq -> lower_price?(price_a, price_b)
     end
   end
 

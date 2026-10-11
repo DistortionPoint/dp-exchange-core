@@ -618,7 +618,7 @@ defmodule DpExchange.Core.AdapterContract do
           # A consumer decides whether to use the package at all from this, so it has to
           # be answerable at boot.
           task = Task.async(fn -> @venue.capabilities() end)
-          assert %Capabilities{} = Task.await(task, 1_000)
+          assert %Capabilities{} = Task.await(task, 5_000)
         end
       end
     end

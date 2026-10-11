@@ -52,6 +52,7 @@ defmodule DpExchange.Core.Types.Withdrawal do
     :provider
   ]
 
+  @statuses [:requested, :pending, :broadcast, :completed, :cancelled, :failed]
   @type status :: :requested | :pending | :broadcast | :completed | :cancelled | :failed
 
   @type t :: %__MODULE__{
@@ -74,5 +75,9 @@ defmodule DpExchange.Core.Types.Withdrawal do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:status, @statuses)
+  end
 end

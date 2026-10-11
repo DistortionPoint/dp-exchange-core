@@ -84,9 +84,17 @@ defmodule DpExchange.Core.Types.OptionContract do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:right` that is not `:call` or `:put`. `right: "call"` or `:CALL` built
+  fine and then matched neither clause of `in_the_money?/2`, which raised in the consumer's
+  process far from the decode that produced it.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:right, [:call, :put])
+  end
 
   @doc """
   Whether the contract is in the money at `underlying_price`.

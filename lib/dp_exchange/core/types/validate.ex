@@ -152,7 +152,7 @@ defmodule DpExchange.Core.Types.Validate do
   end
 
   defp refuse_value!(module, field, values) when is_list(values),
-    do: Enum.each(values, &refuse_value!(module, field, &1))
+    do: refuse_list!(module, field, values)
 
   defp refuse_value!(module, field, value) when is_tuple(value),
     do: value |> Tuple.to_list() |> Enum.each(&refuse_value!(module, field, &1))
@@ -169,4 +169,19 @@ defmodule DpExchange.Core.Types.Validate do
   end
 
   defp refuse_value!(_module, _field, _value), do: :ok
+
+  # Walked by hand because `Enum.each/2` raises `FunctionClauseError` on an improper list,
+  # which names Enumerable and not the field a decoder built the tail of.
+  defp refuse_list!(_module, _field, []), do: :ok
+
+  defp refuse_list!(module, field, [head | tail]) do
+    refuse_value!(module, field, head)
+    refuse_list!(module, field, tail)
+  end
+
+  defp refuse_list!(module, field, _improper_tail) do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} holds an improper list — every " <>
+            "list in this family is proper, and a tail that is not a list cannot be scanned"
+  end
 end

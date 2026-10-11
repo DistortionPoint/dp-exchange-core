@@ -113,6 +113,19 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
       assert VolumeProfile.point_of_control(tied) == "24.20"
     end
 
+    test "the single-pass answer is the head of the full ordering, over many levels" do
+      # `point_of_control/1` reduces to the best level rather than sorting every level. Over
+      # a wide profile where three prices tie at the top once buys and sells are merged
+      # (buy n at "n.00", so "200.00" is 200 alone, "5.00" is 5 + 195 and "150.00" is
+      # 150 + 50), it must return what the sort did: the highest volume, the lowest price.
+      buys = for n <- 1..200, into: %{}, do: {"#{n}.00", Decimal.new(n)}
+      sells = %{"5.00" => Decimal.new("195"), "150.00" => Decimal.new("50")}
+
+      wide = profile(%{buy_at_price: buys, sell_at_price: sells})
+
+      assert VolumeProfile.point_of_control(wide) == "5.00"
+    end
+
     test "a tie spanning a digit-count boundary still returns the lower price" do
       # The case the "24.20"/"24.21" test above cannot reach. Those two have the same number
       # of digits, so text order and numeric order agree and a lexicographic comparison

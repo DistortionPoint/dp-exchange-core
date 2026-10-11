@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`OptionContract.new/1` refuses a `:right` that is not `:call` or `:put`.** BREAKING
+  ONLY FOR A VENUE THAT BUILT A CONTRACT WITH ANOTHER VALUE (`"call"`, `:CALL`, `:long`).
+  Such a value built and then raised `FunctionClauseError` from `in_the_money?/2` in the
+  consumer's process. It now raises `ArgumentError` at construction, naming the field,
+  like `Fill`, `Trade` and `Position` do for their closed vocabularies. A struct literal
+  is unaffected.
+- **`Withdrawal.new/1`, `Conversion.new/1`, `StakingTransaction.new/1`,
+  `FinancialStatement.new/1` and `CorporateEvent.new/1` refuse a value outside their closed
+  vocabulary** (`:status`, `:status`, `:type`, `:kind`, `:kind`: exactly the values in each
+  `@type`), raising `ArgumentError`. A grep of the five venue repos found no caller of `new/1`
+  on any of them (they build struct literals), so no venue is affected.
+- **`Telemetry.endpoint/1` strips userinfo before it drops the query and fragment.** A
+  password holding a raw `?` or `#` (`https://user:p?ss@host/path`) left its front in the
+  label. The authority (after `://`, up to the first `/`) now loses everything up to its last
+  `@`. A path-less URL with an `@` in its query (`https://host?email=a@b`) now loses its host
+  label (`https://b`); that is accepted in preference to leaking.
+- **`Types.Validate` raises `ArgumentError` for an improper list in a field,** naming the
+  field, instead of `FunctionClauseError` from `Enum.each/2`.
+- **Conformance assertion 2's `capabilities/0` task waits 5_000 ms, not 1_000.** The wait
+  decided pass or fail under a loaded parallel suite in every venue package.
+
+### Performance
+
+- **`Timeframe.known/0` and `nameable/0` return a list built at compile time.** Both
+  rebuilt and sorted it on every call, and `nameable?/1` runs per candle on a consumer's
+  write path. Same lists, same order.
+- **`VolumeProfile.point_of_control/1` takes the best level in one pass** instead of
+  sorting every level and reading the head. Same answer, same tie-break (highest merged
+  volume, then lowest price by value).
+
 ## [0.3.71] - 2026-10-11
 
 ### Changed

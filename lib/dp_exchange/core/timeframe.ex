@@ -85,6 +85,10 @@ defmodule DpExchange.Core.Timeframe do
     "1d" => 86_400
   }
 
+  # Computed once at compile time. `nameable?/1` runs per candle on a consumer's write path,
+  # and these used to be rebuilt and sorted on every call.
+  @known @seconds |> Map.keys() |> Enum.sort_by(&Map.fetch!(@seconds, &1))
+
   @doc """
   Width of a timeframe in seconds, or `:error` for one we do not model.
 
@@ -97,7 +101,7 @@ defmodule DpExchange.Core.Timeframe do
 
   @doc "Every timeframe with a known width, shortest first."
   @spec known() :: [String.t()]
-  def known, do: @seconds |> Map.keys() |> Enum.sort_by(&Map.fetch!(@seconds, &1))
+  def known, do: @known
 
   # Widths Core can *name* but cannot *bucket*. A weekly bar's boundary depends on which
   # weekday the venue starts its week, a month is not a fixed number of seconds, and
@@ -111,6 +115,7 @@ defmodule DpExchange.Core.Timeframe do
   # from its declaration, or not ship. Both are worse than carrying a width we can read
   # but not align.
   @unbucketable ~w(1w 1M 1y)
+  @nameable @known ++ @unbucketable
 
   @doc """
   Every timeframe Core can read as a label, shortest first, including the three it cannot
@@ -123,7 +128,7 @@ defmodule DpExchange.Core.Timeframe do
   than a reason to reject the width.
   """
   @spec nameable() :: [String.t()]
-  def nameable, do: known() ++ @unbucketable
+  def nameable, do: @nameable
 
   @doc """
   Whether Core recognises `timeframe` as a label at all.
