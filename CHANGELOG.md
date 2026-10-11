@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.69] - 2026-10-11
+
 ### Added
 
 - **`order_args:` on `use DpExchange.Core.AdapterContract`.** A venue can now declare its
