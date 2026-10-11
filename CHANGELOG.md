@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.72] - 2026-10-11
+
 ### Changed
 
 - **`OptionContract.new/1` refuses a `:right` that is not `:call` or `:put`.** BREAKING
