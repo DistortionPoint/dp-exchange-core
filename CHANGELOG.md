@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.65] - 2026-10-11
+
 ### Added
 
 - `HttpClient.request/5` passes `:decode_body` through to `Req`. Req's default JSON decode
