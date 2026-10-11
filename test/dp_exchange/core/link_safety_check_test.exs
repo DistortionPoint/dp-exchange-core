@@ -282,6 +282,77 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
                "BootstrapOnly#{u}.start_link/1 — this module links nothing itself"
     end
 
+    test "a bootstrap start_link/0 or start_link/3 is excused like start_link/1" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "zero.ex",
+            code: """
+            defmodule BootstrapZero#{u} do
+              use GenServer
+
+              def start_link, do: GenServer.start_link(__MODULE__, [], [])
+              def start_link(a, b, c), do: GenServer.start_link(__MODULE__, {a, b}, c)
+
+              @impl true
+              def init(state), do: {:ok, state}
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "BootstrapZero#{u}"])
+
+      refute Enum.any?(violations, &(&1.module == mod)),
+             "a start_link of any arity runs in the caller's process, so its link is not " <>
+               "this module's"
+    end
+
+    test "an Erlang-style :gen_server module that links from init/1 is flagged" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "child.ex",
+            code: """
+            defmodule ErlChild#{u} do
+              def start_link(_opts), do: {:ok, self()}
+            end
+            """
+          },
+          %{
+            path: "erl.ex",
+            code: """
+            defmodule ErlFeed#{u} do
+              @behaviour :gen_server
+
+              @impl true
+              def init(_opts) do
+                {:ok, child} = ErlChild#{u}.start_link([])
+                {:ok, child}
+              end
+
+              @impl true
+              def handle_call(_msg, _from, state), do: {:reply, :ok, state}
+
+              @impl true
+              def handle_cast(_msg, state), do: {:noreply, state}
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "ErlFeed#{u}"])
+
+      assert Enum.any?(violations, &(&1.module == mod)),
+             "@behaviour :gen_server is the same process behaviour as `use GenServer`"
+    end
+
     test "a link created outside start_link/1 in the same module is still caught" do
       # Proves the exclusion is scoped to start_link/1 itself, not to the whole module —
       # a module could legitimately bootstrap via the behaviour's start_link AND

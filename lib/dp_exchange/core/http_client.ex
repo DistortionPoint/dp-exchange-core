@@ -54,6 +54,9 @@ defmodule DpExchange.Core.HttpClient do
   # Suppress dialyzer warnings for functions that dialyzer incorrectly analyzes
   @dialyzer {:nowarn_function, [parse_response_body: 2, get: 3]}
 
+  # The most of a response body that goes into an error message. See `format_body/1`.
+  @body_excerpt_bytes 2_048
+
   @type http_method :: :get | :post | :put | :delete
   @type headers :: [{String.t(), String.t()}]
 
@@ -264,7 +267,14 @@ defmodule DpExchange.Core.HttpClient do
         parse_response_body(body, Config.opt(opts, :decode_body, true))
 
       {:ok, %{status: status, body: body}} ->
-        wrap_exchange_error(opts, "HTTP #{status}: #{inspect(body)}")
+        # Capped like every other message built from a body (`format_body/1`). Reached only
+        # with `raw_status: true`, where a 4xx is handed back whole, and this put an
+        # uncapped venue error page into the error tuple. `inspect/2` with these limits is
+        # byte-identical for a body inside them, so a message a caller matches is unchanged.
+        wrap_exchange_error(
+          opts,
+          "HTTP #{status}: #{inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)}"
+        )
 
       {:error, reason} ->
         wrap_exchange_error(opts, reason)
@@ -510,7 +520,9 @@ defmodule DpExchange.Core.HttpClient do
     # The endpoint a `rate_limit_per_endpoint: true` request is metered under — see
     # `rate_limit_keys/1`. The URL's path, never its query: `?symbol=BTCUSD` and
     # `?symbol=ETHUSD` are the same endpoint to the venue's per-endpoint limit.
-    opts = Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path end)
+    # `|| "/"`: `URI.parse("https://host").path` is `nil`, which became the endpoint bucket
+    # `"<provider> "` (a trailing space and nothing after it) rather than the root path.
+    opts = Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path || "/" end)
 
     # Check rate limits before making the request, and sign only once they have cleared.
     case check_rate_limits(opts) do
@@ -1121,8 +1133,6 @@ defmodule DpExchange.Core.HttpClient do
   # in the family reads the body back out of this message — venues match the status in its
   # prefix, and a venue that needs the body passes `raw_status: true` and gets it whole.
   # The cut is marked with the full size, so a truncated message never reads as complete.
-  @body_excerpt_bytes 2_048
-
   defp format_body(body) when is_binary(body) and byte_size(body) > @body_excerpt_bytes,
     do: excerpt(body) <> "… (#{byte_size(body)} bytes)"
 

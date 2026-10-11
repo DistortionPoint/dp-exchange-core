@@ -155,7 +155,13 @@ defmodule DpExchange.Core.CanonicalPair do
       # delivering one market's data under another market's name. Recorded here so the
       # next profile does not re-open it: the cost is known, it was weighed, and
       # correctness won.
-      quotes = mapping.quotes |> Enum.map(&String.upcase/1) |> Enum.sort_by(&byte_size/1, :desc)
+      # An empty quote is dropped: every string ends with `""`, so it "matched" any symbol no
+      # real quote did and cut it into `{symbol, ""}`, which became `"BTCXYZ-"`.
+      quotes =
+        mapping.quotes
+        |> Enum.map(&String.upcase/1)
+        |> Enum.reject(&(&1 == ""))
+        |> Enum.sort_by(&byte_size/1, :desc)
 
       Enum.find_value(quotes, :nomatch, fn q ->
         if String.ends_with?(upper, q) and byte_size(upper) > byte_size(q) do

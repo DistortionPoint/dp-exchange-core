@@ -269,7 +269,15 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   # default or another test's fixture running concurrently (`async: true`).
   defp leaks?(module, field) do
     sentinel = "credential_redaction_probe_#{field}_#{System.unique_integer([:positive])}"
-    rendered = module |> struct([{field, sentinel}]) |> inspect()
+    # `limit: :infinity`. The default limit of 50 truncates a struct with more fields than
+    # that, so a secret field past the cut was absent from the rendering for a reason that
+    # had nothing to do with redaction, and the struct passed. A crash report is not bound
+    # by it either.
+    rendered =
+      module
+      |> struct([{field, sentinel}])
+      |> inspect(limit: :infinity, printable_limit: :infinity)
+
     String.contains?(rendered, sentinel)
   end
 

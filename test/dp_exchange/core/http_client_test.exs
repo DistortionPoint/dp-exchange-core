@@ -177,6 +177,18 @@ defmodule DpExchange.Core.HttpClientTest do
       assert_received {:counted, "v /never", 1}
     end
 
+    test "a URL with no path meters its endpoint bucket under the root path" do
+      use_stub()
+
+      HttpClient.request(:get, "http://127.0.0.1:1", [], nil,
+        provider: "v",
+        rate_limit_per_endpoint: true,
+        retry_attempts: 0
+      )
+
+      assert_received {:counted, "v /", 1}
+    end
+
     test "per-endpoint metering stops at the first bucket that refuses, and asks how long" do
       use_stub({:rate_limited, 1_500})
 
@@ -637,6 +649,20 @@ defmodule DpExchange.Core.HttpClientTest do
                )
 
       assert returned["reason"] == "InvalidSymbol"
+    end
+
+    test "get/3 with raw_status caps the body it quotes in the error message" do
+      big = %{"detail" => String.duplicate("x", 50_000)}
+
+      assert {:error, message} =
+               HttpClient.get("https://venue.test/thing", [],
+                 plug: responding(400, big),
+                 retry_attempts: 0,
+                 raw_status: true
+               )
+
+      assert message =~ "HTTP 400:"
+      assert byte_size(message) < 4_000
     end
 
     test "raw_status leaves 5xx alone — a server error is not a considered answer" do

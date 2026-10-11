@@ -134,7 +134,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   `init/1`) — the invariant that matters is "this module, considered as a whole, both
   manufactures a link and protects itself," not which specific function does which.
 
-  `start_link/1`, `start_link/2`, `child_spec/1` and `child_spec/2` are never scanned as
+  `start_link` and `child_spec`, at every arity, are never scanned as
   the SOURCE of a link-creating call — found live running this check against the real,
   compiled `dp_exchange_coinbase`: `Socket.start_link/1` (`use WebSockex`) delegates to
   `WebSockex.start_link/4` to bootstrap itself, which is a call literally named
@@ -175,7 +175,9 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   the handful that are process behaviours).
   """
 
-  @process_behaviours [GenServer, :gen_statem, GenStateMachine, WebSockex]
+  # `:gen_server` is the Erlang spelling of `GenServer`: `@behaviour :gen_server` declares
+  # exactly what `use GenServer` does, and was a module this check never looked at.
+  @process_behaviours [GenServer, :gen_server, :gen_statem, GenStateMachine, WebSockex]
   # A plain list, not a `MapSet`: a `MapSet` literal built from a module attribute and
   # compared with `MapSet.member?/2` fails Dialyzer's PLT check with a
   # `call_without_opaque` mismatch — the same finding this family already hit once
@@ -289,7 +291,13 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   # own code (not `Socket`'s) is the one under scan. `child_spec/1` and `child_spec/2`
   # are excluded for the same reason, though — see the moduledoc's "why this is static"
   # — their generated body never contains a literal call at all, only an MFA data tuple.
-  @excused_from_link_scan [start_link: 1, start_link: 2, child_spec: 1, child_spec: 2]
+  #
+  # **By name, at every arity.** This listed `start_link/1,2` and `child_spec/1,2` only, so a
+  # module whose bootstrap is `def start_link, do: GenServer.start_link(__MODULE__, [], [])`
+  # (arity 0) or `start_link/3` was flagged for the very delegation excused above: a false
+  # failure in a venue's suite for code that links nothing of its own. A function named
+  # `start_link` runs in the CALLER's process whatever its arity, so the reasoning is the same.
+  @excused_from_link_scan [:start_link, :child_spec]
 
   # First function form (in compiled order) whose body contains a link-creating call.
   # Named for the failure message; the invariant itself does not care which function it
@@ -297,7 +305,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   defp find_link(forms) do
     Enum.find_value(forms, fn
       {:function, anno, name, arity, clauses} ->
-        if {name, arity} not in @excused_from_link_scan and contains_link_call?(clauses) do
+        if name not in @excused_from_link_scan and contains_link_call?(clauses) do
           {name, arity, :erl_anno.line(anno)}
         end
 

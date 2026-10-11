@@ -74,6 +74,35 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     end
   end
 
+  describe "run/2 — a struct wider than inspect/1's default limit" do
+    test "a secret field past the 50-field cut is still found leaking" do
+      u = uniq()
+
+      # Named to sort before `:api_key`, so the secret is last whether inspect/1 orders
+      # fields by definition or by key.
+      fillers = Enum.map_join(1..60, ", ", &":aa#{String.pad_leading("#{&1}", 2, "0")}")
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "wide.ex",
+            code: """
+            defmodule WideCredentials#{u} do
+              defstruct [#{fillers}, :api_key]
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "WideCredentials#{u}"])
+
+      assert {mod, :api_key} in violation_fields(violations),
+             "inspect/1 truncates past 50 fields by default; the sentinel was cut from the " <>
+               "rendering and the leak passed"
+    end
+  end
+
   describe "run/2 — a hand-written defimpl Inspect is equally valid" do
     test "a custom Inspect implementation that never mentions @derive still passes" do
       u = uniq()

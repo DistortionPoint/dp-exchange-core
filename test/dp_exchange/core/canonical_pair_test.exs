@@ -151,6 +151,15 @@ defmodule DpExchange.Core.CanonicalPairTest do
     end
   end
 
+  describe "an empty quote in the mapping" do
+    test "never matches: a symbol no real quote ends is returned as it came" do
+      mapping = %{sep: "", quotes: ["", "USD"]}
+
+      assert CanonicalPair.to_canonical(mapping, "BTCXYZ") == "BTCXYZ"
+      assert CanonicalPair.to_canonical(mapping, "BTCUSD") == "BTC-USD"
+    end
+  end
+
   describe "two exchange codes for one canonical code (found 2026-10-10)" do
     test "to_exchange/2 refuses to choose between them" do
       mapping = %{sep: "", quotes: ~w(USD), asset_aliases: %{"XBT" => "BTC", "XXBT" => "BTC"}}

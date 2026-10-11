@@ -387,7 +387,7 @@ reviewer checks by eye and a test suite cannot: does anything in this package's 
 graph from `:xref`, the same OTP tool assertion 7 already reads for the purity check, so
 a captured `&Mod.fun/1` or a literal `apply(Mod, :fun, args)` counts as real usage the
 way a grep never would. What it excludes — the facade, the fake, every behaviour's own
-callbacks, `child_spec/1` and `2`, `start_link/1`, every compiler-injected export, and
+callbacks, `child_spec` and `start_link` at any arity, every compiler-injected export, and
 every macro (`MACRO-<name>`: an expanded call leaves no edge, so a macro you use would
 otherwise read as unwired) — is read from the same `venue:`/`fake:` bindings and behaviour
 declarations your contract test already supplies, never a hand-maintained list.
@@ -552,7 +552,7 @@ venue-specific name is what this suite is expressly forbidden to do (see this fi
 dial out for any venue, present or future — see `DpExchange.Core.LinkSafetyCheck`'s
 moduledoc for the full reasoning.
 
-It scans every module in your `lib/` that declares `GenServer`, `:gen_statem`,
+It scans every module in your `lib/` that declares `GenServer`, `:gen_server`, `:gen_statem`,
 `GenStateMachine` or `WebSockex` as a `@behaviour`, and for each one asks two questions
 of its own compiled code, taken as a whole rather than function by function: does it
 create a link — a remote call named `start_link` (any target module, **including one held
@@ -564,7 +564,7 @@ started and has no way to survive that process dying abnormally. A process-behav
 module whose beam has no abstract code (compiled without `debug_info`) is
 `{:error, {:no_abstract_code, module}}`, not a pass.
 
-`start_link/1`, `start_link/2`, `child_spec/1` and `child_spec/2` are never scanned as
+`start_link` and `child_spec`, at any arity, are never scanned as
 the *source* of a link — every process-behaviour module's own `start_link/N` delegates to
 that behaviour's own `start_link` (`WebSockex.start_link/4`, `GenServer.start_link/3`) to
 bootstrap itself, and that link belongs to whoever calls it, not to the module being

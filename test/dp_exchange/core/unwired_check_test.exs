@@ -317,6 +317,29 @@ defmodule DpExchange.Core.UnwiredCheckTest do
       refute {sup, :child_spec, 1} in mfas
     end
 
+    test "start_link at any arity is excused, including a default-argument sibling" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "arities.ex",
+            code: """
+            defmodule Arities#{u} do
+              def start_link, do: {:ok, self()}
+              def start_link(opts, name \\\\ nil), do: {:ok, {opts, name}}
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "Arities#{u}"])
+
+      refute Enum.any?(violations, &(&1.module == mod)),
+             "a supervisor reaches start_link through a child spec's MFA tuple at any arity"
+    end
+
     test "compiler-injected exports never appear as violations" do
       u = uniq()
 

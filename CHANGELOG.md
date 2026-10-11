@@ -21,6 +21,39 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **Conformance assertions 16 (internal wiring) and 18 (link safety) no longer fail a venue
+  for a bootstrap `start_link` of any arity.** `UnwiredCheck` excused `start_link/1` only, so
+  `start_link/0`, `start_link/2` and the `/2` a default argument exports beside `/1` were
+  reported as unwired. `LinkSafetyCheck` excused `start_link/1,2` and `child_spec/1,2`, so a
+  `GenServer` with `def start_link, do: GenServer.start_link(...)` was flagged as linking.
+  Both now excuse `start_link` and `child_spec` by name. These loosen; no venue newly fails.
+- **`LinkSafetyCheck` also scans `@behaviour :gen_server` modules.** Only `GenServer` was
+  named, so the Erlang spelling of the same behaviour was never examined. **A venue with an
+  Erlang-style `:gen_server` module that links a child with no `trap_exit` now fails
+  assertion 18.** None of the five venues has one.
+- **`CredentialRedactionCheck` (assertion 19) renders with `limit: :infinity`.** The default
+  limit of 50 truncated a struct wider than 50 fields, so a secret field past the cut was not
+  in the output and the leak passed. **A venue whose wide struct leaks a secret field now
+  fails.**
+
+### Fixed
+
+- **`PollingFeed` applied a refusal or an error for a symbol removed in flight.** Only the
+  delivery arms checked scope, so `{:refused, _}` called `on_refusal` for a symbol the
+  consumer had unsubscribed and latched it in `refused` until the next `update_symbols/2`,
+  and `{:error, _}` counted toward `failures_since_ok`. A bulk `{:refused, refusals}` naming a
+  symbol not in scope is likewise no longer reported or latched.
+- **`PollingFeed`'s `[:dp_exchange, :link, :down]` reason is bounded** (`limit: 20`,
+  `printable_limit: 512`); it carried the whole venue error term.
+- **`HttpClient.get/3` with `raw_status: true` quoted the whole body** in its `"HTTP 4xx"`
+  message. It is capped at 2 KB like every other body-bearing message.
+- **`HttpClient` with `rate_limit_per_endpoint: true` and a URL with no path** metered a
+  bucket named `"<provider> "`; it is now `"<provider> /"`.
+- **`CanonicalPair.to_canonical/2` with `""` among a concat mapping's quotes** matched every
+  symbol and answered `"BTCXYZ-"`. An empty quote is ignored.
+
 ## [0.3.70] - 2026-10-11
 
 ### Changed

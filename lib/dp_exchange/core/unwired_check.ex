@@ -73,7 +73,7 @@ defmodule DpExchange.Core.UnwiredCheck do
       never a function the module merely happens to export. A callback's default body,
       injected by `use` and never overridden, is still excused: it satisfies the same
       name/arity whether hand-written or macro-generated.
-    * **`child_spec/1` and `start_link/1`** — always excused, on every module, because a
+    * **`child_spec` and `start_link`, at any arity** — always excused, on every module, because a
       `Supervisor` calls them by convention rather than through any call `:xref` can see
       in the analysed set.
     * **Compiler-injected exports** — `module_info/0`, `module_info/1`, and any export
@@ -116,7 +116,12 @@ defmodule DpExchange.Core.UnwiredCheck do
   # is a `@callback`, so behaviour introspection alone would miss the second. Found by
   # running this check against `dp_exchange_schwab`'s pre-fix `Socket`, which `use
   # WebSockex`s and never wrote `child_spec` itself.
-  @always_excluded [child_spec: 1, child_spec: 2, start_link: 1]
+  #
+  # **By name, at every arity.** This listed `start_link/1` only, so `start_link/0`,
+  # `start_link/2` and the `start_link/2` that `def start_link(opts, name \\ nil)` exports
+  # beside `/1` were reported as unwired in a venue's suite. A supervisor reaches every one of
+  # them through a child spec's MFA tuple, which `:xref` cannot see, exactly as for `/1`.
+  @always_excluded [:child_spec, :start_link]
   @compiler_exports [module_info: 0, module_info: 1]
 
   @type violation :: %{
@@ -339,7 +344,7 @@ defmodule DpExchange.Core.UnwiredCheck do
   end
 
   defp excluded_export?({name, arity}, behaviour_callbacks) do
-    {name, arity} in @always_excluded or
+    name in @always_excluded or
       {name, arity} in @compiler_exports or
       MapSet.member?(behaviour_callbacks, {name, arity}) or
       dunder?(name) or

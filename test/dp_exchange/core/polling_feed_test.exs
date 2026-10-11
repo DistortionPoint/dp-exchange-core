@@ -681,6 +681,52 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert PollingFeed.coverage(pid) == %{}
     end
 
+    test "a refusal or an error for a removed symbol is neither reported nor counted" do
+      test = self()
+
+      fetch = fn symbol ->
+        send(test, {:fetching, self()})
+        receive(do: (:release -> {:refused, "gone #{symbol}"}))
+      end
+
+      pid =
+        start_feed(
+          symbols: ~w(ETH-USD),
+          fetch: fetch,
+          interval_ms: 60_000,
+          on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
+        )
+
+      assert_receive {:fetching, task}, 5_000
+
+      PollingFeed.update_symbols(pid, [])
+      _sync = PollingFeed.status(pid)
+      ref = Process.monitor(task)
+      send(task, :release)
+
+      # The task has exited, so its reply is already in the feed's mailbox ahead of the
+      # next call: the result is applied (or dropped) before `status/1` answers.
+      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+      assert %{failures_since_ok: 0, last_error: nil} = PollingFeed.status(pid)
+      refute_receive {:refused, _symbol, _reason}, 100
+    end
+
+    test "a bulk refusal naming a symbol nobody asked for is not reported" do
+      test = self()
+
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD),
+          fetch_all: fn _symbols -> {:refused, [{"BTC-USD", :nope}, {"XRP-USD", :nope}]} end,
+          interval_ms: 60_000,
+          on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
+        )
+
+      assert_receive {:refused, "BTC-USD", :nope}, 5_000
+      _sync = PollingFeed.status(pid)
+      refute_received {:refused, "XRP-USD", _reason}
+    end
+
     test "a bulk answer naming only symbols nobody asked for is a failure, not silence" do
       # Dropping every event would otherwise look exactly like a quiet venue. A venue
       # whose symbols do not match the ones asked for must say so.

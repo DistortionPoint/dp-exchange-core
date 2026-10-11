@@ -674,7 +674,19 @@ defmodule DpExchange.Core.PollingFeed do
   # unsubscribed, and went into `last_ok`. So `coverage/1` answered `:internal_poll` for a
   # symbol nobody wanted, until the next `update_symbols/2` pruned it. Found 2026-09-27 by
   # reading the path; the tests under "a result for a symbol no longer wanted" pin it.
+  #
+  # **That holds for a refusal and an error too, not only a delivery.** Only the delivery arms
+  # checked the scope, so a `{:refused, _}` for a symbol removed in flight still called
+  # `on_refusal` (a consumer told about a symbol it had unsubscribed) and put the symbol into
+  # `refused`, where nothing pruned it until the next `update_symbols/2`; an `{:error, _}` for
+  # one counted toward `failures_since_ok` and could trip the delivering-nothing notice.
   defp apply_result(state, {:one, symbol}, result) do
+    if MapSet.member?(state.symbols, symbol),
+      do: apply_wanted(state, symbol, result),
+      else: state
+  end
+
+  defp apply_wanted(state, symbol, result) do
     case result do
       # **The event must be for the symbol that was asked.** The bulk path refuses events
       # nobody asked for (`{:unrequested_symbols, _}` below), and this path checked nothing:
@@ -682,14 +694,10 @@ defmodule DpExchange.Core.PollingFeed do
       # under that spelling while `coverage/1` reported `"BTC-USD"` as delivered. Found
       # 2026-10-10 by reading the path.
       {:ok, %{symbol: ^symbol} = event} ->
-        if MapSet.member?(state.symbols, symbol),
-          do: deliver_one(state, symbol, event),
-          else: state
+        deliver_one(state, symbol, event)
 
       {:ok, %{symbol: other}} ->
-        if MapSet.member?(state.symbols, symbol),
-          do: record_failure(state, symbol, {:unrequested_symbols, [other]}),
-          else: state
+        record_failure(state, symbol, {:unrequested_symbols, [other]})
 
       # The venue says it does not carry this symbol. Reported outward — a
       # consumer drops it from its collection scope — rather than retried every
@@ -719,9 +727,14 @@ defmodule DpExchange.Core.PollingFeed do
   # an answer outside `t:fetch_all/0`, reached through a malformed element of a valid one.
   defp apply_refusals(state, refusals) do
     if Enum.all?(refusals, &match?({symbol, _reason} when is_binary(symbol), &1)) do
+      # Only a symbol still in scope is reported or latched. `refused` is pruned by
+      # `update_symbols/2` alone, so a venue naming symbols nobody asked for (or that were
+      # removed in flight) would otherwise grow it, and tell the consumer about them.
       state =
         Enum.reduce(refusals, state, fn {symbol, reason}, acc ->
-          report_refusal(acc, symbol, reason)
+          if MapSet.member?(acc.symbols, symbol),
+            do: report_refusal(acc, symbol, reason),
+            else: acc
         end)
 
       record_failure(state, "bulk fetch", {:refused, refusals})
@@ -923,7 +936,9 @@ defmodule DpExchange.Core.PollingFeed do
       )
 
     guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
-    Telemetry.link_down(state.provider, inspect(reason))
+    # Bounded: the reason is a venue error body or a decoded payload, and telemetry metadata
+    # is copied to every attached handler and exporter.
+    Telemetry.link_down(state.provider, inspect(reason, limit: 20, printable_limit: 512))
     %{state | notice_state: :dead}
   end
 
