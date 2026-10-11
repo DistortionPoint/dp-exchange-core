@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.71] - 2026-10-11
+
 ### Changed
 
 - **Conformance assertions 16 (internal wiring) and 18 (link safety) no longer fail a venue
