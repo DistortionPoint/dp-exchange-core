@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.76] - 2026-10-11
+
 ### Fixed
 
 - **`Core.PollingFeed` no longer crashes when its failure reason holds a credential-shaped
