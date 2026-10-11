@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.66] - 2026-10-11
+
 ### Changed
 
 Constructors and options that accepted a plausible wrong value now refuse it, found
