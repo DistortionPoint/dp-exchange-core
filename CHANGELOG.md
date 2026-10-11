@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.78] - 2026-10-11
+
 ### Fixed
 
 - **`Config.find_override/1` works on OTP before 26.2.** 0.3.77 read one dictionary key with
