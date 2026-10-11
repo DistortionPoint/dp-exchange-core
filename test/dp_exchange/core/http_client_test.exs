@@ -1369,5 +1369,64 @@ defmodule DpExchange.Core.HttpClientTest do
       assert metadata.kind == :exit
       assert metadata.result == :exception
     end
+
+    test "the stacktrace carries arities, never the arguments of the failed call" do
+      use_stub()
+      provider = "scrub-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-scrub-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:scrub_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # A plug that fails to match its argument: the top frame of the stacktrace then holds
+      # the argument list, and that list is the request, headers and all.
+      assert {:error, {:exchange_error, ^provider, "Request exception: " <> _rest}} =
+               HttpClient.request(
+                 :get,
+                 "https://venue.test/x",
+                 [{"authorization", "Bearer sk-live-SECRET"}],
+                 nil,
+                 provider: provider,
+                 plug: fn %{no_such_key: _value} = conn -> conn end,
+                 retry_attempts: 1
+               )
+
+      assert_receive {:scrub_event, metadata}, 5_000
+      assert [_first | _rest] = metadata.stacktrace
+      refute Enum.any?(metadata.stacktrace, &match?({_m, _f, args, _l} when is_list(args), &1))
+      refute inspect(metadata) =~ "sk-live-SECRET"
+    end
+  end
+
+  describe "a params map is sent in key order" do
+    test "more than 32 keys, where a map has no iteration order of its own" do
+      params = Map.new(1..40, fn n -> {"k#{String.pad_leading("#{n}", 2, "0")}", n} end)
+
+      expected =
+        params
+        |> Enum.sort()
+        |> Enum.map_join("&", fn {key, value} -> "#{key}=#{value}" end)
+
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:query, conn.query_string})
+        Req.Test.json(conn, %{"ok" => true})
+      end
+
+      assert {:ok, %{"ok" => true}} =
+               HttpClient.get("http://venue.test/q", params, plug: plug, retry_attempts: 0)
+
+      assert_receive {:query, ^expected}, 5_000
+    end
   end
 end

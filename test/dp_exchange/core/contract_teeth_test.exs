@@ -440,13 +440,21 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert {:get_transfers, 2} in Capabilities.endpoints_at(caps, :unsupported)
 
-      refute Broken.UnderDeclares.get_transfers(%{}, []) == {:error, :not_supported},
-             "declared unsupported but works — hidden functionality the suite must reject"
+      # The decision the suite makes about that answer, not a comparison made here: declared
+      # unsupported but it works is hidden functionality the suite must reject.
+      assert AdapterContract.unsupported_fault(Broken.UnderDeclares.get_transfers(%{}, [])) ==
+               :served
     end
 
     test "a string refusal does not satisfy the atom assertion" do
-      refute Broken.StringRefusal.get_transfers(%{}, []) == {:error, :not_supported}
-      assert Broken.StringRefusal.get_transfers(%{}, []) == {:error, "not_supported"}
+      assert AdapterContract.unsupported_fault(Broken.StringRefusal.get_transfers(%{}, [])) ==
+               :string_refusal
+
+      # The atom is the only answer that passes; a raise and any other shape are named too.
+      assert AdapterContract.unsupported_fault({:error, :not_supported}) == nil
+      assert AdapterContract.unsupported_fault({:raised, %ArgumentError{}}) == :raised
+      assert AdapterContract.unsupported_fault({:error, :rate_limited}) == :other
+      assert AdapterContract.unsupported_fault({:refused, :not_listed}) == :other
     end
 
     test "under-declaring BY SILENCE — never naming the endpoint at all — used to slip " <>
@@ -853,39 +861,48 @@ defmodule DpExchange.Core.ContractTeethTest do
   end
 
   describe "assertion 20 catches a subscribe/2 push that is not a Core.Types.* struct" do
-    # Replicates the exact computation `AdapterContract`'s "20. subscribed push shape"
-    # group runs, against these fixtures directly — the same pattern used above for
-    # assertions 1, 4, 12, 15, 16 and 17.
+    # Runs `AdapterContract.subscribed_push_fault/2`, the decision the "20. subscribed push
+    # shape" group makes, on what these fixtures actually push.
     test "a raw, undecoded payload is caught" do
-      assert :ok = Broken.Subscribe.RawPayload.subscribe(~w(BTC-USD), to: self())
+      venue = Broken.Subscribe.RawPayload
+      assert :ok = venue.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, _runtime_id, payload}, 5_000
+      assert_receive {:dp_exchange, _runtime_id, _payload} = message, 5_000
 
-      refute is_struct(payload),
-             "this fixture pushes a bare map on purpose — the exact 'raw JSON forwarded " <>
-               "to subscribers' shape the assertion exists to catch — and the suite " <>
-               "must reject it"
+      # A bare map on purpose: the 'raw JSON forwarded to subscribers' shape.
+      fault = AdapterContract.subscribed_push_fault(message, venue.runtime_id())
+      assert fault == :not_a_core_struct
     end
 
     test "a message tagged with something other than runtime_id/0 is caught" do
       venue = Broken.Subscribe.WrongTag
       assert :ok = venue.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, runtime_id, %DpExchange.Core.Types.Quote{}}, 5_000
+      assert_receive {:dp_exchange, _runtime_id, %DpExchange.Core.Types.Quote{}} = message, 5_000
 
-      refute runtime_id == venue.runtime_id(),
-             "this fixture tags its message with a hardcoded atom on purpose — a caller " <>
-               "subscribed to several venues could not tell them apart, and the suite " <>
-               "must reject it"
+      # A hardcoded atom on purpose: a caller subscribed to several venues could not tell
+      # them apart.
+      fault = AdapterContract.subscribed_push_fault(message, venue.runtime_id())
+      assert fault == :wrong_tag
+    end
+
+    test "a struct outside Core.Types is not a Core.Types struct" do
+      id = ReferenceVenue.runtime_id()
+
+      assert AdapterContract.subscribed_push_fault({:dp_exchange, id, %URI{}}, id) ==
+               :not_a_core_struct
+
+      assert AdapterContract.subscribed_push_fault({:dp_exchange, id, nil}, id) ==
+               :not_a_core_struct
     end
 
     test "the reference venue satisfies both halves" do
-      assert :ok = DpExchange.Core.ReferenceVenue.subscribe(~w(BTC-USD), to: self())
+      assert :ok = ReferenceVenue.subscribe(~w(BTC-USD), to: self())
 
-      assert_receive {:dp_exchange, runtime_id, payload}, 5_000
+      assert_receive {:dp_exchange, _runtime_id, _payload} = message, 5_000
 
-      assert runtime_id == DpExchange.Core.ReferenceVenue.runtime_id()
-      assert %DpExchange.Core.Types.Quote{} = payload
+      fault = AdapterContract.subscribed_push_fault(message, ReferenceVenue.runtime_id())
+      assert fault == nil
     end
   end
 
@@ -895,30 +912,41 @@ defmodule DpExchange.Core.ContractTeethTest do
       venue = Broken.HistoricalPrices.Substitutes
       caps = venue.capabilities()
 
-      undeclared = DpExchange.Core.Timeframe.nameable() -- caps.historical_timeframes
-      assert "1d" in undeclared, "1d must be outside this fixture's declared 1h-only vocabulary"
+      # The width the suite asks for, chosen by the suite's own function.
+      unserved = AdapterContract.unserved_timeframe(caps)
+      assert unserved in DpExchange.Core.Timeframe.nameable()
+      refute unserved in caps.historical_timeframes
 
-      assert match?(
-               {:ok, _},
-               venue.get_historical_prices("BTC-USD", "1d", [], [])
-             ),
-             "this fixture silently substitutes its one declared width for whatever was " <>
-               "asked on purpose — a missing granularity becoming the closest one — and " <>
-               "the suite must reject it"
+      # This fixture silently substitutes its one declared width for whatever was asked, on
+      # purpose: a missing granularity becoming the closest one.
+      answer = venue.get_historical_prices("BTC-USD", unserved, [], [])
+      assert AdapterContract.timeframe_fault(answer) == :substituted
     end
 
     test "the reference venue refuses a width it does not declare" do
-      caps = DpExchange.Core.ReferenceVenue.capabilities()
-      undeclared = DpExchange.Core.Timeframe.nameable() -- caps.historical_timeframes
+      unserved = AdapterContract.unserved_timeframe(ReferenceVenue.capabilities())
 
-      assert undeclared != []
+      assert is_binary(unserved)
 
-      [unserved | _rest] = undeclared
+      answer = ReferenceVenue.get_historical_prices("BTC-USD", unserved, [], [])
+      assert AdapterContract.timeframe_fault(answer) == nil
+    end
 
-      refute match?(
-               {:ok, _},
-               DpExchange.Core.ReferenceVenue.get_historical_prices("BTC-USD", unserved, [], [])
-             )
+    test "a venue declaring the whole vocabulary has no width to ask for" do
+      caps =
+        Capabilities.new(
+          endpoints: %{},
+          supported_quotes: ~w(USD),
+          historical_timeframes: DpExchange.Core.Timeframe.nameable()
+        )
+
+      assert AdapterContract.unserved_timeframe(caps) == nil
+    end
+
+    test "only a success counts as serving a width that was not declared" do
+      assert AdapterContract.timeframe_fault({:ok, []}) == :substituted
+      assert AdapterContract.timeframe_fault({:error, :unsupported_timeframe}) == nil
+      assert AdapterContract.timeframe_fault({:refused, :unsupported_timeframe}) == nil
     end
   end
 end

@@ -240,13 +240,16 @@ defmodule DpExchange.Core.Config do
   defp find_in_callers([pid | rest], key) when is_pid(pid) and node(pid) != node(),
     do: find_in_callers(rest, key)
 
+  # One key, not the whole dictionary: `Process.info(pid, :dictionary)` copied every entry of
+  # the ancestor's dictionary on each lookup, and `HttpClient` looks up several keys per
+  # request. A stored override is always `{:ok, value}`, so `:undefined` only means absent.
   defp find_in_callers([pid | rest], key) do
-    case Process.info(pid, :dictionary) do
-      {:dictionary, dictionary} ->
-        case List.keyfind(dictionary, key, 0) do
-          {^key, found} -> found
-          nil -> find_in_callers(rest, key)
-        end
+    case Process.info(pid, {:dictionary, key}) do
+      {{:dictionary, ^key}, {:ok, _value} = found} ->
+        found
+
+      {{:dictionary, ^key}, _absent} ->
+        find_in_callers(rest, key)
 
       nil ->
         # The ancestor is already dead. Not an error — a test process can finish

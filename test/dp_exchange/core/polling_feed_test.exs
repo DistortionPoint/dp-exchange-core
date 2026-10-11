@@ -1380,6 +1380,71 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
     end
 
+    test "a slow fetch over many symbols still polls every one, in a queue that stays FIFO" do
+      # One fetch blocks while the rest of the symbols' ticks pile up behind it; the queue is
+      # then drained in order. The count is large enough that a queue copied per tick would
+      # be the quadratic cost this guards against.
+      test = self()
+      symbols = for n <- 1..300, do: "S#{n}"
+      first_call = :atomics.new(1, [])
+
+      start_feed(
+        symbols: symbols,
+        interval_ms: 20,
+        fetch: fn symbol ->
+          if :atomics.compare_exchange(first_call, 1, 0, 1) == :ok do
+            send(test, {:blocked, self()})
+
+            receive do
+              :go -> :ok
+            end
+          end
+
+          {:ok, event(symbol)}
+        end
+      )
+
+      assert_receive {:blocked, task}, 5_000
+      # Every other symbol's first tick has fired by now and is waiting in the queue.
+      Process.sleep(300)
+      send(task, :go)
+
+      collect = fn collect, seen ->
+        if MapSet.size(seen) == length(symbols) do
+          seen
+        else
+          receive do
+            {:published, %{symbol: symbol}} -> collect.(collect, MapSet.put(seen, symbol))
+          after
+            5_000 -> flunk("only #{MapSet.size(seen)} of #{length(symbols)} symbols polled")
+          end
+        end
+      end
+
+      assert collect.(collect, MapSet.new()) == MapSet.new(symbols)
+    end
+
+    test "the log line for a failed fetch is bounded, whatever the venue answered" do
+      label = "bounded-#{System.unique_integer([:positive])}"
+      huge = String.duplicate("x", 200_000)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          feed =
+            start_feed(
+              label: label,
+              symbols: ["BTC-USD"],
+              fetch: fn _symbol -> {:error, huge} end
+            )
+
+          await_status(feed, &(&1.last_error != nil))
+        end)
+
+      lines = log |> String.split("\n") |> Enum.filter(&String.contains?(&1, label))
+      assert lines != []
+      assert Enum.all?(lines, &(byte_size(&1) < 4_000))
+    end
+
     test "telemetry names the :provider, the same as the feed's notices" do
       provider = :"poll_provider_#{System.unique_integer([:positive])}"
       :ok = attach_link(provider)

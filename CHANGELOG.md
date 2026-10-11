@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Config.find_override/1` reads one key from each `$callers` ancestor, not its whole
+  process dictionary.** `Process.info(pid, :dictionary)` copied every entry on each lookup,
+  and `HttpClient` looks up several keys per request, so a call from a Task under a process
+  with a large dictionary paid for that copy every time. Same resolution order and result.
+
+- **`[:dp_exchange, :request, :exception]` no longer carries the arguments of the failed
+  call.** `:stacktrace` is documented metadata and reaches every handler and exporter, and a
+  frame that fails to match (`FunctionClauseError`) records its argument list, which for a
+  request call is the headers: the `Authorization` value or the signature. `Core.HttpClient`
+  now reduces each frame's argument list to its arity (`{module, function, arity, location}`).
+  The `reason` text in that event, in `"Request failed: ..."` and in `"Request exception:
+  ..."` is bounded (`limit: 50`, `printable_limit: 2_048`) and byte-identical to `inspect/1`
+  for anything inside the bounds.
+- **`HttpClient.get/3` sends a params map in key order.** A map of more than 32 keys has no
+  iteration order of its own, so a retry could send the same params in a different order, and
+  a venue that signs the query string saw two strings. At 32 keys or fewer the order is
+  unchanged.
+- **`Core.PollingFeed` queues ticks in an Erlang `:queue`,** not a list appended to. With
+  thousands of symbols and a fetch slower than the interval the queue holds one job per
+  symbol, and `queue ++ [job]` copied all of them on every tick inside the process that
+  answers `status/1`. Same FIFO order, same one-fetch-at-a-time concurrency.
+- **`Core.PollingFeed`'s "delivered NOTHING" warning and its debug line bound the failure
+  reason** (`limit: 20`, `printable_limit: 512`). A fetch's `{:error, reason}` can be a whole
+  decoded venue body, and the warning repeats every sweep for as long as an outage lasts. A
+  raised exception's message is cut at 2_048 characters. `status/1`'s `last_error` is still
+  the term the fetch returned.
+
+### Changed
+
+- **New public decisions behind assertions 12, 20 and 21, so the teeth tests exercise the
+  suite and not a copy of it:** `AdapterContract.unsupported_fault/1` (an `:unsupported`
+  endpoint must answer the atom `{:error, :not_supported}`: a string, a success, a raise or
+  anything else is named), `subscribed_push_fault/2` (assertion 20: wrong tag, or a payload
+  that is not a `Core.Types.*` struct), and `unserved_timeframe/1` with `timeframe_fault/1`
+  (assertion 21). The "under-declaring", "string refusal", assertion 20 and assertion 21
+  `ContractTeethTest` cases used to call the broken fixture and compare its answer, so no
+  change to the suite could fail them. Behaviour of the assertions is unchanged, except that
+  a failed assertion 12 now prints the answer it got.
+
 ## [0.3.76] - 2026-10-11
 
 ### Fixed

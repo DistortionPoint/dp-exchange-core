@@ -343,6 +343,76 @@ defmodule DpExchange.Core.AdapterContract do
   def struct_answer?({:ok, [%_struct{} | _rest]}), do: true
   def struct_answer?(_result), do: false
 
+  @doc """
+  What is wrong with a call's answer to an endpoint `capabilities/0` declares `:unsupported`,
+  or `nil` when nothing is. Assertion 12's under-declaring direction.
+
+    * `nil` — `{:error, :not_supported}`, the atom the contract promises.
+    * `:string_refusal` — `{:error, "not_supported"}`. A caller matching the atom misses it
+      and treats a refusal as an unrecognised error.
+    * `:raised` — the call raised (`{:raised, error}` from the suite's `call_on/3`).
+    * `:served` — `{:ok, _}`: declared unsupported but it works, which hides functionality a
+      consumer could have used.
+    * `:other` — any other answer, which is neither the atom nor a success.
+  """
+  @spec unsupported_fault(term()) :: nil | :string_refusal | :raised | :served | :other
+  def unsupported_fault({:error, :not_supported}), do: nil
+  def unsupported_fault({:error, "not_supported"}), do: :string_refusal
+  def unsupported_fault({:raised, _error}), do: :raised
+  def unsupported_fault({:ok, _value}), do: :served
+  def unsupported_fault(_answer), do: :other
+
+  @doc """
+  What is wrong with a message `subscribe/2` pushed, or `nil` when nothing is. Assertion 20.
+
+  `message` is the `{:dp_exchange, runtime_id, payload}` the suite received and `runtime_id`
+  is the venue's own `c:DpExchange.Core.Venue.runtime_id/0`.
+
+    * `:wrong_tag` — tagged with something other than the venue's `runtime_id/0`, so a
+      process subscribed to several venues cannot tell them apart. Judged first.
+    * `:not_a_core_struct` — the payload is not a `DpExchange.Core.Types.*` struct: raw venue
+      data forwarded to subscribers, the shape with a wired decoder that never ran.
+  """
+  @spec subscribed_push_fault({:dp_exchange, term(), term()}, atom()) ::
+          nil | :wrong_tag | :not_a_core_struct
+  def subscribed_push_fault({:dp_exchange, tag, payload}, runtime_id) do
+    cond do
+      tag != runtime_id -> :wrong_tag
+      not core_type_struct?(payload) -> :not_a_core_struct
+      true -> nil
+    end
+  end
+
+  defp core_type_struct?(%module{}),
+    do: module |> Atom.to_string() |> String.starts_with?("Elixir.DpExchange.Core.Types.")
+
+  defp core_type_struct?(_other), do: false
+
+  @doc """
+  The timeframe assertion 21 asks `get_historical_prices/4` for: the first width of
+  `Timeframe.nameable/0` that `caps.historical_timeframes` does not name, or `nil` when the
+  venue declares the whole vocabulary and there is no width left to prove a refusal with.
+  """
+  @spec unserved_timeframe(DpExchange.Core.Capabilities.t()) :: String.t() | nil
+  def unserved_timeframe(%DpExchange.Core.Capabilities{} = caps) do
+    case DpExchange.Core.Timeframe.nameable() -- caps.historical_timeframes do
+      [unserved | _rest] -> unserved
+      [] -> nil
+    end
+  end
+
+  @doc """
+  What is wrong with a call's answer to a timeframe the venue does not declare, or `nil`.
+  Assertion 21.
+
+  `:substituted` is `{:ok, _}`: the venue served the width it has in place of the one asked
+  for, a missing granularity becoming the closest one, which mislabels every candle it
+  touches. A refusal, an error and a raise are not this check's business.
+  """
+  @spec timeframe_fault(term()) :: nil | :substituted
+  def timeframe_fault({:ok, _candles}), do: :substituted
+  def timeframe_fault(_answer), do: nil
+
   # `test_connection/2` and `get_rate_limit_status/2` are the only two name-based exemptions
   # from assertion 17, and both for the same reason: their own callback doc types the
   # credential `credentials() | nil`. The contract, not a venue's choice, says a missing
@@ -919,9 +989,14 @@ defmodule DpExchange.Core.AdapterContract do
           caps = @venue.capabilities()
 
           for endpoint <- Capabilities.endpoints_at(caps, :unsupported) do
-            assert {:error, :not_supported} = call_endpoint(endpoint),
+            result = call_endpoint(endpoint)
+
+            # The decision is `AdapterContract.unsupported_fault/1`, public so the teeth
+            # tests run the suite's own logic and not a copy of it.
+            assert DpExchange.Core.AdapterContract.unsupported_fault(result) == nil,
                    "#{inspect(endpoint)} declares :unsupported but did not return " <>
-                     "{:error, :not_supported} — the atom, never the string"
+                     "{:error, :not_supported} — the atom, never the string. Got " <>
+                     "#{inspect(result, limit: 8)}"
           end
         end
       end
@@ -1888,17 +1963,29 @@ defmodule DpExchange.Core.AdapterContract do
                              "delivered nothing — a caller has no way to tell that from " <>
                              "a quiet market"
 
-            assert runtime_id == @venue.runtime_id(),
-                   "subscribe/2 tagged its message #{inspect(runtime_id)}, not " <>
-                     "#{inspect(@venue.runtime_id())} — a caller subscribed to several " <>
-                     "venues cannot tell them apart"
+            # The decision is `AdapterContract.subscribed_push_fault/2`, public so the
+            # teeth tests run the suite's own logic and not a copy of it.
+            case DpExchange.Core.AdapterContract.subscribed_push_fault(
+                   {:dp_exchange, runtime_id, payload},
+                   @venue.runtime_id()
+                 ) do
+              nil ->
+                :ok
 
-            assert is_struct(payload) and
-                     payload.__struct__ |> Module.split() |> Enum.take(3) ==
-                       ~w(DpExchange Core Types),
-                   "subscribe/2 pushed #{inspect(payload)} — the facade's own contract " <>
-                     "is that the payload is a DpExchange.Core.Types.* struct, the same " <>
-                     "value the pull endpoints return, never raw venue data"
+              :wrong_tag ->
+                flunk(
+                  "subscribe/2 tagged its message #{inspect(runtime_id)}, not " <>
+                    "#{inspect(@venue.runtime_id())} — a caller subscribed to several " <>
+                    "venues cannot tell them apart"
+                )
+
+              :not_a_core_struct ->
+                flunk(
+                  "subscribe/2 pushed #{inspect(payload)} — the facade's own contract " <>
+                    "is that the payload is a DpExchange.Core.Types.* struct, the same " <>
+                    "value the pull endpoints return, never raw venue data"
+                )
+            end
           end
         end
       end
@@ -2162,27 +2249,29 @@ defmodule DpExchange.Core.AdapterContract do
           caps = @venue.capabilities()
 
           if @fake && Capabilities.active?(caps, {:get_historical_prices, 4}) do
-            case Timeframe.nameable() -- caps.historical_timeframes do
-              [] ->
+            # The width and the verdict are `AdapterContract.unserved_timeframe/1` and
+            # `timeframe_fault/1`, public so the teeth tests run the suite's own logic.
+            case DpExchange.Core.AdapterContract.unserved_timeframe(caps) do
+              nil ->
                 # This venue declares the entire nameable vocabulary — there is no width
                 # left that would prove it refuses one.
                 :ok
 
-              [unserved | _rest] ->
-                refute match?(
-                         {:ok, _},
-                         # The timeframe is the one argument this assertion must choose
-                         # itself — an `unserved` width is the whole question. The symbol
-                         # and the opts come from the venue's own declarations, the same as
-                         # every other fake call here, so a venue needing an option or a
-                         # narrower symbol for this endpoint is not silently refused.
-                         call_on(@fake, {:get_historical_prices, 4}, [
-                           arg_value(:symbol, {:get_historical_prices, 4}),
-                           unserved,
-                           [],
-                           arg_value(:opts, {:get_historical_prices, 4})
-                         ])
-                       ),
+              unserved ->
+                # The timeframe is the one argument this assertion must choose itself — an
+                # `unserved` width is the whole question. The symbol and the opts come from
+                # the venue's own declarations, the same as every other fake call here, so a
+                # venue needing an option or a narrower symbol for this endpoint is not
+                # silently refused.
+                result =
+                  call_on(@fake, {:get_historical_prices, 4}, [
+                    arg_value(:symbol, {:get_historical_prices, 4}),
+                    unserved,
+                    [],
+                    arg_value(:opts, {:get_historical_prices, 4})
+                  ])
+
+                assert DpExchange.Core.AdapterContract.timeframe_fault(result) == nil,
                        "get_historical_prices/4 answered {:ok, _} for #{inspect(unserved)}, " <>
                          "a width capabilities().historical_timeframes does not name — a " <>
                          "missing granularity becoming the closest one mislabels every " <>

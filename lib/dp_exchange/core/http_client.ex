@@ -503,8 +503,12 @@ defmodule DpExchange.Core.HttpClient do
     end)
   end
 
+  # Sorted by key. A map of more than 32 keys has no defined iteration order, so the same
+  # params could be sent in a different order on a retry and a venue that signs the query
+  # string saw two different strings. At 32 keys or fewer the map's own order IS key order,
+  # so nothing changes for the common case.
   defp build_query_string(params) when is_map(params) do
-    params |> Map.to_list() |> build_query_string()
+    params |> Map.to_list() |> Enum.sort_by(fn {key, _value} -> key end) |> build_query_string()
   end
 
   # **A value with no single query spelling is refused, never flattened.** `to_string/1` on
@@ -830,7 +834,7 @@ defmodule DpExchange.Core.HttpClient do
           # request that never got a status must not put a value into a numeric series that
           # means "not a status at all".
           {:error, reason} ->
-            {{:error, "Request failed: #{inspect(reason)}"}, nil}
+            {{:error, "Request failed: #{describe(reason)}"}, nil}
         end
 
       Telemetry.request_stop(start_time, metadata, telemetry_outcome(result, status))
@@ -849,13 +853,13 @@ defmodule DpExchange.Core.HttpClient do
         # fired, and one grouping by `:status` saw the key absent rather than `nil`.
         Telemetry.request_exception(start_time, metadata,
           kind: :error,
-          reason: inspect(error),
-          stacktrace: __STACKTRACE__,
+          reason: describe(error),
+          stacktrace: scrub_stacktrace(__STACKTRACE__),
           status: nil,
           result: :exception
         )
 
-        {:error, "Request exception: #{inspect(error)}"}
+        {:error, "Request exception: #{describe(error)}"}
     catch
       # **An exit is not a raise, and `rescue` does not see it.** A pool checkout that times
       # out, a transport process that is not running, or a linked process dying all leave the
@@ -865,15 +869,36 @@ defmodule DpExchange.Core.HttpClient do
       :exit, reason ->
         Telemetry.request_exception(start_time, metadata,
           kind: :exit,
-          reason: inspect(reason),
-          stacktrace: __STACKTRACE__,
+          reason: describe(reason),
+          stacktrace: scrub_stacktrace(__STACKTRACE__),
           status: nil,
           result: :exception
         )
 
-        {:error, "Request exception: #{inspect(reason)}"}
+        {:error, "Request exception: #{describe(reason)}"}
     end
   end
+
+  # **A stacktrace frame carries the ARGUMENTS of a call that failed to match.** A
+  # `FunctionClauseError` inside the transport records `{module, function, args, location}`
+  # for its top frame, and the args of a request call are the request: the headers, which
+  # hold the `Authorization` value or the signature. `:stacktrace` is documented
+  # `:exception` metadata and reaches every attached handler, log backend and exporter, so
+  # each frame is reduced to the arity its args had. Nothing a handler groups by (module,
+  # function, arity, file, line) is lost.
+  defp scrub_stacktrace(stacktrace) do
+    Enum.map(stacktrace, fn
+      {module, function, args, location} when is_list(args) ->
+        {module, function, length(args), location}
+
+      frame ->
+        frame
+    end)
+  end
+
+  # Bounded text for a reason that reaches an error message and telemetry. Byte-identical to
+  # `inspect/1` for anything inside the limits, so a message a caller matches is unchanged.
+  defp describe(term), do: inspect(term, limit: 50, printable_limit: @body_excerpt_bytes)
 
   # Counts the body as it arrives and halts the transfer once it passes `limit`. The body is
   # kept as one binary appended to in place (the BEAM extends such a binary in amortised

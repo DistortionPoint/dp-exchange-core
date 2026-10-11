@@ -76,7 +76,9 @@ defmodule DpExchange.Core.Telemetry do
     over the cap). The venue's response body is never carried.
   - `[:dp_exchange, :request, :exception]` — request raised an
     exception. Measurements: `%{duration: integer}`. Metadata: same
-    as `:stop` plus `%{kind:, reason:, stacktrace:}`.
+    as `:stop` plus `%{kind:, reason:, stacktrace:}`. `reason` is bounded text, and
+    `Core.HttpClient` reduces each stacktrace frame's argument list to its arity: a frame
+    that failed to match records the request's arguments, headers and signature included.
 
   ### Rate limiting
 

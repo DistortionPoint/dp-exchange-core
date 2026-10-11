@@ -374,7 +374,7 @@ defmodule DpExchange.Core.PollingFeed do
       in_flight: nil,
       # Ticks that arrived while a fetch was in flight, oldest first. This is the mailbox
       # queue the synchronous version had, made explicit — concurrency stays at one.
-      queue: [],
+      queue: :queue.new(),
       # Per-symbol mode: the symbols that already have a tick coming — a timer pending, a
       # job queued, or a fetch in flight. **This is the set `update_symbols/2` must consult,
       # and `state.symbols` is not it.**
@@ -578,7 +578,11 @@ defmodule DpExchange.Core.PollingFeed do
     |> start_next()
   end
 
-  defp enqueue(state, job), do: start_next(%{state | queue: state.queue ++ [job]})
+  # An Erlang `:queue`, not a list appended to: with thousands of symbols and a fetch slower
+  # than the interval the queue holds one job per symbol, and `queue ++ [job]` copied all of
+  # them on every tick (O(n) each, O(n^2) a cycle) inside the one process that answers
+  # `status/1`. `:queue.in/2` is amortised constant time and keeps the same FIFO order.
+  defp enqueue(state, job), do: start_next(%{state | queue: :queue.in(job, state.queue)})
 
   # Concurrency is one, by construction. See the moduledoc: this is the mailbox queue the
   # synchronous version had, made explicit, and NOT an invitation to raise the limit — a
@@ -595,14 +599,22 @@ defmodule DpExchange.Core.PollingFeed do
   # symbol removed while queued and later re-added then looked already scheduled to
   # `update_symbols/2`, got no timer, and was never polled again, with `coverage/1` silent
   # about it. Found 2026-10-10 by reading the path.
-  defp start_next(%{in_flight: nil, queue: [{:one, symbol} | rest]} = state) do
-    if MapSet.member?(state.symbols, symbol),
-      do: start_fetch(state, {:one, symbol}, rest),
-      else: start_next(%{state | queue: rest, scheduled: MapSet.delete(state.scheduled, symbol)})
-  end
+  defp start_next(%{in_flight: nil} = state) do
+    case :queue.out(state.queue) do
+      {{:value, {:one, symbol} = job}, rest} ->
+        if MapSet.member?(state.symbols, symbol) do
+          start_fetch(state, job, rest)
+        else
+          start_next(%{state | queue: rest, scheduled: MapSet.delete(state.scheduled, symbol)})
+        end
 
-  defp start_next(%{in_flight: nil, queue: [job | rest]} = state),
-    do: start_fetch(state, job, rest)
+      {{:value, job}, rest} ->
+        start_fetch(state, job, rest)
+
+      {:empty, _queue} ->
+        state
+    end
+  end
 
   defp start_next(state), do: state
 
@@ -857,7 +869,7 @@ defmodule DpExchange.Core.PollingFeed do
 
     # BOUNDARY: one symbol's exception must not kill the whole feed.
   rescue
-    exception -> {:error, Exception.message(exception)}
+    exception -> {:error, exception |> Exception.message() |> String.slice(0, 2_048)}
   catch
     :exit, reason -> {:error, {:exit, reason}}
     # A `throw` escaped: it killed the task, and through its link the feed itself.
@@ -921,14 +933,16 @@ defmodule DpExchange.Core.PollingFeed do
   # the feed is delivering nothing, which reads downstream as a quiet venue.
   defp record_failure(state, what, reason) do
     failures = state.failures_since_ok + 1
-    Logger.debug("[#{state.label}] #{what}: #{inspect(reason)}")
+    # Bounded: `reason` is whatever the fetch answered, a decoded venue body included, and the
+    # warning below repeats every sweep for as long as an outage lasts.
+    Logger.debug("[#{state.label}] #{what}: #{bounded(reason)}")
 
     state =
       if delivering_nothing?(state, failures) do
         Logger.warning(
           "[#{state.label}] has delivered NOTHING in #{failures} consecutive attempts — " <>
             "this venue is indistinguishable from quiet while it lasts. Last error: " <>
-            inspect(reason)
+            bounded(reason)
         )
 
         notify_delivering_nothing(state, failures, reason)
@@ -961,9 +975,11 @@ defmodule DpExchange.Core.PollingFeed do
     guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
     # Bounded: the reason is a venue error body or a decoded payload, and telemetry metadata
     # is copied to every attached handler and exporter.
-    Telemetry.link_down(state.provider, inspect(reason, limit: 20, printable_limit: 512))
+    Telemetry.link_down(state.provider, bounded(reason))
     %{state | notice_state: :dead}
   end
+
+  defp bounded(reason), do: inspect(reason, limit: 20, printable_limit: 512)
 
   # **What a fetch's failure reason becomes inside a notice's `details`.** `Notice.new/3`
   # refuses a credential-shaped key at ANY depth (a credential nested in a payload reaches a
@@ -978,7 +994,7 @@ defmodule DpExchange.Core.PollingFeed do
   defp notice_reason(reason) when is_atom(reason) or is_number(reason), do: reason
   defp notice_reason(reason) when is_binary(reason), do: reason
 
-  defp notice_reason(reason), do: inspect(reason, limit: 20, printable_limit: 512)
+  defp notice_reason(reason), do: bounded(reason)
 
   # How stale the newest success may be before the feed counts as delivering
   # nothing. Generous against the slowest interval in the fleet so an ordinary
