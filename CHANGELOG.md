@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.75] - 2026-10-11
+
 ### Changed
 
 - **`Core.PollingFeed` emits `[:dp_exchange, :link, :up]` on its first delivery.** It was
