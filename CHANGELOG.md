@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`Order.order_type` gains `:trailing_stop`, `:trailing_stop_limit`, `:market_on_close`
+  and `:limit_on_close`**, the four types `Capabilities` already let a venue declare. A venue
+  could say it accepts a trailing stop while `Order.new/1` refused the order it then
+  returned; Webull kept the round trip with a struct literal outside the type. Additive:
+  every value accepted before is still accepted.
+
 ## [0.3.73] - 2026-10-11
 
 ### Changed

@@ -440,6 +440,16 @@ defmodule DpExchange.Core.Types.ValidateTest do
       assert %Order{status: nil} = Order.new(Keyword.put(@valid, :status, nil))
     end
 
+    test "accepts every order type Capabilities lets a venue declare, and nothing else" do
+      for type <- [:trailing_stop, :trailing_stop_limit, :market_on_close, :limit_on_close] do
+        assert %Order{order_type: ^type} = Order.new(Keyword.put(@valid, :order_type, type))
+      end
+
+      assert_raise ArgumentError, ~r/order_type/, fn ->
+        Order.new(Keyword.put(@valid, :order_type, :trailing))
+      end
+    end
+
     test "still enforces PRESENCE of every enforced key, same as before this fix" do
       assert_raise ArgumentError, fn -> Order.new(Keyword.delete(@valid, :quantity)) end
     end

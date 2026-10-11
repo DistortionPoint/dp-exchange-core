@@ -66,10 +66,38 @@ defmodule DpExchange.Core.Types.Order do
   # The atoms behind `t:order_type/0` and `t:status/0`, kept beside them so `new/1` checks the
   # vocabulary the types state. "A status this package does not recognise gets `nil`, never
   # the nearest atom" (moduledoc) was only a convention until the constructor enforced it.
-  @order_types [:market, :limit, :stop, :stop_limit, :post_only, :ioc, :fok]
+  #
+  # The last four joined on 2026-10-11 to match `Core.Capabilities`, which has named them
+  # since Schwab's extraction: a venue could DECLARE it accepts `:trailing_stop` while the
+  # order it then returned could not say so — `new/1` refused it, so Webull built a struct
+  # literal outside this type to keep the round trip. One vocabulary for both, not two.
+  @order_types [
+    :market,
+    :limit,
+    :stop,
+    :stop_limit,
+    :post_only,
+    :ioc,
+    :fok,
+    :trailing_stop,
+    :trailing_stop_limit,
+    :market_on_close,
+    :limit_on_close
+  ]
   @statuses [:pending, :open, :partially_filled, :filled, :cancelled, :rejected, :expired]
 
-  @type order_type :: :market | :limit | :stop | :stop_limit | :post_only | :ioc | :fok
+  @type order_type ::
+          :market
+          | :limit
+          | :stop
+          | :stop_limit
+          | :post_only
+          | :ioc
+          | :fok
+          | :trailing_stop
+          | :trailing_stop_limit
+          | :market_on_close
+          | :limit_on_close
 
   @type status ::
           :pending
