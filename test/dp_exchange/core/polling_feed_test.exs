@@ -1091,6 +1091,20 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert PollingFeed.status(pid).failures_since_ok >= 1
     end
 
+    test "a long text failure reason is bounded in the notice" do
+      test = self()
+      long = String.duplicate("x", 10_000)
+
+      start_feed(
+        fetch: fn _symbol -> {:error, long} end,
+        symbols: ~w(BTC-USD),
+        on_notice: fn notice -> send(test, {:notice, notice}) end
+      )
+
+      assert_receive {:notice, notice}, 5_000
+      assert String.length(notice.details.last_error) == 2_048
+    end
+
     test "emits a recovery notice, distinct from the dead one, when the feed resumes delivering" do
       test = self()
       counter = :counters.new(1, [])

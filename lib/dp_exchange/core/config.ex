@@ -243,18 +243,44 @@ defmodule DpExchange.Core.Config do
   # One key, not the whole dictionary: `Process.info(pid, :dictionary)` copied every entry of
   # the ancestor's dictionary on each lookup, and `HttpClient` looks up several keys per
   # request. A stored override is always `{:ok, value}`, so `:undefined` only means absent.
+  #
+  # The `{:dictionary, key}` item exists from OTP 26.2; an older runtime (Elixir 1.18 still
+  # runs on OTP 25) raises `ArgumentError` for it, and the whole dictionary is read instead.
   defp find_in_callers([pid | rest], key) do
-    case Process.info(pid, {:dictionary, key}) do
-      {{:dictionary, ^key}, {:ok, _value} = found} ->
+    case dictionary_entry(pid, key) do
+      {:ok, _value} = found ->
         found
 
-      {{:dictionary, ^key}, _absent} ->
+      :absent ->
         find_in_callers(rest, key)
 
-      nil ->
+      :dead ->
         # The ancestor is already dead. Not an error — a test process can finish
         # while work it spawned is still running — so keep walking.
         find_in_callers(rest, key)
+    end
+  end
+
+  defp dictionary_entry(pid, key) do
+    case Process.info(pid, {:dictionary, key}) do
+      {{:dictionary, ^key}, {:ok, _value} = found} -> found
+      {{:dictionary, ^key}, _absent} -> :absent
+      nil -> :dead
+    end
+  rescue
+    ArgumentError -> whole_dictionary_entry(pid, key)
+  end
+
+  defp whole_dictionary_entry(pid, key) do
+    case Process.info(pid, :dictionary) do
+      {:dictionary, dictionary} ->
+        case List.keyfind(dictionary, key, 0) do
+          {^key, {:ok, _value} = found} -> found
+          _absent -> :absent
+        end
+
+      nil ->
+        :dead
     end
   end
 end

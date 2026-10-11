@@ -992,7 +992,9 @@ defmodule DpExchange.Core.PollingFeed do
   # has no keys and travels as it was; anything structured is carried as bounded text, the
   # same shape `Telemetry.link_down/2` already sends for it.
   defp notice_reason(reason) when is_atom(reason) or is_number(reason), do: reason
-  defp notice_reason(reason) when is_binary(reason), do: reason
+  # A binary is bounded too: `HttpClient`'s own error text is already an excerpt, but a
+  # caller's fetch may answer any string, and a notice reaches every handler and exporter.
+  defp notice_reason(reason) when is_binary(reason), do: String.slice(reason, 0, 2_048)
 
   defp notice_reason(reason), do: bounded(reason)
 

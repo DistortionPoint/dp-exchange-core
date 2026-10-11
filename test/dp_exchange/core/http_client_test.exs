@@ -1428,5 +1428,22 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert_receive {:query, ^expected}, 5_000
     end
+
+    test "a keyword list keeps the order the caller wrote, because venues sign it" do
+      test_pid = self()
+
+      plug = fn conn ->
+        send(test_pid, {:query, conn.query_string})
+        Req.Test.json(conn, %{"ok" => true})
+      end
+
+      assert {:ok, %{"ok" => true}} =
+               HttpClient.get("http://venue.test/q", [zeta: 1, alpha: 2, mid: 3],
+                 plug: plug,
+                 retry_attempts: 0
+               )
+
+      assert_receive {:query, "zeta=1&alpha=2&mid=3"}, 5_000
+    end
   end
 end

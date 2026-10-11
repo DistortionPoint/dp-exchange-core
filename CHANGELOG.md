@@ -21,6 +21,17 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Config.find_override/1` works on OTP before 26.2.** 0.3.77 read one dictionary key with
+  `Process.info(pid, {:dictionary, key})`, an item OTP added in 26.2; Elixir 1.18 still runs on
+  OTP 25 and 26.0-26.1, where it raised `ArgumentError`. On such a runtime the whole
+  dictionary is read, as before 0.3.77. CI runs OTP 28 only, so that path is unmeasured.
+
+- **`PollingFeed` bounds a text failure reason in its `:coverage_change` notice.** A
+  binary reason travelled to every `on_notice` handler at whatever size the caller's fetch
+  answered; it is now cut at 2,048 characters. Shorter reasons are unchanged.
+
 ## [0.3.77] - 2026-10-11
 
 ### Fixed
