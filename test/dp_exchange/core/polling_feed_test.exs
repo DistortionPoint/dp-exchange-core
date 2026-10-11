@@ -453,6 +453,66 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
   end
 
+  describe "a consumer callback that raises does not take the feed down" do
+    import ExUnit.CaptureLog
+
+    test "a raising sink is logged by name and class, never by message, and polling goes on" do
+      test = self()
+
+      sink = fn event ->
+        send(test, {:sink_called, event.symbol})
+        raise "payload-bearing message #{inspect(event)}"
+      end
+
+      log =
+        capture_log(fn ->
+          pid =
+            start_feed(
+              fetch: fn symbol -> {:ok, event(symbol)} end,
+              symbols: ~w(BTC-USD),
+              sink: sink
+            )
+
+          assert_receive {:sink_called, "BTC-USD"}, 5_000
+          # A second delivery proves the feed was not restarted and is still on its clock.
+          assert_receive {:sink_called, "BTC-USD"}, 5_000
+          assert %{symbols: 1} = PollingFeed.status(pid)
+        end)
+
+      assert log =~ "sink callback raised RuntimeError"
+      refute log =~ "payload-bearing"
+    end
+
+    test "a raising on_refusal is survived and the scope set by update_symbols/2 is kept" do
+      pid =
+        start_feed(
+          fetch: fn _symbol -> {:refused, :not_listed} end,
+          symbols: ~w(BTC-USD),
+          on_refusal: fn _symbol, _reason -> raise "refusal handler bug" end
+        )
+
+      PollingFeed.update_symbols(pid, ~w(BTC-USD ETH-USD))
+      await_status(pid, &(&1.failures_since_ok >= 2))
+
+      assert Process.alive?(pid)
+      assert %{symbols: 2} = PollingFeed.status(pid)
+    end
+
+    test "a raising on_notice is survived when the feed crosses into delivering nothing" do
+      pid =
+        start_feed(
+          fetch: fn _symbol -> {:error, :down} end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn _notice -> exit(:handler_gone) end
+        )
+
+      status = await_status(pid, &(&1.failures_since_ok >= 2))
+
+      assert Process.alive?(pid)
+      assert status.last_error == :down
+    end
+  end
+
   describe "update_symbols/2" do
     test "adds symbols and drops coverage for removed ones" do
       pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
@@ -465,6 +525,18 @@ defmodule DpExchange.Core.PollingFeedTest do
       # as a stale claim of delivery.
       coverage = PollingFeed.coverage(pid)
       refute Map.has_key?(coverage, "BTC-USD")
+    end
+
+    test "a MapSet of symbols is accepted, as the list is, and does not crash the feed" do
+      # `Map.take/2` was handed the argument as given, so any enumerable that was not a list
+      # raised in the feed and the restart lost every runtime scope.
+      pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+
+      PollingFeed.update_symbols(pid, MapSet.new(~w(BTC-USD ETH-USD)))
+      assert_receive {:published, %{symbol: "ETH-USD"}}, 5_000
+
+      assert %{symbols: 2} = PollingFeed.status(pid)
     end
 
     test "an existing symbol is not rescheduled a second time" do

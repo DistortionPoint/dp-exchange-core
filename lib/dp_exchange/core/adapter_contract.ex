@@ -131,9 +131,10 @@ defmodule DpExchange.Core.AdapterContract do
          "names it as one print, a running total or a rolling 24h total, and one carrying " <>
          "none names no window"},
       {31,
-       "fake order round trip — the id the fake's place_order/3 returns is accepted by " <>
-         "the same fake's get_order/3 and cancel_order/3, unless those are declared " <>
-         "unsupported"}
+       "fake order round trip — the ids the fake's place_order/3, place_orders/3, " <>
+         "replace_order/4 and close_position/3 return (each when declared active) are " <>
+         "accepted by the same fake's get_order/3 and cancel_order/3, unless those are " <>
+         "declared unsupported"}
     ]
   end
 
@@ -2313,7 +2314,12 @@ defmodule DpExchange.Core.AdapterContract do
         # **What this does not catch, stated plainly:** the real venue, and an id the real
         # venue would mint in a shape the fake does not. It proves the fake is consistent
         # with itself, which is the half that reaches a consumer's test suite.
-        test "the id place_order/3 returns is accepted by get_order/3 and cancel_order/3" do
+        #
+        # The same holds for the ids `place_orders/3`, `replace_order/4` and
+        # `close_position/3` mint, each asked only when declared active. A refused
+        # `place_orders/3` entry, or a refused `close_position/3` (the suite opens no
+        # position), is an answer the contract allows and not a failure.
+        test "ids the order-minting calls return are accepted by get_order/3, cancel_order/3" do
           if @fake, do: assert_order_round_trip(@fake, @venue.capabilities())
         end
       end
@@ -2321,10 +2327,26 @@ defmodule DpExchange.Core.AdapterContract do
       defp assert_order_round_trip(fake, caps) do
         place_args = endpoint_args(:place_order, 3)
 
+        placed_opts = List.last(place_args)
+
         calls = %{
           place_order: place_args,
-          get_order: &round_trip_args(:get_order, &1, List.last(place_args)),
-          cancel_order: &round_trip_args(:cancel_order, &1, List.last(place_args))
+          get_order: &round_trip_args(:get_order, &1, placed_opts),
+          cancel_order: &round_trip_args(:cancel_order, &1, placed_opts),
+          place_orders:
+            :place_orders
+            |> endpoint_args(3)
+            |> round_trip_opts({:place_orders, 3}, placed_opts),
+          replace_order: fn id ->
+            :replace_order
+            |> endpoint_args(4)
+            |> List.replace_at(1, id)
+            |> round_trip_opts({:replace_order, 4}, placed_opts)
+          end,
+          close_position:
+            :close_position
+            |> endpoint_args(3)
+            |> round_trip_opts({:close_position, 3}, placed_opts)
         }
 
         case DpExchange.Core.OrderRoundTripCheck.run(fake, caps, calls) do
@@ -2358,6 +2380,14 @@ defmodule DpExchange.Core.AdapterContract do
       # some, and otherwise the options the order was PLACED with: an order placed under an
       # account is read and cancelled under that account, and a venue that scopes
       # `get_order/3` but not `cancel_order/3` in `endpoint_opts:` is not misconfigured for it.
+      # The minting calls beyond `place_order/3` take the same fallback: their own declared
+      # `endpoint_opts:` where there are some, the placed order's options otherwise.
+      defp round_trip_opts(args, endpoint, placed_opts) do
+        if Map.has_key?(@endpoint_opts, endpoint),
+          do: args,
+          else: List.replace_at(args, -1, placed_opts)
+      end
+
       defp round_trip_args(name, id, placed_opts) do
         endpoint = {name, 3}
 

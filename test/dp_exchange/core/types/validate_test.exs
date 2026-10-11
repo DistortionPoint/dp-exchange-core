@@ -409,6 +409,26 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "still enforces PRESENCE of every enforced key, same as before this fix" do
       assert_raise ArgumentError, fn -> Order.new(Keyword.delete(@valid, :quantity)) end
     end
+
+    test "refuses a side, order_type or status outside the vocabulary the types state" do
+      # `"OPEN"` and `:canceled` are plausible venue spellings that match no branch of a
+      # consumer's `case`; the moduledoc's answer for an unrecognised status is `nil`.
+      for {field, bad} <- [side: "buy", side: :long, order_type: :trailing, status: :canceled] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          Order.new(Keyword.put(@valid, field, bad))
+        end
+      end
+    end
+
+    test "accepts every atom the types state" do
+      statuses = [:pending, :open, :partially_filled, :filled, :cancelled, :rejected, :expired]
+      types = [:market, :limit, :stop, :stop_limit, :post_only, :ioc, :fok]
+
+      for status <- statuses, type <- types do
+        attrs = @valid |> Keyword.put(:status, status) |> Keyword.put(:order_type, type)
+        assert %Order{} = Order.new(attrs)
+      end
+    end
   end
 
   describe "OrderBook.new/1" do

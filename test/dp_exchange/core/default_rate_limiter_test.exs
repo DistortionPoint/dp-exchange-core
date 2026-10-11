@@ -137,6 +137,24 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       assert :ok = Limiter.check(:venue, 1, opts)
     end
 
+    test "a :timeout that is not a non-negative integer or :infinity is refused, not obeyed" do
+      opts = start_limiter(slow())
+      assert :ok = Limiter.acquire(:venue, 1, opts)
+
+      # Erlang term order puts a binary above every integer: `wait_ms > "30"` was false, so
+      # an exhausted bucket was waited out in full instead of failing closed.
+      for bad <- ["30", 30.0, -1, :soon] do
+        assert {:error, {:invalid_timeout, ^bad}} =
+                 Limiter.acquire(:venue, 1, opts ++ [timeout: bad])
+      end
+    end
+
+    test "timeout: :infinity waits out the bucket rather than timing out" do
+      opts = start_limiter(%{default: %{limit: 20, per_ms: 1_000, burst: 1}})
+      assert :ok = Limiter.acquire(:venue, 1, opts)
+      assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: :infinity])
+    end
+
     test "concurrent weight-N acquires do not interleave" do
       # 20 tokens of burst, ten concurrent callers each taking 2. Exactly ten succeed
       # immediately; none observes a partially-applied reservation.
@@ -385,6 +403,16 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
   end
 
   describe "penalize/3 — a venue's Retry-After holds the bucket" do
+    test "an ms that is not a non-negative integer raises, naming the value" do
+      opts = start_limiter(fast())
+
+      for bad <- [-1, 1.5, "5000", nil] do
+        assert_raise ArgumentError, ~r/#{Regex.escape(inspect(bad))}/, fn ->
+          Limiter.penalize("v", bad, opts)
+        end
+      end
+    end
+
     test "holds a bucket with room closed for the stated time" do
       opts = start_limiter(fast())
 

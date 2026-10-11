@@ -45,6 +45,13 @@ defmodule DpExchange.Core.FakeInjection do
   will not see it, the same limitation every other `Config`-based seam in this family
   already has.
 
+  **A `Task` consumes the test's queue, not a copy of it.** The state lives in an `Agent` the
+  configuring process starts and links to itself; only its pid sits in the process
+  dictionary, where a `Task` finds it through `$callers`. Each pop is one
+  `Agent.get_and_update/2`, so an outcome popped in a task is gone for the test's next call,
+  and two tasks cannot both receive the head of one queue. The agent ends with the process
+  that started it.
+
   ## Scope
 
   Whole-call injection is exactly that: it picks the outcome one `Fake` function call
@@ -125,28 +132,42 @@ defmodule DpExchange.Core.FakeInjection do
   """
   @spec next_outcome(atom(), String.t() | nil) :: {:override, outcome()} | :none
   def next_outcome(venue, symbol) when is_atom(venue) do
-    state = get_state(venue)
+    case find_agent() do
+      nil ->
+        :none
 
+      agent ->
+        # The pop is one `Agent.get_and_update/2`, so two processes reaching the same
+        # queue cannot both receive its head.
+        Agent.get_and_update(agent, fn all ->
+          {answer, state} = pop_outcome(Map.get(all, venue, default_state()), symbol)
+          {answer, Map.put(all, venue, state)}
+        end)
+    end
+  catch
+    # The configuring process is gone and took the agent with it: nothing is configured.
+    :exit, _reason -> :none
+  end
+
+  defp pop_outcome(state, symbol) do
     cond do
       symbol && Map.has_key?(state.symbol_always, symbol) ->
-        {:override, Map.fetch!(state.symbol_always, symbol)}
+        {{:override, Map.fetch!(state.symbol_always, symbol)}, state}
 
       symbol && Map.get(state.by_symbol, symbol, []) != [] ->
         [outcome | rest] = Map.fetch!(state.by_symbol, symbol)
-        put_state(venue, %{state | by_symbol: Map.put(state.by_symbol, symbol, rest)})
-        {:override, outcome}
+        {{:override, outcome}, %{state | by_symbol: Map.put(state.by_symbol, symbol, rest)}}
 
       state.global_always != :none ->
         {:some, outcome} = state.global_always
-        {:override, outcome}
+        {{:override, outcome}, state}
 
       state.global != [] ->
         [outcome | rest] = state.global
-        put_state(venue, %{state | global: rest})
-        {:override, outcome}
+        {{:override, outcome}, %{state | global: rest}}
 
       true ->
-        :none
+        {:none, state}
     end
   end
 
@@ -162,26 +183,65 @@ defmodule DpExchange.Core.FakeInjection do
 
   @doc "Whether `bypass_credentials/1` is in effect for `venue` in the calling process."
   @spec credentials_bypassed?(atom()) :: boolean()
-  def credentials_bypassed?(venue) when is_atom(venue), do: get_state(venue).bypass_credentials?
+  def credentials_bypassed?(venue) when is_atom(venue) do
+    case find_agent() do
+      nil -> false
+      agent -> Agent.get(agent, &Map.get(&1, venue, default_state()).bypass_credentials?)
+    end
+  catch
+    :exit, _reason -> false
+  end
 
   @doc "Clears every override (queued failures, always-fail, credential bypass) for `venue`."
   @spec reset(atom()) :: :ok
   def reset(venue) when is_atom(venue) do
-    Config.put_override(@override_key, Map.delete(all_state(), venue))
+    case find_agent() do
+      nil -> :ok
+      agent -> Agent.update(agent, &Map.delete(&1, venue))
+    end
+  catch
+    :exit, _reason -> :ok
   end
 
-  defp update(venue, fun), do: venue |> get_state() |> fun.() |> then(&put_state(venue, &1))
-
-  defp get_state(venue), do: Map.get(all_state(), venue, default_state())
-
-  defp put_state(venue, state) do
-    Config.put_override(@override_key, Map.put(all_state(), venue, state))
+  defp update(venue, fun) do
+    Agent.update(agent!(), fn all ->
+      Map.put(all, venue, fun.(Map.get(all, venue, default_state())))
+    end)
   end
 
-  defp all_state do
+  # The handle is what the configuring process keeps in its dictionary; the state lives in
+  # the agent, because a `Task` can read its caller's dictionary but only write its own, and a
+  # queue popped in the task's copy was never popped in the test's.
+  defp find_agent do
     case Config.find_override(@override_key) do
-      {:ok, all} -> all
-      :none -> %{}
+      {:ok, agent} when is_pid(agent) -> if Process.alive?(agent), do: agent
+      _none_or_stale -> nil
+    end
+  end
+
+  # Started and linked by the first process that configures anything, so an abnormal exit
+  # takes it down. A link ignores a `:normal` exit, so a watcher also ends the agent when the
+  # configuring process exits for any reason — otherwise every process that configured an
+  # override and then exited normally would leave an agent behind.
+  defp agent! do
+    case find_agent() do
+      nil ->
+        {:ok, agent} = Agent.start_link(fn -> %{} end)
+        owner = self()
+
+        spawn(fn ->
+          ref = Process.monitor(owner)
+
+          receive do
+            {:DOWN, ^ref, :process, _pid, _reason} -> Process.exit(agent, :kill)
+          end
+        end)
+
+        Config.put_override(@override_key, agent)
+        agent
+
+      agent ->
+        agent
     end
   end
 

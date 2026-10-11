@@ -711,6 +711,18 @@ cancel take any non-blank id; Schwab's read and cancel take any id, and its canc
 account hash, which the check supplies from the placed options because Schwab's contract
 test declares no `{:cancel_order, 3}` entry. None of the five is expected to fail.
 
-**What it does not reach:** the real venue; `place_orders/3`, `replace_order/4` and
-`close_position/3`, which mint ids too. It also does not require the answered order to carry
-the placed id, because a venue may take a client id in and return its own.
+**Extended, 2026-10-11 (not executed):** the same group now also round-trips the ids
+`place_orders/3`, `replace_order/4` and `close_position/3` mint, each only when declared
+active. `test/dp_exchange/core/order_round_trip_check_test.exs` carries fakes that are
+correct and broken in each new way: a batch entry's id the read refuses, a batch of the wrong
+length, an unreadable batch entry, a replace that answers a refusal or a bare map, a
+close_position that answers a refusal (not applicable), `:not_supported` or a bare map.
+Judgement calls, stated so they are not mistaken for measurements: a refused batch entry and a
+refused `close_position/3` are treated as allowed answers (the suite opens no position, and
+the callback's `result/1` type allows a refusal); a bare-map batch entry is not asked about
+because its id key is venue-specific; the order a replace consumed is not offered to read or
+cancel because a venue may have retired it. The five venues' fakes for these three calls were
+not read by this change.
+
+**What it does not reach:** the real venue. It also does not require the answered order to
+carry the placed id, because a venue may take a client id in and return its own.

@@ -151,7 +151,9 @@ Built on the same `Config` process-scoped override machinery as everything else 
 page, so it inherits the identical `async: true` / `$callers` isolation guarantee — and
 the identical limitation: injection configured in your test only reaches a `Fake`
 function called from your test's own process or a `Task` it spawns, not from inside a
-separately-supervised `GenServer`.
+separately-supervised `GenServer`. A queued outcome popped by a `Task` is gone for your
+test's next call too: the queue lives in one `Agent` your test process starts and links, and
+only its pid is in your process dictionary.
 
 **Not every function is wired.** A `Fake` function that takes a *list* of symbols in one
 call — a venue's own bulk subscribe, say — is deliberately left out: whole-call injection

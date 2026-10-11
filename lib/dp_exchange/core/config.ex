@@ -235,6 +235,11 @@ defmodule DpExchange.Core.Config do
 
   defp find_in_callers([], _key), do: :none
 
+  # A caller on another node cannot be read: `Process.info/2` raises `ArgumentError` for a
+  # non-local pid. A dictionary there is not ours to consult, so the walk goes on past it.
+  defp find_in_callers([pid | rest], key) when is_pid(pid) and node(pid) != node(),
+    do: find_in_callers(rest, key)
+
   defp find_in_callers([pid | rest], key) do
     case Process.info(pid, :dictionary) do
       {:dictionary, dictionary} ->

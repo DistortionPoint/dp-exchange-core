@@ -104,6 +104,15 @@ defmodule DpExchange.Core.PollingFeed do
   volume is a defect class this family has paid for more than once. Rescheduling still
   happens only after a job finishes, so there is at most one pending job per symbol and the
   queue cannot grow without bound.
+
+  ## A consumer's callback cannot take the feed down
+
+  `:sink`, `:on_refusal` and `:on_notice` run inside this process. A raise, exit or throw in
+  one is caught, logged as a warning that names the callback and the exception's module (not
+  its message, which can quote the venue payload it was handed), and the feed carries on.
+  Without that the callback's failure restarted the feed, and the restart lost every scope
+  set by `update_symbols/2`. A callback that fails on every event is therefore a log line per
+  event, not a restart loop.
   """
 
   use GenServer
@@ -138,7 +147,7 @@ defmodule DpExchange.Core.PollingFeed do
   not carry at all, reported through `on_refusal` once each rather than retried forever.
   Added because its absence was a real gap: before it existed, a batch fetcher that found
   one bad symbol mixed into an otherwise-live request had no outcome to return that this
-  module's `fetch_all_and_publish/1` did not already handle, other than reporting the
+  module did not already handle, other than reporting the
   whole batch as an ordinary `{:error, reason}` — which, unlike a real `:refused`, is
   retried forever and never reaches `on_refusal`, so the caller never learns to drop the
   symbol from its scope. `dp_exchange_robinhood` documented this exact gap as the reason
@@ -146,7 +155,7 @@ defmodule DpExchange.Core.PollingFeed do
   repeatable-query bulk mode.
 
   A bulk response with zero events (`{:ok, []}`) is treated as delivering nothing for
-  escalation purposes even though the call itself succeeded — see `fetch_all_and_publish/1`.
+  escalation purposes even though the call itself succeeded.
   """
   @type fetch_all ::
           ([String.t()] ->
@@ -473,7 +482,7 @@ defmodule DpExchange.Core.PollingFeed do
      %{
        state
        | symbols: wanted,
-         last_ok: Map.take(state.last_ok, symbols),
+         last_ok: Map.take(state.last_ok, MapSet.to_list(wanted)),
          refused: MapSet.intersection(state.refused, wanted)
      }}
   end
@@ -730,9 +739,36 @@ defmodule DpExchange.Core.PollingFeed do
     if MapSet.member?(state.refused, symbol) do
       state
     else
-      state.on_refusal.(symbol, reason)
+      guarded(state, :on_refusal, fn -> state.on_refusal.(symbol, reason) end)
       %{state | refused: MapSet.put(state.refused, symbol)}
     end
+  end
+
+  # **A consumer's callback is not allowed to take the feed down.** `sink`, `on_refusal` and
+  # `on_notice` run inside this GenServer, so a raise in one killed the feed, and the restart
+  # lost every runtime `update_symbols/2` scope: the incident `safely/1` closes for the fetch,
+  # reached through the other side of the feed. The failure is logged, naming the callback
+  # and the exception's MODULE only: an exception message can quote its arguments, and the
+  # argument here is a venue payload. The feed carries on, and a sink that raises for every
+  # event is a sink the consumer reads about in its log, not a feed that restarts forever.
+  defp guarded(state, callback, fun) do
+    fun.()
+    :ok
+  rescue
+    exception ->
+      Logger.warning(
+        "[#{state.label}] #{callback} callback raised #{inspect(exception.__struct__)}; " <>
+          "the feed continues"
+      )
+
+      :ok
+  catch
+    kind, _reason ->
+      Logger.warning(
+        "[#{state.label}] #{callback} callback ended with a #{kind}; the feed continues"
+      )
+
+      :ok
   end
 
   defp deliver_one(state, symbol, event) do
@@ -741,7 +777,7 @@ defmodule DpExchange.Core.PollingFeed do
       | last_ok: Map.put(state.last_ok, symbol, System.monotonic_time(:millisecond)),
         refused: MapSet.delete(state.refused, symbol)
     }
-    |> tap(fn _state -> state.sink.(event) end)
+    |> tap(fn _state -> guarded(state, :sink, fn -> state.sink.(event) end) end)
     |> tap(fn _state -> report_delivery(state, event) end)
     |> record_success()
   end
@@ -771,7 +807,7 @@ defmodule DpExchange.Core.PollingFeed do
     # and marking it covered would be the feed asserting a delivery that
     # never happened.
     Enum.each(events, fn event ->
-      state.sink.(event)
+      guarded(state, :sink, fn -> state.sink.(event) end)
       report_delivery(state, event)
     end)
 
@@ -817,7 +853,7 @@ defmodule DpExchange.Core.PollingFeed do
   # the transition back out — a consumer that learned a feed died and never learned it
   # recovered is only half-served.
   #
-  # Called only on an actual delivery (a non-empty publish): `fetch_all_and_publish/1`
+  # Called only on an actual delivery (a non-empty publish): `apply_result/3`
   # routes a `{:ok, []}` bulk response through `record_failure/3` instead, precisely so
   # this function's `:dead` clause — and the recovery notice it fires — only ever fires
   # when something was truly delivered. There is no `record_success(state, false)`
@@ -842,7 +878,7 @@ defmodule DpExchange.Core.PollingFeed do
         details: %{label: state.label, consecutive_failures: state.failures_since_ok}
       )
 
-    state.on_notice.(notice)
+    guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
     Telemetry.link_up(state.provider)
     %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
   end
@@ -886,7 +922,7 @@ defmodule DpExchange.Core.PollingFeed do
         details: %{label: state.label, consecutive_failures: failures, last_error: reason}
       )
 
-    state.on_notice.(notice)
+    guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
     Telemetry.link_down(state.provider, inspect(reason))
     %{state | notice_state: :dead}
   end

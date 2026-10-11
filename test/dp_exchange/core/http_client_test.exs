@@ -378,6 +378,24 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe "request/5 refuses retry options that would crash mid-retry" do
+    test "a retry_attempts that is not a non-negative integer raises before any request" do
+      for bad <- ["3", 3.0, -1, :many] do
+        assert_raise ArgumentError, ~r/retry_attempts/, fn ->
+          HttpClient.request(:get, "http://127.0.0.1:1/x", [], nil, retry_attempts: bad)
+        end
+      end
+    end
+
+    test "a retry_delay that is not a non-negative integer raises before any request" do
+      for bad <- ["1000", 1.5, -5] do
+        assert_raise ArgumentError, ~r/retry_delay/, fn ->
+          HttpClient.request(:get, "http://127.0.0.1:1/x", [], nil, retry_delay: bad)
+        end
+      end
+    end
+  end
+
   describe "parse_rate_limit_headers/1 — standard shape only" do
     test "reads the conventional x-ratelimit-* trio" do
       headers = [
@@ -393,6 +411,14 @@ defmodule DpExchange.Core.HttpClientTest do
     test "header names are matched case-insensitively" do
       headers = [{"x-ratelimit-limit", "10"}, {"X-RATELIMIT-REMAINING", "5"}]
       assert %{limit: 10, remaining: 5} = HttpClient.parse_rate_limit_headers(headers)
+    end
+
+    test "atom header names are read, in a list or a map, rather than raising" do
+      list = [{:"x-ratelimit-limit", "10"}, {:"X-RateLimit-Remaining", "5"}]
+      assert %{limit: 10, remaining: 5} = HttpClient.parse_rate_limit_headers(list)
+
+      map = %{"x-ratelimit-limit" => ["10"], "x-ratelimit-remaining": "5"}
+      assert %{limit: 10, remaining: 5} = HttpClient.parse_rate_limit_headers(map)
     end
 
     test "absent headers are nil — which means 'did not say', not 'no limit'" do

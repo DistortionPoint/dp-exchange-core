@@ -142,6 +142,46 @@ defmodule DpExchange.Core.FakeInjectionTest do
       assert Agent.get(agent, & &1) == :none
     end
 
+    test "a Task consumes a queued outcome, and the test's next call sees the following one" do
+      FakeInjection.queue_failures(:webull, [{:error, :first}, {:error, :second}])
+
+      assert Task.async(fn -> FakeInjection.next_outcome(:webull) end) |> Task.await() ==
+               {:override, {:error, :first}}
+
+      assert FakeInjection.next_outcome(:webull) == {:override, {:error, :second}}
+      assert FakeInjection.next_outcome(:webull) == :none
+    end
+
+    test "tasks racing for one queue each receive a different outcome" do
+      outcomes = for n <- 1..20, do: {:error, n}
+      FakeInjection.queue_failures(:webull, outcomes)
+
+      got =
+        1..20
+        |> Task.async_stream(fn _i -> FakeInjection.next_outcome(:webull) end, max_concurrency: 8)
+        |> Enum.map(fn {:ok, {:override, outcome}} -> outcome end)
+
+      assert Enum.sort(got) == Enum.sort(outcomes)
+      assert FakeInjection.next_outcome(:webull) == :none
+    end
+
+    test "the shared state ends when the configuring process exits normally" do
+      test_pid = self()
+
+      {pid, ref} =
+        spawn_monitor(fn ->
+          FakeInjection.queue_failures(:webull, [{:error, :first}])
+          {:ok, agent} = DpExchange.Core.Config.find_override(:fake_injection)
+          send(test_pid, {:agent, agent})
+        end)
+
+      assert_receive {:agent, agent}, 5_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :normal}, 5_000
+
+      agent_ref = Process.monitor(agent)
+      assert_receive {:DOWN, ^agent_ref, :process, ^agent, _reason}, 5_000
+    end
+
     test "an override set in this test IS visible to a Task it spawns" do
       FakeInjection.fail_always(:webull, {:error, :down})
 

@@ -95,7 +95,9 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   `retry_after=5s`, requests paced at the bucket's own 1/s drew 26 more 429s in 31s.
 
   Optional. `HttpClient` calls it only when the limiter exports it, so a limiter written
-  before it existed keeps working. **Cannot fail**, for the reason `c:record/3` cannot.
+  before it existed keeps working. The limiter being unreachable must not fail it, for the
+  reason `c:record/3` cannot; an `ms` that is not a non-negative integer is a caller's
+  mistake, and `Core.DefaultRateLimiter` raises `ArgumentError` for it.
   """
   @callback penalize(provider(), non_neg_integer(), opts()) :: :ok
 

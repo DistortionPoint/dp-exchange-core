@@ -318,6 +318,15 @@ this same escalation, even though the call itself succeeded — a bad credential
 to an empty result set server-side looks identical to a failure from `PollingFeed`'s
 side, and is treated the same way rather than silently resetting nothing.
 
+## A raising `:sink`, `:on_refusal` or `:on_notice` does not crash the feed
+
+All three run inside the feed's process. A raise, exit or throw in one is caught and logged
+as a warning that names the callback and the exception's module (never its message, which
+can quote the venue payload it was handed), and the feed carries on. It used to restart the
+feed, and the restart lost every scope set by `update_symbols/2`. The consequence for you: a
+callback that fails is a log line, not an outage you will see as a restart, so watch the log
+for `callback raised`.
+
 ## `:fetch_all` can refuse individual symbols without crashing the feed
 
 `t:PollingFeed.fetch_all/0`'s third outcome, `{:refused, refusals}` (`refusals ::

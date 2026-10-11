@@ -127,6 +127,30 @@ defmodule DpExchange.Core.ConfigTest do
     end
   end
 
+  describe "the $callers walk — a caller on another node" do
+    # A pid that claims another node, built without distribution (the term-format trick
+    # `FanoutTest` uses). `Process.info/2` raises for it, which used to take the lookup down.
+    defp remote_pid do
+      node = "remote@nowhere"
+
+      :erlang.binary_to_term(<<131, 88, 119, byte_size(node), node::binary, 1::32, 0::32, 1::32>>)
+    end
+
+    test "is skipped, and the walk reaches the local caller behind it" do
+      Config.put_override(:behind_remote, :from_test)
+      remote = remote_pid()
+      parent = self()
+
+      task =
+        Task.async(fn ->
+          Process.put(:"$callers", [remote, parent])
+          Config.get(:dp_exchange_core, :behind_remote, :fallback)
+        end)
+
+      assert Task.await(task) == :from_test
+    end
+  end
+
   describe "the $callers walk — the step people omit" do
     test "a spawned Task inherits the override" do
       # ExUnit propagates $callers to Tasks. Without the walk, any work a test spawns

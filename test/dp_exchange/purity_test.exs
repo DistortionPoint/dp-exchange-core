@@ -59,7 +59,8 @@ defmodule DpExchange.PurityTest do
                             Elixir.List Elixir.Logger Elixir.Macro Elixir.Map Elixir.MapSet
                             Elixir.Module Elixir.Path Elixir.Process Elixir.Regex Elixir.Req
                             Elixir.RuntimeError Elixir.String Elixir.Supervisor Elixir.System
-                            Elixir.URI Elixir.Task Elixir.Stream Elixir.Float Elixir.Tuple)
+                            Elixir.URI Elixir.Task Elixir.Stream Elixir.Float Elixir.Tuple
+                            Elixir.Agent)
 
       # `beam_lib`, `xref` and `erl_anno` are `:tools`/`:stdlib` — `Core.UnwiredCheck`'s
       # call-graph engine for assertion 16 (`Core.AdapterContract`), the same family

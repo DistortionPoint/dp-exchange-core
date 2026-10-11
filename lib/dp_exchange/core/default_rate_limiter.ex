@@ -136,7 +136,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
           :ok | {:error, :rate_limit_timeout} | {:error, term()}
   def acquire(provider, weight, opts \\ []) do
     with {:ok, weight} <- validate_weight(weight),
-         timeout = Config.opt(opts, :timeout, 30_000),
+         {:ok, timeout} <- validate_timeout(Config.opt(opts, :timeout, 30_000)),
          {:ok, wait_ms} <- call(opts, {:acquire, provider, weight, timeout}) do
       # Emitted BEFORE the sleep, not after. A consumer watching this event is watching for
       # the limiter binding, and a 20-second wait that only reports itself once it is over
@@ -220,11 +220,19 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   Holds `provider`'s bucket closed for at least `ms` milliseconds — for a venue's own
   `Retry-After`. See `c:DpExchange.Core.RateLimitBehaviour.penalize/3`.
 
-  Never shortens a hold already in place. **Cannot fail**, like `record/3`.
+  Never shortens a hold already in place. Like `record/3` it does not fail because of the
+  limiter: a limiter that is not running answers `:ok`. It does **raise `ArgumentError`**
+  for an `ms` that is not a non-negative integer, because that is a caller's mistake and
+  not something metering may swallow.
   """
   @impl DpExchange.Core.RateLimitBehaviour
   @spec penalize(atom() | String.t(), non_neg_integer(), keyword()) :: :ok
-  def penalize(provider, ms, opts \\ []) when is_integer(ms) and ms >= 0 do
+  def penalize(provider, ms, opts \\ []) do
+    unless is_integer(ms) and ms >= 0 do
+      raise ArgumentError,
+            "penalize/3 :ms must be a non-negative integer of milliseconds, got #{inspect(ms)}"
+    end
+
     call(opts, {:penalize, provider, ms})
     :ok
   catch
@@ -375,7 +383,7 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def handle_call({:acquire, provider, weight, timeout}, _from, state) do
     {wait_ms, new_tat} = reserve(state, provider, weight)
 
-    if wait_ms > timeout do
+    if timeout != :infinity and wait_ms > timeout do
       # Deliberately NOT committed. Consuming tokens for a request that will not be
       # made is how a partial failure leaks capacity nothing ever gives back.
       {:reply, {:error, :rate_limit_timeout}, state}
@@ -459,6 +467,13 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   # was a weight of 0 walking a descending range and recording twice.
   defp validate_weight(weight) when is_integer(weight) and weight > 0, do: {:ok, weight}
   defp validate_weight(weight), do: {:error, {:invalid_weight, weight}}
+
+  # `wait_ms > timeout` is Erlang term ordering: a number is below every atom and binary, so
+  # `:infinity` made every wait "exceed" it (an acquire that should wait forever timed out)
+  # and `"30"` made none of them (fail open, the failure the `nil` note above records).
+  defp validate_timeout(:infinity), do: {:ok, :infinity}
+  defp validate_timeout(ms) when is_integer(ms) and ms >= 0, do: {:ok, ms}
+  defp validate_timeout(other), do: {:error, {:invalid_timeout, other}}
 
   defp call(opts, message) do
     server = Config.opt(opts, :limiter, __MODULE__)

@@ -21,6 +21,52 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **Conformance assertion 31 round-trips every order-minting call, not only
+  `place_order/3`.** `Core.OrderRoundTripCheck.run/3` also calls `place_orders/3`,
+  `replace_order/4` and `close_position/3` when each is declared active, and offers every id
+  they mint to the fake's `get_order/3` and `cancel_order/3` (reads before cancels, each
+  distinct id once). A refused `place_orders/3` entry and a refused `close_position/3` are
+  allowed answers and not failures; a wrong-length batch, an unreadable batch entry, a
+  `replace_order/4` refusal and an un-allowed `close_position/3` shape fail closed. A venue
+  whose fake breaks on these calls will newly fail 31. Violations gain a `:minted_by` key.
+  Still 31 assertions. Written without `mix`; not run.
+- **`Order.new/1` refuses a `side`, `order_type` or `status` outside the atoms its types
+  state** (`nil` still allowed: "the venue's word, or nothing"). `:canceled` or `"OPEN"` built
+  and matched no branch of a consumer's `case`. No venue calls `Order.new/1`; struct
+  literals are unchecked as before.
+- **`DefaultRateLimiter.acquire/3` refuses a `:timeout` that is not a non-negative integer or
+  `:infinity`** with `{:error, {:invalid_timeout, value}}`. The server compared
+  `wait_ms > timeout` in Erlang term order, so `"30"` never timed out (fail open) and
+  `:infinity` always did.
+
+### Fixed
+
+- **`PollingFeed.update_symbols/2` crashed the feed on an enumerable that is not a list**
+  (`Map.take/2` was handed it as given), losing every runtime scope on the restart.
+- **`FakeInjection` queued outcomes popped in a `Task` were popped from the task's own copy.**
+  The test's queue was unchanged and the next call got the same outcome again. State now
+  lives in an `Agent` the configuring process starts and links; the process dictionary
+  holds only its pid, found through `$callers`, and each pop is one `Agent.get_and_update/2`.
+  When the queue is exhausted behaviour is as before. A link ignores a `:normal` exit, so a
+  monitor also ends the agent when the configuring process exits for any reason.
+- **`PollingFeed` no longer dies with a raising `:sink`, `:on_refusal` or `:on_notice`.** The
+  callback runs inside the feed, so its raise restarted the feed and lost every
+  `update_symbols/2` scope. A raise, exit or throw is now logged as a warning naming the
+  callback and the exception module (not its message, which can quote the payload) and the
+  feed continues.
+- **`DefaultRateLimiter.penalize/3` raises `ArgumentError` naming a bad `ms`** where it raised
+  `FunctionClauseError`, and its doc no longer says it "cannot fail".
+- **`HttpClient.request/5` raises `ArgumentError` for a `:retry_attempts` or `:retry_delay`
+  that is not a non-negative integer,** before sending. `"3"` sorts above every integer, so
+  it entered the retry branch and died on arithmetic in the calling venue process after the
+  request had left.
+- **`Config.find_override/1` skips a `$callers` pid on another node** where
+  `Process.info/2` raised `ArgumentError`.
+- **`HttpClient.parse_rate_limit_headers/1` and the 429 `Retry-After` read accept atom header
+  names** where `String.downcase/1` raised on them.
+
 ## [0.3.67] - 2026-10-11
 
 Found by reading `unwired_check.ex`, `link_safety_check.ex`, `credential_redaction_check.ex`,

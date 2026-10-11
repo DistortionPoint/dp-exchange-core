@@ -712,8 +712,19 @@ fails it.
 - **Options.** `get_order/3` and `cancel_order/3` take the options you declare for them in
   `endpoint_opts:`, and the options the order was *placed* with where you declared none: an
   order placed under an account is read and cancelled under it.
-- **What it does not reach:** the real venue, `place_orders/3`, `replace_order/4` and
-  `close_position/3`. It proves the fake is consistent with itself.
+- **The other three minting calls are covered too, each only when declared active.**
+  `place_orders/3` must answer `{:ok, list}` with one entry per request; an entry that is an
+  `%Order{}` (or `{:ok, %Order{}}`) must carry an `:id`, and that id is round-tripped. A
+  refused entry (`{:error, _}` / `{:refused, _}`) is the venue refusing that one order and
+  is not a failure; a bare map is venue JSON whose id key the check will not guess, so it
+  is not asked about. `replace_order/4` is called on an order the suite places for it
+  (needs `place_order/3` active) and the id it answers is round-tripped; a refusal there
+  fails the group, like `place_order/3`. `close_position/3` must answer an order, whose id
+  is round-tripped, or `{:error, _}` / `{:refused, _}` — the suite opens no position, so a
+  refusal is treated as not applicable. `{:error, :not_supported}` from an active
+  `close_position/3`, or any other shape, fails. Each takes its `endpoint_opts:` or, where
+  you declared none, the options the order was placed with.
+- **What it does not reach:** the real venue. It proves the fake is consistent with itself.
 
 ## Asset classes are a statement about today
 

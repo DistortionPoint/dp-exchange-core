@@ -63,6 +63,12 @@ defmodule DpExchange.Core.Types.Order do
 
   @type side :: :buy | :sell
 
+  # The atoms behind `t:order_type/0` and `t:status/0`, kept beside them so `new/1` checks the
+  # vocabulary the types state. "A status this package does not recognise gets `nil`, never
+  # the nearest atom" (moduledoc) was only a convention until the constructor enforced it.
+  @order_types [:market, :limit, :stop, :stop_limit, :post_only, :ioc, :fok]
+  @statuses [:pending, :open, :partially_filled, :filled, :cancelled, :rejected, :expired]
+
   @type order_type :: :market | :limit | :stop | :stop_limit | :post_only | :ioc | :fok
 
   @type status ::
@@ -111,5 +117,11 @@ defmodule DpExchange.Core.Types.Order do
   `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @required_non_nil, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@required_non_nil, attrs)
+    |> Validate.one_of!(:side, [:buy, :sell, nil])
+    |> Validate.one_of!(:order_type, [nil | @order_types])
+    |> Validate.one_of!(:status, [nil | @statuses])
+  end
 end

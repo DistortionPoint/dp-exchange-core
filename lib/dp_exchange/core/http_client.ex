@@ -204,6 +204,23 @@ defmodule DpExchange.Core.HttpClient do
     retry_attempts = Config.opt(opts, :retry_attempts, 3)
     log_requests = Config.opt(opts, :log_requests, true)
 
+    # **Refused here, in the caller, before anything is sent.** `"3"` sorts above every
+    # integer, so it entered the retry branch and died computing `"3" - attempts_left` in the
+    # calling venue process, after the request had already left; `retry_delay: "1000"` died
+    # the same way on the first retry. The mistake belongs at the call that made it.
+    unless is_integer(retry_attempts) and retry_attempts >= 0 do
+      raise ArgumentError,
+            ":retry_attempts must be a non-negative integer, got #{inspect(retry_attempts)}"
+    end
+
+    retry_delay = Config.opt(opts, :retry_delay, 1000)
+
+    unless is_integer(retry_delay) and retry_delay >= 0 do
+      raise ArgumentError,
+            ":retry_delay must be a non-negative integer of milliseconds, got " <>
+              inspect(retry_delay)
+    end
+
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
     # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
     # the log on every request. `Telemetry.endpoint/1` is the one place that decides what part
@@ -1062,13 +1079,14 @@ defmodule DpExchange.Core.HttpClient do
   #
   # This is not hypothetical tidiness: with only the pair form handled, every
   # `Retry-After` a venue sent was invisible, so a 429 always used the fallback.
-  defp normalise_headers(headers) when is_map(headers) do
-    Map.new(headers, fn {key, value} -> {String.downcase(key), first_value(value)} end)
+  defp normalise_headers(headers) when is_map(headers) or is_list(headers) do
+    Map.new(headers, fn {key, value} -> {header_name(key), first_value(value)} end)
   end
 
-  defp normalise_headers(headers) when is_list(headers) do
-    Map.new(headers, fn {key, value} -> {String.downcase(key), first_value(value)} end)
-  end
+  # An atom key (`:"retry-after"`) is a header name like any other; `String.downcase/1` on it
+  # raised, and from `parse_rate_limit_headers/1` that is on every response.
+  defp header_name(key) when is_atom(key), do: key |> Atom.to_string() |> String.downcase()
+  defp header_name(key), do: String.downcase(key)
 
   defp first_value([value | _rest]), do: value
   defp first_value(value), do: value
