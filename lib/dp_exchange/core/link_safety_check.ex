@@ -106,7 +106,17 @@ defmodule DpExchange.Core.LinkSafetyCheck do
       arity — `Socket.start_link/1`, `PollingFeed.start_link/1`, `Task.Supervisor.
       start_link/1`, all match, because `X.start_link` always links the calling process to
       the one it starts, by the same OTP convention this whole family builds on), or
-      `Process.link/1` / `:erlang.link/1`, or `spawn_link` in any arity.
+      `Process.link/1` / `:erlang.link/1`, or `spawn_link` in any arity, or `Task.async/1,3`,
+      `Task.async_stream/3,5` and their `Task.Supervisor` forms, which link the caller to
+      the task they start (`usage-rules/adapter.md`, "Never do blocking work in a process
+      that owes a reply", records the unconverted `{:EXIT, …}` that link delivers).
+
+      **The target module may be a variable or any expression**, not only a literal atom.
+      This used to match `{:remote, _, {:atom, _, _module}, …}` only, so
+      `state.socket_module.start_link(opts)` — the shape a package takes when it lets its
+      tests inject the socket it opens — was invisible: a `Feed` linking through an injected
+      module with no `trap_exit` passed. The function name is what makes a call link, not
+      how the module was named.
     * **the guard**: a call to `:erlang.process_flag(:trap_exit, true)` — what `Process.
       flag(:trap_exit, true)` compiles to (verified against a compiled probe module: it is
       a plain remote call, with `:trap_exit` and `true` as literal atom arguments, not a
@@ -149,11 +159,20 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   the kind of venue-specific mechanism this contract's own moduledoc forbids an assertion
   from encoding.
 
-  It also does not catch a link created any other way than the four call shapes above — a
+  It also does not catch a link created any other way than the call shapes above — a
   link established through a NIF, a port, or code assembled at runtime and dispatched via
   `apply/3` with a dynamically built function name. No static tool resolves genuinely
   dynamic dispatch, the same limit `DpExchange.Core.UnwiredCheck`'s moduledoc already
   states for the same reason.
+
+  ## It refuses to scan what it cannot read
+
+  A beam compiled without debug information has no abstract code to walk. That used to
+  crash the whole assertion with a `MatchError` naming nothing; it is now
+  `{:error, {:no_abstract_code, module}}`, for a process-behaviour module only (a plain
+  module's code is never read at all, which is also what keeps a large package's scan
+  cheap — the abstract code of every module in `lib/` used to be loaded up front to find
+  the handful that are process behaviours).
   """
 
   @process_behaviours [GenServer, :gen_statem, GenStateMachine, WebSockex]
@@ -162,7 +181,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   # `call_without_opaque` mismatch — the same finding this family already hit once
   # (`Core.Notice`'s `@credential_keys`, C8 in the 2026-09-05 defect sweep) and reverted
   # for the same reason. Three entries make a linear scan irrelevant next to that.
-  @link_creating_functions [:start_link, :link, :spawn_link]
+  @link_creating_functions [:start_link, :link, :spawn_link, :async, :async_stream]
 
   @type violation :: %{
           module: module(),
@@ -187,14 +206,9 @@ defmodule DpExchange.Core.LinkSafetyCheck do
     lib_root = Path.expand(lib_root)
 
     with {:ok, scanned} <- collect_modules(beam_dir, lib_root),
-         {:ok, modules} <- refuse_empty_scan(scanned, lib_root) do
-      violations =
-        modules
-        |> Enum.filter(&process_behaviour?/1)
-        |> Enum.flat_map(&check_module/1)
-        |> Enum.sort()
-
-      {:ok, violations}
+         {:ok, modules} <- refuse_empty_scan(scanned, lib_root),
+         {:ok, violations} <- check_modules(Enum.filter(modules, &process_behaviour?/1)) do
+      {:ok, Enum.sort(violations)}
     end
   end
 
@@ -219,13 +233,32 @@ defmodule DpExchange.Core.LinkSafetyCheck do
     Enum.any?(behaviours, &(&1 in @process_behaviours))
   end
 
-  defp check_module(described) do
-    case find_link(described.forms) do
+  # The abstract code is read here, for the modules that are process behaviours, and
+  # nowhere earlier. `collect_modules/2` used to load it for every module under `lib_root`
+  # and then throw almost all of it away.
+  defp check_modules(modules) do
+    Enum.reduce_while(modules, {:ok, []}, fn described, {:ok, acc} ->
+      case load_forms(described) do
+        {:ok, forms} -> {:cont, {:ok, check_module(described, forms) ++ acc}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp load_forms(%{module: module, beam_path: beam_path}) do
+    case :beam_lib.chunks(String.to_charlist(beam_path), [:abstract_code]) do
+      {:ok, {_module, [abstract_code: {:raw_abstract_v1, forms}]}} -> {:ok, forms}
+      _no_usable_abstract_code -> {:error, {:no_abstract_code, module}}
+    end
+  end
+
+  defp check_module(described, forms) do
+    case find_link(forms) do
       nil ->
         []
 
       {name, arity, line} ->
-        if any_trap_exit?(described.forms) do
+        if any_trap_exit?(forms) do
           []
         else
           [
@@ -282,7 +315,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
 
   defp contains_link_call?(term) do
     walk_any?(term, fn
-      {:call, _anno, {:remote, _anno2, {:atom, _anno3, _mod}, {:atom, _anno4, fun}}, _args} ->
+      {:call, _anno, {:remote, _anno2, _module_expr, {:atom, _anno3, fun}}, _args} ->
         fun in @link_creating_functions
 
       _other ->
@@ -355,14 +388,14 @@ defmodule DpExchange.Core.LinkSafetyCheck do
 
     case :beam_lib.chunks(charlist_path, [:compile_info]) do
       {:ok, {module, [compile_info: compile_info]}} ->
-        with_source(module, charlist_path, compile_info, lib_root)
+        with_source(module, beam_path, charlist_path, compile_info, lib_root)
 
       {:error, :beam_lib, reason} ->
         {:error, reason}
     end
   end
 
-  defp with_source(module, charlist_path, compile_info, lib_root) do
+  defp with_source(module, beam_path, charlist_path, compile_info, lib_root) do
     case Keyword.get(compile_info, :source) do
       nil ->
         {:ok, nil}
@@ -371,23 +404,20 @@ defmodule DpExchange.Core.LinkSafetyCheck do
         source = source |> to_string() |> Path.expand()
 
         if String.starts_with?(source, lib_root <> "/") do
-          {:ok, described_module(module, charlist_path, source)}
+          {:ok, described_module(module, beam_path, charlist_path, source)}
         else
           {:ok, nil}
         end
     end
   end
 
-  defp described_module(module, charlist_path, source) do
+  defp described_module(module, beam_path, charlist_path, source) do
     {:ok, {^module, [attributes: attrs]}} = :beam_lib.chunks(charlist_path, [:attributes])
-
-    {:ok, {^module, [abstract_code: {:raw_abstract_v1, forms}]}} =
-      :beam_lib.chunks(charlist_path, [:abstract_code])
 
     %{
       module: module,
+      beam_path: beam_path,
       source: source,
-      forms: forms,
       behaviours: attrs |> Keyword.get_values(:behaviour) |> List.flatten()
     }
   end

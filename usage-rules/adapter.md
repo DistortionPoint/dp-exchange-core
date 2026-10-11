@@ -387,9 +387,17 @@ reviewer checks by eye and a test suite cannot: does anything in this package's 
 graph from `:xref`, the same OTP tool assertion 7 already reads for the purity check, so
 a captured `&Mod.fun/1` or a literal `apply(Mod, :fun, args)` counts as real usage the
 way a grep never would. What it excludes — the facade, the fake, every behaviour's own
-callbacks, `child_spec/1` and `2`, `start_link/1`, and every compiler-injected export —
-is read from the same `venue:`/`fake:` bindings and behaviour declarations your contract
-test already supplies, never a hand-maintained list. See `Core.UnwiredCheck`'s
+callbacks, `child_spec/1` and `2`, `start_link/1`, every compiler-injected export, and
+every macro (`MACRO-<name>`: an expanded call leaves no edge, so a macro you use would
+otherwise read as unwired) — is read from the same `venue:`/`fake:` bindings and behaviour
+declarations your contract test already supplies, never a hand-maintained list.
+
+**A function reached only through a `{Mod, :fun, args}` tuple** — a child spec's `:start`,
+`:timer.apply_after/4`, `Task.Supervisor.start_child/4` — has no edge either, because a
+tuple is data and not a call, and it will be reported though it runs. The remedy is the
+rule's own: wire it with a call `:xref` can read (a captured `&Mod.fun/1`, a literal
+`apply/3`), not an exclusion. Two dead functions that call each other are not reported
+either — "has a caller" is the test, not "is reachable from the facade". See `Core.UnwiredCheck`'s
 moduledoc for the full account of what it does and does not catch, including the one
 real gap: a function reachable only through your own `Fake` and dead on every real path
 is not flagged, because `Fake` is part of `lib/` too.
@@ -424,16 +432,6 @@ without ever reaching the credential check. A fake whose order writes succeed wi
 credential now fails 17 on a `:required` venue, as it always should have. Which callbacks
 take their credential positionally is read from `Core.Venue`'s own specs
 (`AdapterContract.credentialed_callbacks/0`), not from a list.
-
-## Assertion 7 — declare what you link
-
-`mix.exs` dependencies are read in every tuple shape (`{:dep, "~> 1.0", optional: true}` as
-well as `{:dep, "~> 1.0"}`), and a module is judged by the application it is built into:
-your own, a declared dependency, or something a declared dependency depends on at runtime.
-OTP and the Elixir standard library are always permitted. Previously the check looked for
-`/deps/<name>/` in each module's path, which no dependency is ever loaded from, so it could
-reject only a module that exists nowhere. A package calling a library nothing it declares
-brings in now fails 7.
 
 **"Every active endpoint", not "every endpoint that takes a `credentials()` argument".**
 `:required` means every active endpoint on your venue needs a credential — that is what
@@ -521,6 +519,16 @@ If this fails, the fix is in your fake: make it check credentials — wherever y
 facade actually reads them, positional argument or `opts[:credentials]` — the way your
 real `Rest`/`Auth` module does, not in this package.
 
+## Assertion 7 — declare what you link
+
+`mix.exs` dependencies are read in every tuple shape (`{:dep, "~> 1.0", optional: true}` as
+well as `{:dep, "~> 1.0"}`), and a module is judged by the application it is built into:
+your own, a declared dependency, or something a declared dependency depends on at runtime.
+OTP and the Elixir standard library are always permitted. Previously the check looked for
+`/deps/<name>/` in each module's path, which no dependency is ever loaded from, so it could
+reject only a module that exists nowhere. A package calling a library nothing it declares
+brings in now fails 7.
+
 ## Assertion 18 — a process that links a child it starts must trap exits
 
 Found live in four of five venue packages on 2026-09-07: `Feed.init/1` never called
@@ -532,23 +540,29 @@ gone in the same instant. One socket dying anywhere took the whole feed's subscr
 state with it.
 
 Assertion 18 is **static**, not a behavioural "start the tree and kill a linked child"
-test — that was the first design and it was rejected, because starting a venue's real
-(non-fake) tree is not reliably network-free. `dp_exchange_schwab`'s `Feed` dials its
-Streamer unconditionally from `init/1`'s own `{:continue, :connect}`, regardless of
-whether anything has ever been subscribed, and the only way around that from Core is a
-venue-specific injection option name this suite is expressly forbidden from knowing (see
-this file's own "never declare transport"). A static check never starts a process at
-all, so it cannot dial out for any venue, present or future — see
-`DpExchange.Core.LinkSafetyCheck`'s moduledoc for the full reasoning.
+test — that was the first design and it was rejected. Its first reason, that starting a
+venue's real (non-fake) tree was not reliably network-free (`dp_exchange_schwab`'s `Feed`
+dialled its Streamer from `init/1`'s own `{:continue, :connect}`), expired the day it was
+written: that was itself a boundary violation and was fixed in `9973c0d`, and all five
+venues now defer every dial to `subscribe/2` or a first tick. The reason that stands is
+that Core has no contract-sanctioned way to find "the feed" in a venue's tree — the
+behaviour that would have provided one was deleted unadopted — and finding it by a
+venue-specific name is what this suite is expressly forbidden to do (see this file's own
+"never declare transport"). A static check never starts a process at all, so it cannot
+dial out for any venue, present or future — see `DpExchange.Core.LinkSafetyCheck`'s
+moduledoc for the full reasoning.
 
 It scans every module in your `lib/` that declares `GenServer`, `:gen_statem`,
 `GenStateMachine` or `WebSockex` as a `@behaviour`, and for each one asks two questions
 of its own compiled code, taken as a whole rather than function by function: does it
-create a link — a remote call named `start_link` (any target module, any arity, since
-`X.start_link` always links by OTP convention), `Process.link/1`, or `spawn_link` — and
-does it also call `Process.flag(:trap_exit, true)` somewhere. The first without the
-second is the violation: a module that manufactures a link to a process it started and
-has no way to survive that process dying abnormally.
+create a link — a remote call named `start_link` (any target module, **including one held
+in a variable**, any arity, since `X.start_link` always links by OTP convention),
+`Process.link/1`, `spawn_link`, or `Task.async`/`Task.async_stream` (which link the caller
+to the task) — and does it also call `Process.flag(:trap_exit, true)` somewhere. The first
+without the second is the violation: a module that manufactures a link to a process it
+started and has no way to survive that process dying abnormally. A process-behaviour
+module whose beam has no abstract code (compiled without `debug_info`) is
+`{:error, {:no_abstract_code, module}}`, not a pass.
 
 `start_link/1`, `start_link/2`, `child_spec/1` and `child_spec/2` are never scanned as
 the *source* of a link — every process-behaviour module's own `start_link/N` delegates to
@@ -602,13 +616,17 @@ Four venues shipped exactly this fix independently: `dp_exchange_coinbase` `4d00
 pipelines and never holds a credential in process state.
 
 Assertion 19 checks this **behaviourally**, not by looking for `@derive` in your source.
-For every struct your `lib/` defines, if any field is named one of fifteen known secret
+For every struct your `lib/` defines, if any field is named one of twenty-seven known secret
 names (`api_key`, `api_secret`, `app_key`, `app_secret`, `secret`, `password`,
 `passphrase`, `token`, `access_token`, `refresh_token`, `client_secret`, `private_key`,
-`signature`, `authorization`, `bearer` — see `DpExchange.Core.CredentialRedactionCheck`'s
-moduledoc for why each name is on the list, and why `client_id` deliberately is not), it
-builds a real instance of your struct with a distinctive value in that field and searches
-the actual `inspect/1` output for it. A hand-written `defimpl Inspect, for: YourStruct`
+`signature`, `authorization`, `bearer`, `x_api_key`, `signing_key`, `cookie`,
+`session_token`, `id_token`, `jwt`, `secret_key`, `api_passphrase`, `api_token`,
+`auth_token`, `bearer_token`, `private_key_pem` — see
+`DpExchange.Core.CredentialRedactionCheck`'s moduledoc for why each name is on the list,
+and why `client_id` deliberately is not), it builds a real instance of your struct with a
+distinctive value in that field and searches the actual `inspect/1` output for it. A
+scanned module the test node cannot load is `{:error, {:not_loadable, module}}`, never a
+silent skip. A hand-written `defimpl Inspect, for: YourStruct`
 that never mentions `@derive` at all passes exactly as validly as the derived form above —
 this checks what your struct prints, never how you made it print that way.
 
@@ -664,6 +682,38 @@ A venue that declares the *entire* `Timeframe.nameable/0` vocabulary has nothing
 this assertion to pick, and the check is a no-op for it — it is not a way to avoid the
 check by declaring narrowly, since narrowing what you declare only gives the assertion more
 widths to try.
+
+## Assertion 31 — your Fake must accept the order id it just returned
+
+`dp_exchange_gemini`'s fake answered `place_order/3` with an order and then refused that
+order's id in its own `get_order/3` and `cancel_order/3` (gemini issue #5). Nothing in the
+suite used what `place_order/3` returned, so it passed: assertion 5 asks `get_order/3` about
+an id the suite made up and takes a refusal for an answer, and assertion 12 only asks that
+an active endpoint not say `:not_supported`. A consumer's first tier-1 test against a
+trading fake — place, read back, cancel — could not pass.
+
+If your `capabilities/0` declares `place_order/3` active, assertion 31 calls your **fake's**
+`place_order/3` with the suite's well-formed order and requires `{:ok, %Order{}}` with a
+non-empty `:id`. It then hands that id to the same fake's `get_order/3` (which must answer
+`{:ok, %Order{}}`) and `cancel_order/3` (`{:ok, %Order{}}` or `{:ok, :cancelled}`), each only
+if it is active. A venue that declares either `:unsupported` is not asked. The decision is
+`DpExchange.Core.OrderRoundTripCheck.run/3`, public so it can be tested against a fake that
+fails it.
+
+- **The id must be *accepted*, not *echoed*.** The order `get_order/3` answers need not
+  carry the placed id: a venue may take a client id in and give its own id back.
+- **A fake with no memory is fine if it accepts any well-formed id.** A fake that mints a
+  fixed id must accept that id; a fake that echoes a caller-chosen id must remember it
+  (`dp_exchange_webull`'s does, per process).
+- **A refusal from an active `place_order/3` fails the group.** It is not a skip, because
+  skipping on a refusal is how an assertion goes on passing without running. Either the
+  endpoint is not really active, or the fake needs an option the call did not carry — name
+  it in `endpoint_opts:`.
+- **Options.** `get_order/3` and `cancel_order/3` take the options you declare for them in
+  `endpoint_opts:`, and the options the order was *placed* with where you declared none: an
+  order placed under an account is read and cancelled under it.
+- **What it does not reach:** the real venue, `place_orders/3`, `replace_order/4` and
+  `close_position/3`. It proves the fake is consistent with itself.
 
 ## Asset classes are a statement about today
 

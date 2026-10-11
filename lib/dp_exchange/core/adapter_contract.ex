@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Thirty groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Thirty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -129,7 +129,11 @@ defmodule DpExchange.Core.AdapterContract do
       {30,
        "a quote's volume states its window — a Quote from get_price/2 carrying a volume " <>
          "names it as one print, a running total or a rolling 24h total, and one carrying " <>
-         "none names no window"}
+         "none names no window"},
+      {31,
+       "fake order round trip — the id the fake's place_order/3 returns is accepted by " <>
+         "the same fake's get_order/3 and cancel_order/3, unless those are declared " <>
+         "unsupported"}
     ]
   end
 
@@ -384,6 +388,7 @@ defmodule DpExchange.Core.AdapterContract do
       forwarded_nil(),
       feed_absent(),
       lower_case_subscription(),
+      fake_round_trip(),
       return_types(),
       helpers(),
       arg_helpers(),
@@ -1478,13 +1483,14 @@ defmodule DpExchange.Core.AdapterContract do
           # This is deliberately STATIC, not a behavioural "start the tree and kill a
           # linked child" test — see `DpExchange.Core.LinkSafetyCheck`'s moduledoc for
           # why that was tried first and rejected: starting a venue's real (non-fake)
-          # tree is not reliably network-free (dp_exchange_schwab's `Feed` dials its
-          # Streamer unconditionally from `init/1`'s own `{:continue, :connect}}`,
-          # regardless of whether anything has been subscribed), and the only way around
-          # that is a venue-specific injection option name this suite is expressly
-          # forbidden from knowing. A static check over the compiled module — does it
-          # create a link, and does it also trap exits — never starts a process at all,
-          # so it cannot dial out for any venue, present or future.
+          # tree was not reliably network-free (on 2026-09-07 dp_exchange_schwab's `Feed`
+          # dialled its Streamer unconditionally from `init/1`'s own `{:continue,
+          # :connect}`; that was fixed the same day, in `9973c0d`), and the objection that
+          # stands is that there is no contract-sanctioned way to find "the feed" in a
+          # venue's tree without a venue-specific name this suite is expressly forbidden
+          # from knowing. A static check over the compiled module — does it create a link,
+          # and does it also trap exits — never starts a process at all, so it cannot dial
+          # out for any venue, present or future.
           config = Mix.Project.config()
           app = config[:app]
           lib_root = Path.expand(@package_root)
@@ -2286,6 +2292,85 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # --- 31. the id a fake's place_order/3 returns is one its own get_order/3 and
+  # cancel_order/3 accept. The decision is `Core.OrderRoundTripCheck.run/3`, public so it can
+  # be shown to fail against a fake that refuses its own ids; this only builds the calls.
+  defp fake_round_trip do
+    quote location: :keep do
+      describe "31. fake order round trip" do
+        # dp_exchange_gemini issue #5. Gemini's fake answered `place_order/3` with an order
+        # and then refused that order's id in its own `get_order/3` and `cancel_order/3`.
+        # Nothing here noticed, because nothing used what `place_order/3` returned: group 5
+        # asks `get_order/3` about an id the SUITE made up and takes a refusal for an answer,
+        # and group 12 asks only that an active endpoint not say `:not_supported`. A
+        # consumer's tier-1 test that places, reads back and cancels could not pass.
+        #
+        # **A refusal from an active `place_order/3` is not a pass**, for the reason
+        # assertion 24's helper records: it is how an assertion goes on "passing" without
+        # ever executing. Declare what the fake needs in `endpoint_opts:`, or declare the
+        # endpoint `:unsupported`.
+        #
+        # **What this does not catch, stated plainly:** the real venue, and an id the real
+        # venue would mint in a shape the fake does not. It proves the fake is consistent
+        # with itself, which is the half that reaches a consumer's test suite.
+        test "the id place_order/3 returns is accepted by get_order/3 and cancel_order/3" do
+          if @fake, do: assert_order_round_trip(@fake, @venue.capabilities())
+        end
+      end
+
+      defp assert_order_round_trip(fake, caps) do
+        place_args = endpoint_args(:place_order, 3)
+
+        calls = %{
+          place_order: place_args,
+          get_order: &round_trip_args(:get_order, &1, List.last(place_args)),
+          cancel_order: &round_trip_args(:cancel_order, &1, List.last(place_args))
+        }
+
+        case DpExchange.Core.OrderRoundTripCheck.run(fake, caps, calls) do
+          :skipped ->
+            :ok
+
+          {:ok, violations} ->
+            assert violations == [],
+                   "the fake refused an order id its own place_order/3 had just returned. " <>
+                     "A consumer's test that places an order and then reads or cancels it " <>
+                     "cannot pass against this fake:\n" <>
+                     DpExchange.Core.OrderRoundTripCheck.format(violations)
+
+          {:error, reason} ->
+            flunk("""
+            capabilities/0 declares place_order/3 active, but the round trip could not start:
+
+                #{DpExchange.Core.OrderRoundTripCheck.format_error(reason)}
+
+            Either the endpoint is not really active and capabilities/0 should say
+            `:unsupported`, or the fake needs something this call did not carry —
+            declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
+
+            See docs/reference/core/assertion-coverage.md, "Second axis".
+            """)
+        end
+      end
+
+      # The order id goes in the second position, where `get_order/3` and `cancel_order/3`
+      # take it. The options are the endpoint's own `endpoint_opts` where the venue declared
+      # some, and otherwise the options the order was PLACED with: an order placed under an
+      # account is read and cancelled under that account, and a venue that scopes
+      # `get_order/3` but not `cancel_order/3` in `endpoint_opts:` is not misconfigured for it.
+      defp round_trip_args(name, id, placed_opts) do
+        endpoint = {name, 3}
+
+        opts =
+          if Map.has_key?(@endpoint_opts, endpoint),
+            do: arg_value(:opts, endpoint),
+            else: placed_opts
+
+        [arg_value(:credentials, endpoint), id, opts]
+      end
+    end
+  end
+
   defp lower_case_subscription do
     quote location: :keep do
       # --- 29. a lower-case subscription is delivered under the canonical symbol ----------
@@ -2619,7 +2704,10 @@ defmodule DpExchange.Core.AdapterContract do
           "`package_root:` on `use DpExchange.Core.AdapterContract` pointing somewhere this " <>
           ~s(package's compiled modules are not — it defaults to "lib", venue packages set ) <>
           ~s("lib/dp_exchange", and Core's own suite sets "test/support". Until it points ) <>
-          "at real modules, assertions 16, 18 and 19 are all examining nothing and passing."
+          "at real modules, assertions 16, 18 and 19 are all examining nothing and passing. " <>
+          "If the error above names `:no_abstract_code`, it is a different cause: that " <>
+          "module's beam was compiled without debug_info, so there is no code to read. " <>
+          "`:not_loadable` names a module the test node cannot load."
       end
 
       # The shape table, overrides included, is `AdapterContract.arg_shape/3`, shared with

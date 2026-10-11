@@ -687,3 +687,30 @@ and 0 after.
 
 **What it does not reach:** the streamed `Quote`. Each venue's own socket tests pin its
 window, because the fake's stream is not the real decoder.
+
+### Assertion 31 — the fake accepts the order id it just returned, 2026-10-11
+
+`dp_exchange_gemini`'s fake answered `place_order/3` with an order and refused that order's
+id in its own `get_order/3` and `cancel_order/3` (gemini issue #5), and the suite stayed
+green. **Why nothing saw it:** no assertion used what `place_order/3` returned. Group 5 calls
+`get_order/3` with an id the suite invents and counts a refusal as an answer; group 12 asks
+only that an active endpoint not say `:not_supported`; group 17 strips credentials, which
+makes every read and cancel fail for a reason that is not the id. 31 places an order on the
+fake and offers the id back to its read and its cancel, through
+`Core.OrderRoundTripCheck`. **Can it fail?** Yes, directly:
+`test/dp_exchange/core/order_round_trip_check_test.exs` runs it against fakes that refuse
+their own id on the read, on the cancel, answer a bare map, raise, refuse the placement or
+return no id, and against two that conform.
+
+**Read before run, on the five venues, 2026-10-11 (not executed — no `mix` was run for this
+change):** by reading each fake's `place_order/3`, `get_order/3` and `cancel_order/3` against
+the suite's order (`BTC-USD`, a limit buy, `:gtc`, `0.001` at `1`; `AAPL` for Schwab):
+Coinbase accepts only its fixed `"fake-order-1"` and returns it; Gemini mints `"1"`, which
+`Private.order_id_param/1` takes; Webull remembers the id per process; Robinhood's read and
+cancel take any non-blank id; Schwab's read and cancel take any id, and its cancel needs the
+account hash, which the check supplies from the placed options because Schwab's contract
+test declares no `{:cancel_order, 3}` entry. None of the five is expected to fail.
+
+**What it does not reach:** the real venue; `place_orders/3`, `replace_order/4` and
+`close_position/3`, which mint ids too. It also does not require the answered order to carry
+the placed id, because a venue may take a client id in and return its own.

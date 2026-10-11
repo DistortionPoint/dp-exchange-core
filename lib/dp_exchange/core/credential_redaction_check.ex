@@ -56,24 +56,33 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
 
   ## The secret-name list, and why each name is on it
 
-  Fifteen names, as atoms, matched against a struct field's own name exactly — never a
+  Twenty-seven names, as atoms, matched against a struct field's own name exactly — never a
   substring match, so a field called `token_type` or `tokenizer_state` is not caught by
   `token` and is not meant to be:
 
       api_key api_secret app_key app_secret secret password passphrase token
       access_token refresh_token client_secret private_key signature authorization bearer
+      x_api_key signing_key cookie session_token id_token jwt secret_key api_passphrase
+      api_token auth_token bearer_token private_key_pem
 
-  Twelve of these (`api_key`, `api_secret`, `secret`, `password`, `passphrase`, `token`,
-  `access_token`, `refresh_token`, `private_key`, `signature`, `authorization`, `bearer`)
-  are `DpExchange.Core.Notice`'s own `@credential_keys` — already the family's answer to
+  The first fifteen are what this moduledoc and `usage-rules/adapter.md` used to say were
+  all of them; the twelve after `bearer` were added later (`x_api_key` onward) and the
+  prose stayed behind, so a reader checking their own struct against "fifteen names"
+  concluded a `secret_key` field was unchecked when it has been checked since.
+
+  Most of these are `DpExchange.Core.Notice`'s own `@credential_keys` (`api_key`,
+  `api_secret`, `secret`, `password`, `passphrase`, `token`, `access_token`,
+  `refresh_token`, `private_key`, `signature`, `authorization`, `bearer`, `client_secret`,
+  `x_api_key`, `app_secret`, `signing_key`, `cookie`) — already the family's answer to
   "what does a secret-shaped key look like," shipped for a different purpose (rejecting a
   credential-shaped key from a `Notice`'s `:details`) but the identical question: does
   this name, on its own, mean "do not print this value." Reused rather than reinvented,
   the same way `LinkSafetyCheck` reused `UnwiredCheck`'s `start_link/1,2`/`child_spec/1,2`
-  exclusion rather than re-deriving it.
+  exclusion rather than re-deriving it. The two lists are kept alike by hand; this one is
+  the superset.
 
-  Three names extend that list, each because a real, shipped `Credentials` struct in this
-  family has a field by that name and `Notice`'s list does not cover it:
+  Three names extend `Notice`'s original list, each because a real, shipped `Credentials`
+  struct in this family has a field by that name and `Notice`'s list did not cover it:
 
     * **`app_key`, `app_secret`** — `dp_exchange_webull`'s `Credentials` struct
       (`lib/dp_exchange/webull/credentials.ex`). Webull's own commit message
@@ -104,9 +113,9 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   chose (Schwab's own `client_id` redaction is still and always a pass, since this check
   only asserts a *lower bound* on what must be hidden, never an upper one).
 
-  No struct across all five venues' actual `lib/` collides with any of the twelve
-  `Notice`-derived names either — verified by reading every `defstruct` in all five
-  repos before this list was finalised, not assumed.
+  No struct across all five venues' actual `lib/` collides with any of the `Notice`-derived
+  names either — verified by reading every `defstruct` in all five repos before this list
+  was finalised, not assumed.
 
   ## What this does not catch — stated so nobody over-trusts it
 
@@ -193,13 +202,16 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   analysed. Every module considered must already be loaded in the running node — true by
   construction when this runs from inside `AdapterContract`'s generated assertion, since
   that only ever executes after `mix test` has compiled and loaded the package under test.
+  A scanned module that cannot be loaded is `{:error, {:not_loadable, module}}`, never a
+  silent skip.
   """
   @spec run(Path.t(), Path.t()) :: {:ok, [violation()]} | {:error, term()}
   def run(beam_dir, lib_root) do
     lib_root = Path.expand(lib_root)
 
     with {:ok, scanned} <- collect_modules(beam_dir, lib_root),
-         {:ok, modules} <- refuse_empty_scan(scanned, lib_root) do
+         {:ok, modules} <- refuse_empty_scan(scanned, lib_root),
+         :ok <- refuse_unloadable(modules) do
       violations =
         modules
         |> Enum.filter(&struct_module?/1)
@@ -223,8 +235,20 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
     |> Enum.join("\n")
   end
 
-  defp struct_module?(%{module: module}) do
-    Code.ensure_loaded?(module) and function_exported?(module, :__struct__, 0)
+  defp struct_module?(%{module: module}), do: function_exported?(module, :__struct__, 0)
+
+  # **Refuses a module it cannot load.** `struct_module?/1` used to be
+  # `Code.ensure_loaded?(module) and function_exported?(module, :__struct__, 0)`, so a beam
+  # the running node could not load — `beam_dir` not on the code path, a stale build — was
+  # answered "not a struct" and dropped from the scan with nothing said. A `Credentials`
+  # struct that leaks was therefore indistinguishable from one that was never examined,
+  # which is the shape of the empty-scan bug below, one module at a time. A scanned module
+  # that will not load is an error naming it.
+  defp refuse_unloadable(modules) do
+    case Enum.find(modules, fn %{module: module} -> not Code.ensure_loaded?(module) end) do
+      nil -> :ok
+      %{module: module} -> {:error, {:not_loadable, module}}
+    end
   end
 
   defp check_module(%{module: module, source: source}) do

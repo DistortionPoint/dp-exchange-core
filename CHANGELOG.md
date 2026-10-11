@@ -21,6 +21,56 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+Found by reading `unwired_check.ex`, `link_safety_check.ex`, `credential_redaction_check.ex`,
+`venue.ex`, `adapter_contract.ex` and `usage-rules/adapter.md` line by line. **None of this has
+been run**: it was written without `mix`, so the suite, `mix quality` and the five venues'
+contract tests are still to be run before release. Each venue was read against the new and
+stricter checks and none is expected to fail; the reading is recorded in
+`docs/reference/core/assertion-coverage.md`.
+
+### Added
+
+- **Assertion 31, "fake order round trip".** For a venue whose `place_order/3` is active, the
+  suite places an order on the fake and hands the returned id to the same fake's
+  `get_order/3` (must answer `{:ok, %Order{}}`) and `cancel_order/3` (`{:ok, %Order{}}` or
+  `{:ok, :cancelled}`), each only if active. `dp_exchange_gemini`'s fake refused its own ids
+  (gemini issue #5) and every assertion stayed green, because none used what `place_order/3`
+  returned. The decision is the new public `DpExchange.Core.OrderRoundTripCheck.run/3`, tested
+  against fakes that fail it. An active `place_order/3` that answers anything but an order
+  fails the group rather than skipping it. `get_order/3` and `cancel_order/3` take their
+  `endpoint_opts:` entry where the venue declared one and the options the order was placed
+  with where it did not.
+
+### Changed
+
+- **`LinkSafetyCheck` sees a link through a module held in a variable,** and counts
+  `Task.async` and `Task.async_stream` (which link the caller to the task) as links. It
+  matched only a literal-atom module, so `state.socket_module.start_link(opts)` — how a
+  package lets its tests inject its socket — linked a child with no `trap_exit` and passed.
+  A process-behaviour module with no abstract code is now `{:error, {:no_abstract_code,
+  module}}` instead of a `MatchError`, and the abstract code is read for process-behaviour
+  modules only, where it was loaded for every module under `lib_root` and discarded.
+- **`CredentialRedactionCheck` refuses a scanned module it cannot load** with
+  `{:error, {:not_loadable, module}}`. It answered "not a struct" and dropped it, so a
+  `Credentials` that leaks and one never examined looked the same.
+- **`UnwiredCheck` excuses macros** (`MACRO-<name>` exports). An expanded call leaves no edge in
+  the call graph, so a macro used inside `lib/` was reported as unwired. A macro nothing uses
+  is therefore not reported. Its edge lookup is also indexed by callee, where each exported
+  name scanned the whole edge set.
+
+### Fixed
+
+- **`usage-rules/adapter.md` had assertion 7's section in the middle of assertion 17's,** with
+  17's account of its exemptions running on beneath the wrong heading.
+- **Prose said fifteen secret names; `CredentialRedactionCheck` checks twenty-seven.**
+  `adapter.md` and the check's moduledoc now list them all.
+- **Prose said `dp_exchange_schwab`'s `Feed` dials its Streamer unconditionally from `init/1`.**
+  That was fixed in `9973c0d` on the day it was written; `adapter.md` and a comment in
+  `AdapterContract` still described it as current, against `LinkSafetyCheck`'s own moduledoc.
+- **`UnwiredCheck`'s limits are stated:** a function reached only through a `{Mod, :fun,
+  args}` tuple is reported though it runs, and two dead functions that call each other are
+  not reported.
+
 ## [0.3.66] - 2026-10-11
 
 ### Changed

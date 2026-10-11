@@ -402,6 +402,33 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     end
   end
 
+  describe "run/2 — a module it cannot load" do
+    test "a leaking struct whose beam the node cannot load is an error, not a skip" do
+      # `beam_dir` is not on the code path, so once the compiled module is dropped from the
+      # node nothing can load it back. It used to be answered "not a struct" and left out,
+      # so a `Credentials` printing its secret and one never examined looked the same.
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "credentials.ex",
+            code: """
+            defmodule Unloadable#{u} do
+              defstruct [:api_key]
+            end
+            """
+          }
+        ])
+
+      mod = Module.concat([:"Elixir", "Unloadable#{u}"])
+      :code.delete(mod)
+      :code.purge(mod)
+
+      assert {:error, {:not_loadable, ^mod}} = CredentialRedactionCheck.run(beam_dir, lib_root)
+    end
+  end
+
   describe "run/2 — the secret field names it recognises" do
     test "a secret under a compound name is caught, not skipped for want of a match" do
       # The check compares field NAMES, so `defstruct [:secret_key]` printed in cleartext and

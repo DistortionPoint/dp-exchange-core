@@ -457,6 +457,211 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
     end
   end
 
+  describe "run/2 — links that are not a literal-module start_link" do
+    test "a start_link through an injected module held in a variable is flagged" do
+      # `Feed` opening the socket through a module its state carries is how a package lets
+      # its tests inject one. The matcher required a literal atom for the module, so this
+      # linked a child with no `trap_exit` and passed.
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "feed.ex",
+            code: """
+            defmodule InjectedFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(opts), do: {:ok, %{socket_module: Keyword.fetch!(opts, :socket_module)}}
+
+              @impl true
+              def handle_call(:open, _from, state) do
+                {:ok, socket} = state.socket_module.start_link([])
+                {:reply, socket, state}
+              end
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "InjectedFeed#{u}"])
+
+      assert {mod, :handle_call, 3} in violation_mfas(violations)
+    end
+
+    test "the same injected link, guarded by trap_exit, is not flagged" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "feed.ex",
+            code: """
+            defmodule GuardedInjectedFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(opts) do
+                Process.flag(:trap_exit, true)
+                {:ok, %{socket_module: Keyword.fetch!(opts, :socket_module)}}
+              end
+
+              @impl true
+              def handle_call(:open, _from, state) do
+                {:ok, socket} = state.socket_module.start_link([])
+                {:reply, socket, state}
+              end
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "GuardedInjectedFeed#{u}"])
+
+      refute Enum.any?(violations, &(&1.module == mod))
+    end
+
+    test "Task.async and Task.async_stream link the caller and are flagged without trap_exit" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "tasks.ex",
+            code: """
+            defmodule TaskFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(state), do: {:ok, state}
+
+              @impl true
+              def handle_call(:fetch, _from, state) do
+                task = Task.async(fn -> :fetched end)
+                {:reply, Task.await(task), state}
+              end
+            end
+
+            defmodule StreamFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(state), do: {:ok, state}
+
+              @impl true
+              def handle_call(:fetch, _from, state) do
+                reply = [1, 2] |> Task.async_stream(&(&1 + 1)) |> Enum.to_list()
+                {:reply, reply, state}
+              end
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      task_feed = Module.concat([:"Elixir", "TaskFeed#{u}"])
+      stream_feed = Module.concat([:"Elixir", "StreamFeed#{u}"])
+
+      assert {task_feed, :handle_call, 3} in violation_mfas(violations)
+      assert {stream_feed, :handle_call, 3} in violation_mfas(violations)
+    end
+
+    test "Task.async guarded by trap_exit is not flagged" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "tasks.ex",
+            code: """
+            defmodule GuardedTaskFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(state) do
+                Process.flag(:trap_exit, true)
+                {:ok, state}
+              end
+
+              @impl true
+              def handle_call(:fetch, _from, state) do
+                task = Task.async(fn -> :fetched end)
+                {:reply, Task.await(task), state}
+              end
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "GuardedTaskFeed#{u}"])
+
+      refute Enum.any?(violations, &(&1.module == mod))
+    end
+  end
+
+  describe "run/2 — a beam it cannot read" do
+    test "a process-behaviour module with no abstract code is an error, not a crash" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "feed.ex",
+            code: """
+            defmodule StrippedFeed#{u} do
+              use GenServer
+
+              @impl true
+              def init(state), do: {:ok, state}
+            end
+            """
+          }
+        ])
+
+      mod = Module.concat([:"Elixir", "StrippedFeed#{u}"])
+      beam_path = Path.join(beam_dir, Atom.to_string(mod) <> ".beam")
+
+      # The debug-info chunks are dropped and the rest of the beam kept, which is what a
+      # package compiled without `debug_info` ships.
+      {:ok, ^mod, chunks} = :beam_lib.all_chunks(String.to_charlist(beam_path))
+      kept = Enum.reject(chunks, fn {id, _data} -> id in [~c"Dbgi", ~c"Abst"] end)
+      {:ok, stripped} = :beam_lib.build_module(kept)
+      File.write!(beam_path, stripped)
+
+      assert {:error, {:no_abstract_code, ^mod}} = LinkSafetyCheck.run(beam_dir, lib_root)
+    end
+
+    test "a plain module with no abstract code is never read, so it is not an error" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "plain.ex",
+            code: """
+            defmodule StrippedPlain#{u} do
+              def answer, do: 42
+            end
+            """
+          }
+        ])
+
+      mod = Module.concat([:"Elixir", "StrippedPlain#{u}"])
+      beam_path = Path.join(beam_dir, Atom.to_string(mod) <> ".beam")
+
+      {:ok, ^mod, chunks} = :beam_lib.all_chunks(String.to_charlist(beam_path))
+      kept = Enum.reject(chunks, fn {id, _data} -> id in [~c"Dbgi", ~c"Abst"] end)
+      {:ok, stripped} = :beam_lib.build_module(kept)
+      File.write!(beam_path, stripped)
+
+      assert {:ok, []} = LinkSafetyCheck.run(beam_dir, lib_root)
+    end
+  end
+
   describe "run/2 — I/O edge cases" do
     # **This asserted the behaviour that hid a bug**, in the same shape as the fixtures this
     # repository has now found twice: a scan of nothing answering "nothing wrong". A

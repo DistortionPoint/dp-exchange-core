@@ -79,8 +79,27 @@ defmodule DpExchange.Core.UnwiredCheck do
     * **Compiler-injected exports** — `module_info/0`, `module_info/1`, and any export
       whose name is wrapped in double underscores (`__struct__`, `__info__`, `__impl__`,
       …), the compiler's own naming convention for exactly this category.
+    * **Macros** — every export named `MACRO-<name>`, which is how `defmacro` compiles. A
+      macro call is expanded where it is written and leaves no call behind in the caller's
+      beam, so a macro used a hundred times inside `lib/` has no edge in the call graph and
+      read as unwired. The price is stated rather than hidden: a macro nothing uses is not
+      reported. (None of the five venues defines one.)
 
   ## What this does not catch
+
+  **Anything reached only through data.** A `{Mod, :fun, args}` tuple handed to
+  `:timer.apply_after/4`, `Task.Supervisor.start_child/4` or a child spec's `:start` is a
+  literal MFA, but it is a tuple and not a call, so `:xref` sees no edge to `Mod.fun/n`
+  and the function reads as unwired though it runs. The remedy is the one the rule already
+  names — call it where it is wired (a captured `&Mod.fun/1` or a literal `apply/3` is
+  resolved) — never an allowlist.
+
+  **Dead code that calls itself in a ring.** "Has a caller" is the test, not "is
+  reachable from an entry point": two dead functions that call each other each have one,
+  and neither is reported. A dead chain is reported at its top, and the next run reports
+  the next link once that one is deleted. Reachability from the facade, the fake and the
+  behaviour callbacks would be the stricter question; it was not built because it cannot
+  be checked against the five venues without running them.
 
   A function reachable only through the package's own `Fake` module and never through
   any real production path is not flagged — `Fake` is part of `lib/`, so a call from it
@@ -254,12 +273,25 @@ defmodule DpExchange.Core.UnwiredCheck do
       end)
 
       case :xref.q(server, ~c"E") do
-        {:ok, edges} -> {:ok, MapSet.new(edges)}
+        {:ok, edges} -> {:ok, index_edges(edges)}
         {:error, _module, _reason} = error -> {:error, error}
       end
     after
       :xref.stop(server)
     end
+  end
+
+  # The edges keyed by the callee's `{module, name}`, each value the `{caller, arity}` pairs
+  # that reach it. `group_wired?/4` is asked once per exported function name, and it used to
+  # answer by scanning the WHOLE edge set each time — exports times edges, which for a
+  # package with a few thousand of each is tens of millions of comparisons in a test that
+  # runs on every CI build. One pass here makes each question a map lookup.
+  defp index_edges(edges) do
+    Enum.group_by(
+      edges,
+      fn {_caller, {callee_mod, callee_name, _arity}} -> {callee_mod, callee_name} end,
+      fn {caller, {_mod, _name, callee_arity}} -> {caller, callee_arity} end
+    )
   end
 
   # A default argument (`def f(a, b \\ x)`) compiles to TWO exports, `f/1` and `f/2`,
@@ -294,8 +326,10 @@ defmodule DpExchange.Core.UnwiredCheck do
   defp group_wired?(edges, module, name, group) do
     arities = MapSet.new(group, fn {_name, arity} -> arity end)
 
-    Enum.any?(edges, fn {caller, {callee_mod, callee_name, callee_arity}} ->
-      callee_mod == module and callee_name == name and MapSet.member?(arities, callee_arity) and
+    edges
+    |> Map.get({module, name}, [])
+    |> Enum.any?(fn {caller, callee_arity} ->
+      MapSet.member?(arities, callee_arity) and
         not from_same_group?(caller, module, name, arities)
     end)
   end
@@ -308,8 +342,13 @@ defmodule DpExchange.Core.UnwiredCheck do
     {name, arity} in @always_excluded or
       {name, arity} in @compiler_exports or
       MapSet.member?(behaviour_callbacks, {name, arity}) or
-      dunder?(name)
+      dunder?(name) or
+      macro?(name)
   end
+
+  # `defmacro foo/1` exports `MACRO-foo/2`: the macro's own arguments after the caller's
+  # `__CALLER__`. See the moduledoc's "Macros" for why it can never have an edge.
+  defp macro?(name), do: name |> Atom.to_string() |> String.starts_with?("MACRO-")
 
   defp dunder?(name), do: name |> Atom.to_string() |> then(&Regex.match?(@dunder_pattern, &1))
 

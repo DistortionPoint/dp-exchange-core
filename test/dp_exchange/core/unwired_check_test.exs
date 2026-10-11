@@ -341,6 +341,84 @@ defmodule DpExchange.Core.UnwiredCheckTest do
     end
   end
 
+  describe "run/3 — macros, and callers of a same-named function elsewhere" do
+    test "a macro used inside lib/ is not reported, though its expansion leaves no call" do
+      # `defmacro double/1` compiles to the export `MACRO-double/2`. `User.go/0` expands it
+      # in place, so nothing in the call graph reaches `MACRO-double/2` and it read as
+      # unwired though it is used.
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "macros.ex",
+            code: """
+            defmodule Macros#{u} do
+              defmacro double(x), do: quote(do: unquote(x) * 2)
+            end
+            """
+          },
+          %{
+            path: "user.ex",
+            code: """
+            defmodule MacroUser#{u} do
+              require Macros#{u}
+
+              def go, do: Macros#{u}.double(21)
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      macros = Module.concat([:"Elixir", "Macros#{u}"])
+
+      refute Enum.any?(violations, &(&1.module == macros)),
+             "a macro's export is MACRO-<name>, and an expanded call is not an edge: " <>
+               inspect(violation_mfas(violations))
+    end
+
+    test "a call to a function of the same name in another module does not wire this one" do
+      # The edge index is keyed by `{callee module, name}`. Keyed by name alone, `Other.used/1`
+      # being called would have wired `Dead.used/1` too.
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "dead.ex",
+            code: """
+            defmodule SameNameDead#{u} do
+              def used(x), do: x
+            end
+            """
+          },
+          %{
+            path: "live.ex",
+            code: """
+            defmodule SameNameLive#{u} do
+              def used(x), do: x + 1
+            end
+            """
+          },
+          %{
+            path: "caller.ex",
+            code: """
+            defmodule SameNameCaller#{u} do
+              def entry, do: SameNameLive#{u}.used(1)
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      mfas = violation_mfas(violations)
+
+      assert {Module.concat([:"Elixir", "SameNameDead#{u}"]), :used, 1} in mfas
+      refute {Module.concat([:"Elixir", "SameNameLive#{u}"]), :used, 1} in mfas
+    end
+  end
+
   describe "run/3 — I/O edge cases" do
     # **This asserted the behaviour that hid a bug**, in the same shape as the fixtures this
     # repository has now found twice: a scan of nothing answering "nothing wrong". A
