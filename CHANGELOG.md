@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.70] - 2026-10-11
+
 ### Changed
 
 - **BREAKING-ish: `Instrument.instrument_from("future")` is now `:unknown`, not `:perp`.**
