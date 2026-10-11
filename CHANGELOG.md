@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.74] - 2026-10-11
+
 ### Changed
 
 - **`Order.order_type` gains `:trailing_stop`, `:trailing_stop_limit`, `:market_on_close`
