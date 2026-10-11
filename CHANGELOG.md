@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`order_args:` on `use DpExchange.Core.AdapterContract`.** A venue can now declare its
+  own `:order_request`, `:order_requests` and `:order_changes`, each replacing the suite's
+  generic default. Assertion 31's extension in 0.3.68 drove `replace_order/4` and
+  `place_orders/3` with the generic `%{price: 1}` edit and a `:gtc` batch entry. Three
+  fakes then refused them correctly under their venue's own rules: Coinbase's edit needs
+  both size and price, Schwab's replace is a whole order, and Webull's batch refuses
+  `:gtc`. An unknown key, or a value that is not a map, raises at compile time.
+
 ## [0.3.68] - 2026-10-11
 
 ### Changed

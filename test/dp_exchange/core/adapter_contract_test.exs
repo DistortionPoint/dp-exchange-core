@@ -100,6 +100,25 @@ defmodule DpExchange.Core.AdapterContractTest do
     end
   end
 
+  describe "validate_order_args!/1" do
+    test "accepts the three order-argument kinds and an empty map" do
+      args = %{order_request: %{}, order_requests: [], order_changes: %{}}
+
+      assert DpExchange.Core.AdapterContract.validate_order_args!(args) == args
+      assert DpExchange.Core.AdapterContract.validate_order_args!(%{}) == %{}
+    end
+
+    test "an unknown key or a non-map raises instead of being ignored" do
+      assert_raise ArgumentError, ~r/order_change/, fn ->
+        DpExchange.Core.AdapterContract.validate_order_args!(%{order_change: %{}})
+      end
+
+      assert_raise ArgumentError, ~r/must be a map/, fn ->
+        DpExchange.Core.AdapterContract.validate_order_args!(order_changes: %{})
+      end
+    end
+  end
+
   # --- the call-shape table every fake-driven assertion and assertion 17 share -------
 
   describe "arg_shape/3 and credentialed_callbacks/0" do

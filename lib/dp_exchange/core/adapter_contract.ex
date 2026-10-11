@@ -254,6 +254,32 @@ defmodule DpExchange.Core.AdapterContract do
     {:rename_account, 3} => [:account_id, :name, :opts]
   }
 
+  @order_arg_kinds [:order_request, :order_requests, :order_changes]
+
+  @doc """
+  Checks the `order_args:` option of `use DpExchange.Core.AdapterContract`. It must be a map
+  whose keys are drawn from `:order_request`, `:order_requests` and `:order_changes`.
+
+  An unknown key raises at compile time instead of being ignored. A misspelt key that was
+  silently dropped would leave the suite's default order in place, and the assertion it
+  was meant to reach would go on failing, or passing, for a reason nobody declared.
+  """
+  @spec validate_order_args!(term()) :: %{optional(atom()) => term()}
+  def validate_order_args!(order_args) when is_map(order_args) do
+    case Map.keys(order_args) -- @order_arg_kinds do
+      [] ->
+        order_args
+
+      unknown ->
+        raise ArgumentError,
+              "order_args: accepts only #{inspect(@order_arg_kinds)}, got #{inspect(unknown)}"
+    end
+  end
+
+  def validate_order_args!(order_args) do
+    raise ArgumentError, "order_args: must be a map, got #{inspect(order_args)}"
+  end
+
   @doc """
   How a call to `name/arity` is shaped, position by position: `:credentials`, `:symbol`,
   `:timeframe`, `:opts`, or one of the order arguments.
@@ -442,6 +468,17 @@ defmodule DpExchange.Core.AdapterContract do
       # facts, and a lookup table of them here would be exactly the venue-specific knowledge
       # this contract is built to keep out of Core. The venue declares its own.
       @endpoint_opts Keyword.get(opts, :endpoint_opts, %{})
+
+      # Per-venue order arguments, as `%{kind => value}` with `kind` one of
+      # `:order_request`, `:order_requests` or `:order_changes`, each replacing the suite's
+      # generic default. Found 2026-10-11 when assertion 31 began driving `replace_order/4`
+      # and `place_orders/3`: the generic `%{price: 1}` edit and the `:gtc` batch entry
+      # break venue rules the fakes faithfully enforce. Coinbase's edit needs both size and
+      # price, Schwab's replace is a whole order, and Webull's batch refuses `:gtc`. Those
+      # are venue facts, so, as with `endpoint_opts:`, the venue declares them.
+      @order_args DpExchange.Core.AdapterContract.validate_order_args!(
+                    Keyword.get(opts, :order_args, %{})
+                  )
 
       # The options that point the venue's streaming calls at a feed nothing registered.
       # Assertion 28 drives the REAL facade with them, not the fake, and only down the
@@ -2813,9 +2850,18 @@ defmodule DpExchange.Core.AdapterContract do
   # `place_order/3` and `replace_order/4`'s arguments for assertion 5 — see `@arg_overrides`.
   defp order_arg_helpers do
     quote location: :keep do
+      # The venue's own `order_args:` entry where it declared one, the generic default
+      # otherwise. `:order_id` is never overridden: assertion 31 replaces it with a minted id.
+      defp order_arg(kind) do
+        case Map.fetch(@order_args, kind) do
+          {:ok, value} -> value
+          :error -> default_order_arg(kind)
+        end
+      end
+
       # A small limit buy: the shape every venue's `place_order/3` reads, sized so no fake
       # refuses it for being too large.
-      defp order_arg(:order_request) do
+      defp default_order_arg(:order_request) do
         %{
           symbol: sample_symbol(),
           side: :buy,
@@ -2827,9 +2873,9 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       # `place_orders/3` takes a list: a batch of one is still a batch.
-      defp order_arg(:order_requests), do: [order_arg(:order_request)]
-      defp order_arg(:order_id), do: "contract-order-1"
-      defp order_arg(:order_changes), do: %{price: Decimal.new("1")}
+      defp default_order_arg(:order_requests), do: [order_arg(:order_request)]
+      defp default_order_arg(:order_id), do: "contract-order-1"
+      defp default_order_arg(:order_changes), do: %{price: Decimal.new("1")}
     end
   end
 

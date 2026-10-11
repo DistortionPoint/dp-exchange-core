@@ -724,6 +724,13 @@ fails it.
   refusal is treated as not applicable. `{:error, :not_supported}` from an active
   `close_position/3`, or any other shape, fails. Each takes its `endpoint_opts:` or, where
   you declared none, the options the order was placed with.
+- **Venue order rules go in `order_args:`.** The suite's generic order is a small `:gtc`
+  limit buy. Its generic edit is `%{price: Decimal.new("1")}`, and its generic batch is that
+  order as a list of one. Where a venue rule makes these malformed, declare your own on
+  `use DpExchange.Core.AdapterContract`, for example
+  `order_args: %{order_changes: %{quantity: q, price: p}}` for a venue whose edit needs
+  both. The keys are `:order_request`, `:order_requests` and `:order_changes`, and any other
+  key raises at compile time. Assertion 5 uses the same arguments.
 - **What it does not reach:** the real venue. It proves the fake is consistent with itself.
 
 ## Asset classes are a statement about today
