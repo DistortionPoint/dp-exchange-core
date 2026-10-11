@@ -622,6 +622,107 @@ defmodule DpExchange.Core.HttpClientTest do
       assert Decimal.equal?(via_get, Decimal.new("1234.567890123456789"))
     end
 
+    test "a body over :max_body_bytes is refused, and one at the limit is accepted" do
+      raw = ~s({"pad":"#{String.duplicate("x", 40)}"})
+      size = byte_size(raw)
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, raw)
+      end
+
+      assert {:ok, %{status: 200, body: %{"pad" => _pad}}} = get(plug: plug, max_body_bytes: size)
+
+      assert {:error, {:response_too_large, limit}} = get(plug: plug, max_body_bytes: size - 1)
+      assert limit == size - 1
+
+      # A provider puts the call through the limiter; the stub lets it through.
+      use_stub()
+
+      assert {:error, {:exchange_error, "v", {:response_too_large, 5}}} =
+               get(plug: plug, max_body_bytes: 5, provider: "v")
+    end
+
+    test "a body split across chunks is counted as a whole and cut at the limit" do
+      plug = fn conn ->
+        conn = Plug.Conn.send_chunked(conn, 200)
+        Enum.reduce(1..10, conn, fn _n, acc -> elem(Plug.Conn.chunk(acc, "0123456789"), 1) end)
+      end
+
+      assert {:error, {:response_too_large, 99}} = get(plug: plug, max_body_bytes: 99)
+      assert {:ok, %{status: 200, body: body}} = get(plug: plug, max_body_bytes: 100)
+      assert byte_size(body) == 100
+    end
+
+    test "an oversized body is not retried" do
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Plug.Conn.send_resp(conn, 200, String.duplicate("y", 50))
+      end
+
+      assert {:error, {:response_too_large, 10}} =
+               get(plug: plug, max_body_bytes: 10, retry_attempts: 3, retry_delay: 1)
+
+      assert :counters.get(counter, 1) == 1
+    end
+
+    test "an oversized body is reported on the :stop event" do
+      handler = "max-body-#{System.unique_integer([:positive])}"
+      test = self()
+
+      :telemetry.attach(
+        handler,
+        [:dp_exchange, :request, :stop],
+        fn _event, _measure, meta, _config -> send(test, {:stop, meta}) end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler) end)
+
+      plug = fn conn -> Plug.Conn.send_resp(conn, 200, String.duplicate("z", 50)) end
+      assert {:error, {:response_too_large, 10}} = get(plug: plug, max_body_bytes: 10)
+
+      assert_receive {:stop, %{result: :error, reason: :response_too_large} = meta}, 5_000
+      assert meta.max_body_bytes == 10
+      assert meta.status == 200
+    end
+
+    test "a non-JSON body below the limit is returned as the bytes, as before" do
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.send_resp(200, "plain")
+      end
+
+      assert {:ok, %{status: 200, body: "plain"}} = get(plug: plug)
+      assert {:ok, %{status: 200, body: "plain"}} = get(plug: plug, max_body_bytes: 5)
+    end
+
+    test "decode_body: false keeps its bytes under a limit, and the default limit is 16 MiB" do
+      raw = ~s({"amount":1234.567890123456789})
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, raw)
+      end
+
+      assert {:ok, %{body: ^raw}} = get(plug: plug, decode_body: false, max_body_bytes: 1_000)
+
+      big = String.duplicate("a", 16_777_217)
+      big_plug = fn conn -> Plug.Conn.send_resp(conn, 200, big) end
+      assert {:error, {:response_too_large, 16_777_216}} = get(plug: big_plug)
+    end
+
+    test ":max_body_bytes that is not a positive integer is refused in the caller" do
+      for bad <- [0, -1, "10", 1.5, :infinity] do
+        assert_raise ArgumentError, ~r/max_body_bytes/, fn -> get(max_body_bytes: bad) end
+      end
+    end
+
     test "4xx is a client error and is not retried" do
       # A bad symbol or an unauthorized key is permanent. Retrying it burns the
       # venue's rate limit to get the same answer.
@@ -709,6 +810,23 @@ defmodule DpExchange.Core.HttpClientTest do
       plug = responding(429, %{}, [{"retry-after", "Sun, 06 Nov 1994 08:49:37 GMT"}])
       assert {:error, message} = get(plug: plug)
       assert message =~ "retry after 1s"
+    end
+
+    test "a single-digit day and a padded integer Retry-After are read" do
+      # `Sun, 6 Nov 1994` has no leading zero; it failed ISO 8601 parsing and got the floor.
+      plug = responding(429, %{}, [{"retry-after", "Sun, 6 Nov 1994 08:49:37 GMT"}])
+      assert {:error, message} = get(plug: plug)
+      assert message =~ "retry after 1s"
+
+      plug = responding(429, %{}, [{"retry-after", " 42 "}])
+      assert {:error, message} = get(plug: plug)
+      assert message =~ "retry after 42s"
+    end
+
+    test "raw_status does not change a 429: it is still the rate-limit error" do
+      plug = responding(429, %{}, [{"retry-after", "7"}])
+      assert {:error, message} = get(plug: plug, raw_status: true)
+      assert message =~ "retry after 7s"
     end
 
     test "a Retry-After past the ceiling is clamped to it, in either form" do

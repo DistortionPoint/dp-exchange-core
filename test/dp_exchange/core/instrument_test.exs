@@ -32,6 +32,34 @@ defmodule DpExchange.Core.InstrumentTest do
     end
   end
 
+  describe "new/1 closed vocabularies" do
+    test "accepts every value in the typespecs" do
+      for instrument <- [:spot, :perp, :future, :unknown],
+          status <- [:tradable, :delisted, :unknown] do
+        built = Instrument.new(symbol: "BTC-USD", instrument: instrument, status: status)
+        assert {built.instrument, built.status} == {instrument, status}
+      end
+    end
+
+    test "refuses a raw venue string or a misspelt atom" do
+      assert_raise ArgumentError, ~r/:status/, fn ->
+        Instrument.new(symbol: "BTC-USD", status: "online")
+      end
+
+      assert_raise ArgumentError, ~r/:status/, fn ->
+        Instrument.new(symbol: "BTC-USD", status: :tradeable)
+      end
+
+      assert_raise ArgumentError, ~r/:instrument/, fn ->
+        Instrument.new(symbol: "BTC-USD", instrument: "swap")
+      end
+    end
+
+    test "trading_disabled is :unknown, not delisted" do
+      assert :unknown = Instrument.status_from("trading_disabled")
+    end
+  end
+
   describe "instrument_from/1 — an unrecognised type must be visible" do
     test "recognises spot" do
       assert :spot = Instrument.instrument_from("spot")

@@ -19,6 +19,17 @@ defmodule DpExchange.Core.HttpClient do
   headers differ supplies its own — see `build_auth_headers/5` and
   `parse_rate_limit_headers/1`.
 
+  ## A response body is bounded as it is received
+
+  `:max_body_bytes` (default 16 MiB) caps what is held for one response. Req is given
+  `into: fun`, and the function counts bytes as they arrive and halts the transfer past the
+  limit, so a venue, proxy or CDN sending an unbounded body cannot exhaust the calling node's
+  memory. Streaming into a function skips only Req's decompression, and this pipeline never
+  enables that (`compressed` is off, so no `accept-encoding` is sent and a body is never
+  inflated), so below the limit the body, the JSON decoding, `decode_body: false` and
+  non-JSON handling are what they were. A transport that ignores `:into` is checked after
+  the fact instead; that path cannot prevent the allocation.
+
   ## The limiter is resolved at call time
 
   Never at compile time. `Application.compile_env/3` would freeze whichever limiter the
@@ -57,6 +68,15 @@ defmodule DpExchange.Core.HttpClient do
   # The most of a response body that goes into an error message. See `format_body/1`.
   @body_excerpt_bytes 2_048
 
+  # The most of a response body that is received at all, unless the caller says otherwise.
+  # Chosen, not measured: well above any venue's largest published payload in this family
+  # (candle pages, catalogue listings), and small enough that one hostile or broken response
+  # cannot take the calling node's memory.
+  @default_max_body_bytes 16_777_216
+
+  # Marks a response whose body was cut at the limit, so `make_http_request/5` can turn it
+  # into an error after Req's response steps have run over the (emptied) body.
+  @too_large_key :dp_exchange_response_too_large
   @type http_method :: :get | :post | :put | :delete
   @type headers :: [{String.t(), String.t()}]
 
@@ -143,12 +163,24 @@ defmodule DpExchange.Core.HttpClient do
   - `:account_id`, `:user_id`, `:operation` - Forwarded to the limiter, which may use them
     (optional, no defaults). `DefaultRateLimiter` ignores all three: the ceiling is per
     venue, never per key.
+  - `:max_body_bytes` - The most of a response body that is received (default: 16 MiB,
+    `16_777_216`). Counted as the bytes arrive; the transfer is halted the moment the total
+    passes the limit, so an oversized or endless body is never held in memory. The result is
+    `{:error, {:response_too_large, limit}}` (wrapped in `{:exchange_error, provider, _}` when
+    `:provider` is given), is never retried, and is reported on `[:dp_exchange, :request,
+    :stop]` with `result: :error, reason: :response_too_large`. A body of exactly the limit is
+    accepted. A positive integer, or `ArgumentError`. The count is of the bytes on the wire:
+    this pipeline never asks for compression (`Req`'s `:compressed` is off), so it is also the
+    decoded size.
   - `:raw_status` - Return `{:ok, response}` for a 4xx instead of an error string
     (default: `false`). A venue package needs this to tell a **refusal** from an
     **error**: the contract makes `{:refused, reason}` permanent and `{:error, reason}`
     possibly transient, and the venue states which in the 4xx status and body. Without
     it that evidence is flattened into a message and the venue has to string-match its
     way back to it. 5xx is unaffected — a server error is not a venue's considered answer.
+    **429 is unaffected too**: it is the venue's rate limit, handled by this pipeline
+    (`Retry-After`, the held bucket, telemetry), and is always the "Rate limited by the venue"
+    error, whether or not `:raw_status` is set.
   - `:decode_body` - Passed to `Req` (default: Req's, which decodes JSON with floats).
     `false` returns the body as bytes, for a venue that types money as a JSON number and
     must decode it without float rounding (`Jason.decode(body, floats: :decimals)`).
@@ -185,7 +217,10 @@ defmodule DpExchange.Core.HttpClient do
   every caller that handles it, reporting correct code as unreachable — which is exactly
   what it did to the Gemini package's rate-limit clause. Found 2026-08-28.
   """
-  @type request_error :: String.t() | {:exchange_error, provider(), term()}
+  @type request_error ::
+          String.t()
+          | {:response_too_large, pos_integer()}
+          | {:exchange_error, provider(), term()}
 
   @spec request(
           http_method(),
@@ -222,6 +257,13 @@ defmodule DpExchange.Core.HttpClient do
       raise ArgumentError,
             ":retry_delay must be a non-negative integer of milliseconds, got " <>
               inspect(retry_delay)
+    end
+
+    max_body_bytes = Config.opt(opts, :max_body_bytes, @default_max_body_bytes)
+
+    unless is_integer(max_body_bytes) and max_body_bytes > 0 do
+      raise ArgumentError,
+            ":max_body_bytes must be a positive integer of bytes, got #{inspect(max_body_bytes)}"
     end
 
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
@@ -397,8 +439,10 @@ defmodule DpExchange.Core.HttpClient do
   # malformed — which is exactly when guessing is worst, because the guess is unverifiable
   # and silently changes how hard this package hits the venue.
   defp fetch_integer(headers, key) do
+    # Trimmed: surrounding whitespace (`"30 "`) is not part of the value in RFC 9110, and a
+    # proxy that leaves it in made a perfectly readable `Retry-After` fall to the floor.
     with value when is_binary(value) <- Map.get(headers, key),
-         {integer, ""} <- Integer.parse(value) do
+         {integer, ""} <- Integer.parse(String.trim(value)) do
       {:ok, integer}
     else
       _absent_or_unparseable -> :error
@@ -681,6 +725,7 @@ defmodule DpExchange.Core.HttpClient do
   # slow calls are the ones dropping out of the sample.
   defp make_http_request(method, url, headers, body, opts) do
     timeout = Config.opt(opts, :timeout, 30_000)
+    max_body_bytes = Config.opt(opts, :max_body_bytes, @default_max_body_bytes)
 
     metadata = %{
       provider: Config.opt(opts, :provider, "unknown"),
@@ -705,7 +750,10 @@ defmodule DpExchange.Core.HttpClient do
         # Retry is this module's job, not Req's — it needs the venue's `Retry-After`
         # and the rate-limit context, neither of which Req has.
         retry: false,
-        redirect: false
+        redirect: false,
+        # Streamed so the size is counted as bytes arrive and the transfer halts at the limit;
+        # see `capped_into/1`. A transport that ignores `:into` is checked after the fact.
+        into: capped_into(max_body_bytes)
       ] ++ transport_opts(opts)
 
     try do
@@ -725,7 +773,11 @@ defmodule DpExchange.Core.HttpClient do
                  headers: headers,
                  body: body
                ] ++ request_opts
-             ) do
+             )
+             |> oversized(max_body_bytes) do
+          {:too_large, status} ->
+            {too_large(max_body_bytes, url, opts), status}
+
           {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
             response = %{
               status: status,
@@ -803,6 +855,48 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
+  # Counts the body as it arrives and halts the transfer once it passes `limit`. The body is
+  # kept as one binary appended to in place (the BEAM extends such a binary in amortised
+  # constant time), so everything below the limit reaches Req's decode step exactly as the
+  # buffered path delivered it. Past the limit the partial body is dropped, so the decode
+  # step never runs over truncated JSON, and the response is marked for `make_http_request/5`.
+  defp capped_into(limit) do
+    fn {:data, data}, {request, response} ->
+      if byte_size(response.body) + byte_size(data) > limit do
+        marked = %{response | body: ""} |> Req.Response.put_private(@too_large_key, limit)
+        {:halt, {request, marked}}
+      else
+        {:cont, {request, %{response | body: response.body <> data}}}
+      end
+    end
+  end
+
+  # `{:too_large, status}` when the body crossed the limit: marked by `capped_into/1` as it
+  # streamed, or, from an adapter that ignores `:into`, found whole and over the limit after
+  # the fact (by then the allocation has happened). Any other result passes through.
+  defp oversized(
+         {:ok, %Req.Response{status: status, private: %{@too_large_key => _limit}}},
+         _max
+       ),
+       do: {:too_large, status}
+
+  defp oversized({:ok, %Req.Response{status: status, body: body}}, max)
+       when is_binary(body) and byte_size(body) > max,
+       do: {:too_large, status}
+
+  defp oversized(result, _max), do: result
+
+  defp too_large(limit, url, opts) do
+    provider = Config.opt(opts, :provider, "unknown")
+    short_url = url |> Telemetry.endpoint() |> String.slice(0, 80)
+
+    Logger.warning(
+      "[HttpClient] response over #{limit} bytes refused provider=#{provider} #{short_url}"
+    )
+
+    {:error, {:response_too_large, limit}}
+  end
+
   # `result` gives the coarse bucket a dashboard groups by; `status` is carried separately
   # because every error branch above has already turned it into prose. See the comment at
   # the `{result, status}` binding.
@@ -810,6 +904,9 @@ defmodule DpExchange.Core.HttpClient do
 
   defp telemetry_outcome({:error, :rate_limited, retry_after: seconds}, status),
     do: [status: status, result: :rate_limited, retry_after_ms: seconds * 1_000]
+
+  defp telemetry_outcome({:error, {:response_too_large, limit}}, status),
+    do: [status: status, result: :error, reason: :response_too_large, max_body_bytes: limit]
 
   defp telemetry_outcome({:error, _reason}, status), do: [status: status, result: :error]
 
@@ -1074,7 +1171,7 @@ defmodule DpExchange.Core.HttpClient do
          month_number when is_integer(month_number) <-
            Enum.find_index(@months, &(&1 == month)),
          {:ok, at, 0} <-
-           DateTime.from_iso8601("#{year}-#{pad(month_number + 1)}-#{day}T#{time}Z") do
+           DateTime.from_iso8601("#{year}-#{pad(month_number + 1)}-#{pad(day)}T#{time}Z") do
       max(DateTime.diff(at, now, :second), 1)
     else
       _unreadable -> 5
@@ -1083,7 +1180,13 @@ defmodule DpExchange.Core.HttpClient do
 
   defp http_date_delay(_absent, _now), do: 5
 
-  defp pad(number), do: number |> Integer.to_string() |> String.pad_leading(2, "0")
+  # Takes the month number or the day as the date text spells it: a venue that writes
+  # `Sun, 6 Nov 1994` (no leading zero, which RFC 9110 forbids and many servers emit anyway)
+  # would otherwise fail ISO 8601 parsing and get the five-second floor.
+  defp pad(number) when is_integer(number),
+    do: number |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  defp pad(text) when is_binary(text), do: String.pad_leading(text, 2, "0")
 
   # Normalises the two header shapes this pipeline sees. `Req` returns
   # `%{"name" => ["value"]}`; a list of `{name, value}` pairs is the other convention,
@@ -1115,6 +1218,9 @@ defmodule DpExchange.Core.HttpClient do
   # as before, rather than a `FunctionClauseError` in the caller.
   defp client_error?("Client error (4" <> _rest), do: true
   defp client_error?("Unexpected status (3" <> _rest), do: true
+  # The same response is the same size on the next attempt, and retrying would repeat a
+  # transfer that was just cut off.
+  defp client_error?({:response_too_large, _limit}), do: true
   defp client_error?(_retryable), do: false
 
   defp wrap_exchange_error(opts, reason) do

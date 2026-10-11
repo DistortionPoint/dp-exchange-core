@@ -81,10 +81,19 @@ defmodule DpExchange.Core.Instrument do
   `status_from/1` exists to refuse. Pass `status:` whenever the venue states one.
 
   Raises `ArgumentError` if `:symbol` is absent OR `nil` — see this module's
-  "`@enforce_keys` guards presence, not `nil`" section.
+  "`@enforce_keys` guards presence, not `nil`" section. It also raises for an `:instrument`
+  or `:status` outside the closed vocabularies in `t:instrument_type/0` and `t:status/0`
+  (a raw venue string such as `"online"`, or `:tradeable`, is a plausible value with no
+  meaning to a consumer matching the atoms); pass the venue's string through
+  `instrument_from/1` and `status_from/1` first.
   """
   @spec new(keyword()) :: t()
-  def new(fields), do: Validate.new!(__MODULE__, @enforce_keys, fields)
+  def new(fields) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, fields)
+    |> Validate.one_of!(:instrument, [:spot, :perp, :future, :unknown])
+    |> Validate.one_of!(:status, [:tradable, :delisted, :unknown])
+  end
 
   @doc """
   Normalise a venue's product-type string.
@@ -140,8 +149,9 @@ defmodule DpExchange.Core.Instrument do
   Normalise a venue's listing-status string.
 
   `limit_only` counts as tradable: the venue still matches orders, and treating
-  it as delisted would silently drop live books. `closed` / `delisted` /
-  `trading_disabled` are the terminal states.
+  it as delisted would silently drop live books. `closed` / `delisted` / `offline` are the
+  terminal states. Anything else, `trading_disabled` included, is `:unknown`: a disabled
+  market may come back, and reading it as delisted would be a guess.
   """
   @spec status_from(String.t() | nil) :: status()
   def status_from(status) when is_binary(status) do

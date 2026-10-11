@@ -574,6 +574,30 @@ defmodule DpExchange.Core.CapabilitiesTest do
     end
   end
 
+  describe "provenance — when and against what travel together" do
+    test "a date with nothing named, or a source with no date, is refused" do
+      assert_raise ArgumentError, ~r/measured_at and measured_against go together/, fn ->
+        caps(measured_at: ~D[2026-08-27])
+      end
+
+      assert_raise ArgumentError, ~r/measured_at and measured_against go together/, fn ->
+        caps(measured_against: "GET /api/v3/exchangeInfo")
+      end
+    end
+  end
+
+  describe "historical_timeframes that is not a list" do
+    test "is named, not left to a raw ArgumentError from the list subtraction" do
+      assert_raise ArgumentError, ~r/historical_timeframes must be a list/, fn ->
+        caps(historical_timeframes: nil)
+      end
+
+      assert_raise ArgumentError, ~r/historical_timeframes must be a list/, fn ->
+        caps(historical_timeframes: "1m")
+      end
+    end
+  end
+
   describe "scalar fields a consumer reads without a second look" do
     test "supported_quotes must be a list of non-empty strings" do
       # `[:USD]` built the right pair strings and then failed every `in ["USD"]` a consumer

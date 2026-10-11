@@ -21,6 +21,58 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`Instrument.new/1` refuses an `:instrument` or `:status` outside the closed vocabularies
+  in its typespecs**, raising `ArgumentError` (`Validate.one_of!/3`, as `Fill`, `Trade` and
+  `Position` do). BREAKING ONLY FOR A VENUE THAT PASSED A RAW STRING (`"online"`) OR A
+  MISSPELT ATOM. A read of the five venue repos found every caller passing atoms from
+  `instrument_from/1` / `status_from/1` or a local mapping onto `:tradable | :delisted |
+  :unknown`, so none is affected. `Instrument.status_from/1`'s doc named `trading_disabled` as
+  a terminal state while the code answered `:unknown`; the doc is corrected (code unchanged:
+  a disabled market may return, and reading it as delisted would be a guess).
+- **`Capabilities.new/1` requires `measured_at` and `measured_against` together** (both or
+  neither). A date naming nothing, or a source with no date, is an unlabelled claim, which
+  CLAUDE.md rules out. All five venues and the reference venue declare both. A non-list
+  `historical_timeframes` now raises a message naming the field instead of a bare
+  `ArgumentError` from list subtraction.
+- **`Notice.new/3` refuses camelCase and run-together spellings of a credential name in
+  `details`** (`apiKey`, `accessToken`, `clientSecret`, `XApiKey`): names are compared with
+  `-` and `_` removed. It also refuses the nine names `CredentialRedactionCheck` already
+  treats as secret (`session_token`, `id_token`, `jwt`, `secret_key`, `api_passphrase`,
+  `api_token`, `auth_token`, `bearer_token`, `private_key_pem`), so the two lists no longer
+  disagree. A grep of the venue repos found none used as a `details` key.
+- **`PollingFeed.update_symbols/2` raises `FunctionClauseError` in the caller for anything
+  but a list or a `MapSet`.** It is a cast: a `nil` or a bare map used to raise inside the
+  feed, which restarted and lost every runtime scope. Both accepted shapes behave as before.
+- **`HttpClient` reads a `Retry-After` of `" 42 "` (surrounding whitespace) and an HTTP-date
+  with a one-digit day (`Sun, 6 Nov 1994 ...`)**, which both fell to the five-second floor.
+  The `:raw_status` doc now says 429 is not handed back (it never was).
+
+### Added
+
+- **`HttpClient` option `:max_body_bytes` (default 16 MiB, `16_777_216`) bounds a response
+  body as it is received.** The request is streamed with Req's `into: fun`; the function
+  counts bytes and halts the transfer once the total passes the limit, so an unbounded body
+  from a venue, proxy or CDN no longer exhausts the caller's memory. An oversized response is
+  `{:error, {:response_too_large, limit}}` (wrapped in `{:exchange_error, provider, _}` with
+  a `:provider`), is never retried, logs a warning and emits `[:dp_exchange, :request,
+  :stop]` with `result: :error, reason: :response_too_large, max_body_bytes: limit`. A body
+  of exactly the limit is accepted. BEHAVIOUR CHANGE ONLY FOR A RESPONSE OVER 16 MiB, which
+  was returned before; a venue needing more passes a larger `:max_body_bytes`. Nothing else
+  changes: Req's decompression is the only step `into:` skips and this pipeline never enables
+  it (no `accept-encoding` is sent), so decoding, `decode_body: false` and non-JSON bodies
+  are as before. A transport that ignores `:into` (a custom `:req_adapter`) is checked after
+  receipt instead. A non-positive-integer value raises `ArgumentError`.
+
+### Fixed
+
+- **`CredentialRedactionCheck` fails a struct whose `Inspect` shows part of a secret.** The
+  sentinel was searched for whole, so `"sk_live_****9f2a"` (first or last characters shown)
+  passed. The sentinel is now random hex and its first and last eight characters count.
+- **`LinkSafetyCheck` sees `Process.spawn(fun, [:link])` and `:erlang.spawn_opt` with a
+  literal `:link` option** as link-creating calls. `[:monitor]` alone is not flagged.
+
 ## [0.3.72] - 2026-10-11
 
 ### Changed

@@ -159,6 +159,56 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     end
   end
 
+  describe "run/2 — a partial reveal is a leak" do
+    test "an Inspect showing only the first or the last characters is caught" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "credentials.ex",
+            code: """
+            defmodule HeadShown#{u} do
+              defstruct [:api_key]
+            end
+
+            defimpl Inspect, for: HeadShown#{u} do
+              def inspect(value, _opts) do
+                "#HeadShown<\#{binary_part(value.api_key, 0, 10)}****>"
+              end
+            end
+
+            defmodule TailShown#{u} do
+              defstruct [:api_secret]
+            end
+
+            defimpl Inspect, for: TailShown#{u} do
+              def inspect(value, _opts) do
+                size = byte_size(value.api_secret)
+                "#TailShown<****\#{binary_part(value.api_secret, size - 10, 10)}>"
+              end
+            end
+
+            defmodule FullyMasked#{u} do
+              defstruct [:token]
+            end
+
+            defimpl Inspect, for: FullyMasked#{u} do
+              def inspect(_value, _opts), do: "#FullyMasked<****>"
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      found = violation_fields(violations)
+
+      assert {Module.concat([:"Elixir", "HeadShown#{u}"]), :api_key} in found
+      assert {Module.concat([:"Elixir", "TailShown#{u}"]), :api_secret} in found
+      refute Enum.any?(found, fn {mod, _field} -> mod == :"Elixir.FullyMasked#{u}" end)
+    end
+  end
+
   describe "run/2 — the secret-name list" do
     test "app_key and app_secret (Webull's own field names) are checked" do
       u = uniq()

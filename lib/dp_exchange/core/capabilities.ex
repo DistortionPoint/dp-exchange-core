@@ -781,7 +781,15 @@ defmodule DpExchange.Core.Capabilities do
               "endpoint and declare the widths it actually serves"
     end
 
-    case declaration.historical_timeframes -- Timeframe.nameable() do
+    # Read through `Map.from_struct/1`, as `validate_scalars!/1` does: the struct's `@type`
+    # already says list, which is the claim being checked.
+    %{historical_timeframes: widths} = Map.from_struct(declaration)
+
+    unless is_list(widths) do
+      raise ArgumentError, "historical_timeframes must be a list, got #{inspect(widths)}"
+    end
+
+    case widths -- Timeframe.nameable() do
       [] ->
         :ok
 
@@ -964,6 +972,19 @@ defmodule DpExchange.Core.Capabilities do
   defp validate_provenance!(measured_at, measured_against) do
     validate_measured_at!(measured_at)
     validate_measured_against!(measured_against)
+
+    # **When and against what travel together.** A date with nothing named is a claim that
+    # something was measured with no way to check what, and a named source with no date is
+    # one a consumer cannot tell is current. CLAUDE.md: "say when and against what" — an
+    # unlabelled number is worse than a missing one. Both nil is silence, which is allowed.
+    if is_nil(measured_at) != is_nil(measured_against) do
+      raise ArgumentError,
+            "measured_at and measured_against go together: got measured_at " <>
+              "#{inspect(measured_at)} and measured_against #{inspect(measured_against)}. " <>
+              "Say both when and against what, or neither"
+    end
+
+    :ok
   end
 
   defp validate_measured_at!(nil), do: :ok

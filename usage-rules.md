@@ -284,6 +284,10 @@ response, not each chunk of it (since 0.3.38). Before that, a response that tric
 never timed out. With retries on, a call can take up to `retry_attempts` times this, plus
 backoff.
 
+**`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
+it arrives and the transfer is halted at the limit, so an oversized or endless response is
+never held in memory. It returns `{:error, {:response_too_large, limit}}`, never retried.
+
 ## Money movement is its own subject
 
 One group of callbacks moves funds, one of them cannot be undone by anyone, and none of it is

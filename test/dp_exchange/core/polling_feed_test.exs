@@ -539,6 +539,19 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert %{symbols: 2} = PollingFeed.status(pid)
     end
 
+    test "anything that is not a list or a MapSet is refused in the caller, not in the feed" do
+      pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+
+      for bad <- [nil, "BTC-USD", %{"BTC-USD" => 1}, :all] do
+        assert_raise FunctionClauseError, fn -> PollingFeed.update_symbols(pid, bad) end
+      end
+
+      # The feed never saw any of them: it is the same process and still has its scope.
+      assert Process.alive?(pid)
+      assert %{symbols: 1} = PollingFeed.status(pid)
+    end
+
     test "an existing symbol is not rescheduled a second time" do
       # Rescheduling would stack a second timer on each symbol, doubling this
       # venue's request rate every time the scope is touched.

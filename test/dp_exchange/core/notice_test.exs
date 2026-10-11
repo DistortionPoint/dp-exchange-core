@@ -136,6 +136,35 @@ defmodule DpExchange.Core.NoticeTest do
       end
     end
 
+    test "camelCase and run-together spellings of a credential name are refused" do
+      for key <- [
+            "apiKey",
+            "accessToken",
+            "clientSecret",
+            "XApiKey",
+            "privateKey",
+            "apikey",
+            # The names `CredentialRedactionCheck` already treats as secret.
+            "session_token",
+            "idToken",
+            "jwt",
+            "secret-key",
+            "apiPassphrase",
+            "api_token",
+            "authToken",
+            "bearer_token",
+            "private_key_pem"
+          ] do
+        assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+          Notice.new(:credentials_rejected, :v, details: %{key => "x"})
+        end
+      end
+
+      assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+        Notice.new(:credentials_rejected, :v, details: %{payload: %{"refreshToken" => "x"}})
+      end
+    end
+
     test "a struct value and a credential-free nested payload are accepted" do
       notice =
         Notice.new(:data_quality, :v,

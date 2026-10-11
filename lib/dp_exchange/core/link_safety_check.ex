@@ -109,7 +109,8 @@ defmodule DpExchange.Core.LinkSafetyCheck do
       `Process.link/1` / `:erlang.link/1`, or `spawn_link` in any arity, or `Task.async/1,3`,
       `Task.async_stream/3,5` and their `Task.Supervisor` forms, which link the caller to
       the task they start (`usage-rules/adapter.md`, "Never do blocking work in a process
-      that owes a reply", records the unconverted `{:EXIT, …}` that link delivers).
+      that owes a reply", records the unconverted `{:EXIT, …}` that link delivers), or
+      `Process.spawn/2` / `:erlang.spawn_opt` with a literal `:link` among its options.
 
       **The target module may be a variable or any expression**, not only a literal atom.
       This used to match `{:remote, _, {:atom, _, _module}, …}` only, so
@@ -323,6 +324,15 @@ defmodule DpExchange.Core.LinkSafetyCheck do
 
   defp contains_link_call?(term) do
     walk_any?(term, fn
+      # `Process.spawn(fun, [:link])` and `:erlang.spawn_opt/2,3,4` link only when the options
+      # say so, so they are a link-creating call only with a literal `:link` among the
+      # arguments. `spawn_opt(fun, [:monitor])` links nothing and is not flagged.
+      # `Process.spawn/2` is matched by its own name too: whether the compiler rewrites it to
+      # `:erlang.spawn_opt/2` is not something this check should depend on.
+      {:call, _anno, {:remote, _anno2, _module_expr, {:atom, _anno3, spawn_fun}}, args}
+      when spawn_fun in [:spawn_opt, :spawn] ->
+        walk_any?(args, &match?({:atom, _anno, :link}, &1))
+
       {:call, _anno, {:remote, _anno2, _module_expr, {:atom, _anno3, fun}}, _args} ->
         fun in @link_creating_functions
 

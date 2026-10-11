@@ -54,6 +54,10 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   never against a fresh process, and never touching a network, the venue's own `Rest` or
   `Auth` module, or anything the venue's own code would dial out through.
 
+  **A partial reveal fails too.** The rendering is searched for the sentinel whole and for
+  its first and last eight characters, so an `Inspect` that masks the middle and shows the
+  ends (`"sk_live_****9f2a"`) is a leak, as it is for any real secret that shape is applied to.
+
   ## The secret-name list, and why each name is on it
 
   Twenty-seven names, as atoms, matched against a struct field's own name exactly — never a
@@ -185,7 +189,7 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
 
   # A plain list, not a `MapSet`: see `DpExchange.Core.Notice`'s own `@credential_keys` for
   # why — a `MapSet` literal built from a module attribute fails Dialyzer's PLT check with
-  # a `call_without_opaque` mismatch against `MapSet.member?/2`'s own opaque spec. Fifteen
+  # a `call_without_opaque` mismatch against `MapSet.member?/2`'s own opaque spec. Twenty-seven
   # entries make a linear scan irrelevant next to that, the same conclusion `Notice` and
   # `LinkSafetyCheck` each already reached independently.
 
@@ -267,8 +271,16 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   # reused for every field on the struct — so a match can only mean THIS field's value
   # reached the rendered output, never a coincidental collision with another field's
   # default or another test's fixture running concurrently (`async: true`).
+  #
+  # **A fragment of the value is a leak too.** The sentinel was searched for whole, so an
+  # `Inspect` that masks all but a prefix or suffix (`"sk_l****"`, `"****9f2a"`, the common
+  # "show the last four" habit) printed part of every real secret and passed. The sentinel is
+  # now random hex with no word in it, and the rendering is searched for the whole value, its
+  # first eight characters and its last eight. Eight hex characters (32 bits) cannot appear in
+  # an `inspect/1` rendering by coincidence, which a prefix of a readable word could
+  # (`"cred"` is inside a field called `:credentials`).
   defp leaks?(module, field) do
-    sentinel = "credential_redaction_probe_#{field}_#{System.unique_integer([:positive])}"
+    sentinel = Base.encode16(:crypto.strong_rand_bytes(12), case: :lower)
     # `limit: :infinity`. The default limit of 50 truncates a struct with more fields than
     # that, so a secret field past the cut was absent from the rendering for a reason that
     # had nothing to do with redaction, and the struct passed. A crash report is not bound
@@ -278,7 +290,9 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
       |> struct([{field, sentinel}])
       |> inspect(limit: :infinity, printable_limit: :infinity)
 
-    String.contains?(rendered, sentinel)
+    fragments = [sentinel, binary_part(sentinel, 0, 8), binary_part(sentinel, 16, 8)]
+
+    Enum.any?(fragments, &String.contains?(rendered, &1))
   end
 
   # **Refuses an empty scan.** A `lib_root` that matches no compiled module used to answer

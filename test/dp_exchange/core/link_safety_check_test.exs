@@ -164,6 +164,45 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       assert {mod, :init, 1} in violation_mfas(violations)
     end
 
+    test "Process.spawn with a :link option is flagged, one with :monitor alone is not" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "spawn_opt.ex",
+            code: """
+            defmodule LinkedViaOpt#{u} do
+              use GenServer
+
+              @impl true
+              def init(_opts) do
+                pid = Process.spawn(fn -> :ok end, [:link])
+                {:ok, %{pid: pid}}
+              end
+            end
+
+            defmodule MonitoredViaOpt#{u} do
+              use GenServer
+
+              @impl true
+              def init(_opts) do
+                {pid, _ref} = Process.spawn(fn -> :ok end, [:monitor])
+                {:ok, %{pid: pid}}
+              end
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      linked = Module.concat([:"Elixir", "LinkedViaOpt#{u}"])
+      monitored = Module.concat([:"Elixir", "MonitoredViaOpt#{u}"])
+
+      assert {linked, :init, 1} in violation_mfas(violations)
+      refute Enum.any?(violations, &(&1.module == monitored))
+    end
+
     test "Process.flag(:trap_exit, false) does not count as the guard" do
       u = uniq()
 

@@ -164,7 +164,9 @@ defmodule DpExchange.Core.Notice do
 
   @credential_keys ~w(api_key api_secret secret password passphrase token access_token
                       refresh_token private_key signature authorization bearer client_secret
-                      x_api_key app_secret signing_key cookie)a
+                      x_api_key app_secret signing_key cookie session_token id_token jwt
+                      secret_key api_passphrase api_token auth_token bearer_token
+                      private_key_pem)a
 
   # Derived once, at compile time, so the runtime check below never has to turn an
   # incoming key into an atom to compare it. `@credential_keys` stays the single
@@ -176,7 +178,12 @@ defmodule DpExchange.Core.Notice do
   # `call_without_opaque`/opaqueness-type mismatch against that literal — the function's
   # own spec expects an opaque `t:MapSet.t/0`, not one it can see through. Twelve
   # entries make a linear scan irrelevant next to that.
-  @credential_key_strings Enum.map(@credential_keys, &Atom.to_string/1)
+  #
+  # Stored with every `_` removed, because `credential_key?/1` compares separator-free: a
+  # camelCase `apiKey` (a JSON payload's spelling) and `api_key` are the same name.
+  @credential_key_strings Enum.map(@credential_keys, fn key ->
+                            key |> Atom.to_string() |> String.replace("_", "")
+                          end)
 
   @doc """
   Builds a notice.
@@ -360,9 +367,13 @@ defmodule DpExchange.Core.Notice do
   # never a credential.
   #
   # `-` and `_` are one separator: `"api-key"` and `"X-Api-Key"` are header spellings of the
-  # same credential, and were let through.
+  # same credential, and were let through. They are dropped altogether, so the camelCase a
+  # JSON payload uses (`apiKey`, `accessToken`, `clientSecret`) is the same name too; it
+  # lowercased to `apikey`, which matched nothing.
   defp credential_key?(key) when is_atom(key) or is_binary(key) do
-    normalised = key |> to_string() |> String.downcase() |> String.replace("-", "_")
+    normalised =
+      key |> to_string() |> String.downcase() |> String.replace(["-", "_"], "")
+
     normalised in @credential_key_strings
   end
 

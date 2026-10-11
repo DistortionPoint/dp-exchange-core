@@ -289,8 +289,14 @@ defmodule DpExchange.Core.PollingFeed do
   @doc """
   Replace the symbol set without restarting the poller.
   """
-  @spec update_symbols(pid() | atom(), [String.t()]) :: :ok
-  def update_symbols(server, symbols), do: GenServer.cast(server, {:update_symbols, symbols})
+  @spec update_symbols(pid() | atom(), [String.t()] | MapSet.t(String.t())) :: :ok
+  # A list or a `MapSet`, anything else refused HERE in the caller. This is a cast, so a
+  # `nil` or a bare map was handled inside the feed, where `MapSet.new/1` raised and killed
+  # it: the restart started from its static start opts and lost every scope set by earlier
+  # `update_symbols/2` calls, which is the incident `guarded/3` and `safely/1` exist to
+  # prevent. The mistake belongs at the call.
+  def update_symbols(server, symbols) when is_list(symbols) or is_struct(symbols, MapSet),
+    do: GenServer.cast(server, {:update_symbols, symbols})
 
   @impl true
   def init(opts) do
