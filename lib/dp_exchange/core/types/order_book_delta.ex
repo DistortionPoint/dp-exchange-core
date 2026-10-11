@@ -102,7 +102,25 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises `ArgumentError` when `levels` is not a list of `{side, price, quantity}`
+  triples with `side` one of `:bid | :ask`. A level on `:buy`, or on the string `"bid"`, is
+  read by a consumer matching the two sides as no side at all, and its quantity lands on
+  neither side of the book.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+
+    if is_list(built.levels) and Enum.all?(built.levels, &level?/1) do
+      built
+    else
+      raise ArgumentError,
+            "OrderBookDelta.new/1: field :levels must be a list of {side, price, quantity} " <>
+              "with side :bid or :ask, got #{inspect(built.levels, limit: 5)}"
+    end
+  end
+
+  defp level?({side, _price, _quantity}), do: side in [:bid, :ask]
+  defp level?(_other), do: false
 end

@@ -365,6 +365,9 @@ defmodule DpExchange.Core.PollingFeed do
       # once per sweep while an outage continues (unlike the "delivered NOTHING" log line,
       # which repeats every sweep by design; see `delivering_nothing?/2`).
       notice_state: :ok,
+      # Whether `[:dp_exchange, :link, :up]` has been emitted for this feed. See
+      # `record_success/1`.
+      link_up_sent: false,
       # The single in-flight fetch, or `nil`. See the moduledoc: the task exists to bound a
       # hang, and NOT waiting on it is what keeps `coverage/1` and `status/1` answerable
       # while a fetch is running.
@@ -899,7 +902,17 @@ defmodule DpExchange.Core.PollingFeed do
 
     guarded(state, :on_notice, fn -> state.on_notice.(notice) end)
     Telemetry.link_up(state.provider)
-    %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok}
+    %{state | failures_since_ok: 0, last_error: nil, notice_state: :ok, link_up_sent: true}
+  end
+
+  # **The first delivery is the route being established, and it says so.** `[:dp_exchange,
+  # :link, :up]` was emitted only on recovery from delivering-nothing, so a feed that started
+  # and worked never emitted one: a dashboard counting ups against downs, or keeping the last
+  # link event per provider, saw a healthy venue with no `:up` at all. Emitted once, on the
+  # first success, and never again until a `:down` has been followed by its recovery.
+  defp record_success(%{link_up_sent: false} = state) do
+    Telemetry.link_up(state.provider)
+    %{state | failures_since_ok: 0, last_error: nil, link_up_sent: true}
   end
 
   defp record_success(state), do: %{state | failures_since_ok: 0, last_error: nil}

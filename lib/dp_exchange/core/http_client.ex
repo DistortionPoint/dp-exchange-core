@@ -88,7 +88,11 @@ defmodule DpExchange.Core.HttpClient do
   @type signed_headers :: headers() | (-> headers() | {:ok, headers()} | {:error, term()})
   @type body :: String.t() | nil
   @type options :: keyword()
-  @type provider :: String.t()
+  @typedoc """
+  The `:provider` option, echoed back as the tag of `{:exchange_error, provider, reason}`.
+  Every venue passes its atom (`:gemini`, `:gemini_private`); a string is accepted too.
+  """
+  @type provider :: atom() | String.t()
   @type account_id :: String.t()
   @type user_id :: String.t()
 

@@ -1216,6 +1216,27 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert metadata.type == "Quote"
     end
 
+    test "the first delivery is a link up, emitted once and not per delivery" do
+      label = "poll_#{System.unique_integer([:positive])}"
+      :ok = attach_link(label)
+
+      start_feed(
+        label: label,
+        symbols: ["BTC-USD"],
+        interval_ms: 10,
+        fetch: fn symbol -> {:ok, quote_for(symbol)} end
+      )
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :up], %{count: 1}, metadata}, 5_000
+      assert metadata.provider == label
+
+      # Several more deliveries have arrived by the time a second event is seen.
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _m1, _md1}, 5_000
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _m2, _md2}, 5_000
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _m3, _md3}, 5_000
+      refute_receive {:telemetry, [:dp_exchange, :link, :up], _m, _md}, 100
+    end
+
     test "crossing into delivering-nothing is a link down, and recovery is a link up" do
       # Mapped onto the `notice_state` latch that already exists rather than a new one, so
       # the telemetry inherits its once-per-crossing property and cannot storm on a long

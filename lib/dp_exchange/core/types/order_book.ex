@@ -51,7 +51,44 @@ defmodule DpExchange.Core.Types.OrderBook do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises `ArgumentError` when `bids` or `asks` is not a list of `{price, quantity}`
+  pairs, or when the moduledoc's ordering is broken: `bids` must not rise and `asks` must
+  not fall from one level to the next, so `hd/1` is the best price. A venue-order book that
+  was never re-sorted is true in every value and wrong in meaning.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+    check_levels!(built, :bids, [:gt, :eq])
+    check_levels!(built, :asks, [:lt, :eq])
+    built
+  end
+
+  defp check_levels!(built, field, allowed) do
+    levels = Map.fetch!(built, field)
+
+    if not (is_list(levels) and Enum.all?(levels, &level?/1)) do
+      raise ArgumentError,
+            "OrderBook.new/1: field #{inspect(field)} must be a list of {price, quantity} " <>
+              "pairs of Decimals, got #{inspect(levels, limit: 5)}"
+    end
+
+    levels
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.each(fn [better, worse] ->
+      if Decimal.compare(better, worse) not in allowed do
+        raise ArgumentError,
+              "OrderBook.new/1: field #{inspect(field)} is not sorted best price first " <>
+                "(#{inspect(better)} before #{inspect(worse)})"
+      end
+    end)
+  end
+
+  defp level?({price, quantity}), do: number?(price) and number?(quantity)
+  defp level?(_other), do: false
+
+  defp number?(%Decimal{}), do: true
+  defp number?(value), do: is_integer(value)
 end

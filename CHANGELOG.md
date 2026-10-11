@@ -21,6 +21,31 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **`Core.PollingFeed` emits `[:dp_exchange, :link, :up]` on its first delivery.** It was
+  emitted only on recovery from delivering-nothing, so a feed that started and worked never
+  emitted one and a dashboard keeping the last link event per provider saw a healthy venue
+  with no `:up`. Once on the first success, and again only after a `:down` and its recovery
+  (never per delivery). `Core.Telemetry`'s moduledoc now states this, and the extra
+  `:stop` metadata `HttpClient` has always set (`retry_after_ms`, `reason`, `max_body_bytes`).
+- **`Types.*` `new/1` refuses a bare float** at the top level of any field and inside a list
+  or tuple (the `{price, quantity}` levels of an order book). No field of any type is a
+  float; a float has already lost digits and still prints as plausible. Integers and
+  `Decimal` are unchanged, and free-form maps (`details`, `line_items`, `metrics`) may
+  still hold one. BREAKING ONLY FOR A VENUE THAT PASSED A FLOAT TO `new/1`; struct literals
+  are not checked, as before.
+- **`OrderBook.new/1` refuses levels that are not `{price, quantity}` pairs of `Decimal`s
+  (or integers), and a book not sorted best price first** (`bids` may not rise, `asks`
+  may not fall), which its moduledoc has always made part of the contract.
+- **`OrderBookDelta.new/1` refuses a level whose side is not `:bid` or `:ask`**, or that is
+  not a `{side, price, quantity}` triple. **`AuctionImbalance.new/1` refuses an `:auction`
+  outside `:opening | :closing`.** Both were stated in the typespecs and checked nowhere.
+- **`HttpClient.provider` is typed `atom() | String.t()`.** It said `String.t()` while every
+  venue passes an atom, so dialyzer reported a venue's match on
+  `{:exchange_error, :gemini_private, _}` as unreachable when it is the shape returned at
+  runtime. Type only; behaviour unchanged.
+
 ## [0.3.74] - 2026-10-11
 
 ### Changed

@@ -69,7 +69,11 @@ defmodule DpExchange.Core.Telemetry do
     `%{provider:, endpoint:, method:}`.
   - `[:dp_exchange, :request, :stop]` — request returned (either
     success or error). Measurements: `%{duration: integer (native)}`.
-    Metadata: `%{provider:, endpoint:, method:, status:, result:}`.
+    Metadata: `%{provider:, endpoint:, method:, status:, result:}`, where `status` is the
+    HTTP status or `nil` when none was received and `result` is `:ok`, `:error` or
+    `:rate_limited`. `Core.HttpClient` adds, where they apply: `retry_after_ms:` (on
+    `:rate_limited`), and `reason: :response_too_large` with `max_body_bytes:` (on a body
+    over the cap). The venue's response body is never carried.
   - `[:dp_exchange, :request, :exception]` — request raised an
     exception. Measurements: `%{duration: integer}`. Metadata: same
     as `:stop` plus `%{kind:, reason:, stacktrace:}`.
@@ -85,7 +89,8 @@ defmodule DpExchange.Core.Telemetry do
   ### Link lifecycle
 
   - `[:dp_exchange, :link, :up]` — a live route to the venue was established.
-    Measurements: `%{count: 1}`. Metadata: `%{provider:}`.
+    Measurements: `%{count: 1}`. Metadata: `%{provider:}`. `Core.PollingFeed` emits it on
+    its first delivery and again on each recovery from delivering-nothing.
   - `[:dp_exchange, :link, :down]` — the route was lost.
     Measurements: `%{count: 1}`. Metadata: `%{provider:, reason:}`.
   - `[:dp_exchange, :link, :event]` — a payload arrived over the route.

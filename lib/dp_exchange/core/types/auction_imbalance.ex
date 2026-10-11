@@ -74,9 +74,16 @@ defmodule DpExchange.Core.Types.AuctionImbalance do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on an `:auction` that is not `:opening` or `:closing`, the two the typespec
+  states: a misspelt one is an imbalance for no auction a consumer can name.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:auction, [:opening, :closing])
+  end
 
   @doc """
   Whether the imbalance is large relative to what can be paired, as a ratio.

@@ -487,6 +487,61 @@ defmodule DpExchange.Core.Types.ValidateTest do
         OrderBook.new(Keyword.put(@valid, :observed_at, nil))
       end
     end
+
+    test "rejects bids that rise or asks that fall, the best price must come first" do
+      d = &Decimal.new/1
+
+      assert_raise ArgumentError, ~r/bids.*not sorted/, fn ->
+        OrderBook.new(Keyword.put(@valid, :bids, [{d.("99"), d.("1")}, {d.("100"), d.("1")}]))
+      end
+
+      assert_raise ArgumentError, ~r/asks.*not sorted/, fn ->
+        OrderBook.new(Keyword.put(@valid, :asks, [{d.("102"), d.("1")}, {d.("101"), d.("1")}]))
+      end
+
+      sorted = [bids: [{d.("100"), d.("1")}, {d.("99"), d.("2")}], asks: [{d.("101"), d.("1")}]]
+      assert %OrderBook{} = OrderBook.new(Keyword.merge(@valid, sorted))
+    end
+
+    test "rejects levels that are not {price, quantity} pairs" do
+      for bad <- [:none, [{Decimal.new("1")}], [{"1", "1"}], [{Decimal.new("1"), nil}]] do
+        assert_raise ArgumentError, ~r/bids.*pairs/, fn ->
+          OrderBook.new(Keyword.put(@valid, :bids, bad))
+        end
+      end
+    end
+  end
+
+  describe "OrderBookDelta.new/1 levels" do
+    @delta [
+      symbol: "BTC-USD",
+      levels: [{:bid, Decimal.new("100"), Decimal.new("1")}],
+      timestamp: @ts,
+      provider: :reference
+    ]
+
+    test "rejects a level whose side is outside :bid | :ask, or that is not a triple" do
+      bad_levels = [
+        [{:buy, Decimal.new("100"), Decimal.new("1")}],
+        [{"bid", Decimal.new("100"), Decimal.new("1")}],
+        [{Decimal.new("100"), Decimal.new("1")}],
+        :none
+      ]
+
+      for bad <- bad_levels do
+        assert_raise ArgumentError, ~r/levels/, fn ->
+          OrderBookDelta.new(Keyword.put(@delta, :levels, bad))
+        end
+      end
+    end
+  end
+
+  describe "AuctionImbalance.new/1 auction" do
+    test "rejects an auction outside :opening | :closing" do
+      attrs = [symbol: "AAPL", auction: :midday, observed_at: @ts, provider: :reference]
+
+      assert_raise ArgumentError, ~r/auction/, fn -> AuctionImbalance.new(attrs) end
+    end
   end
 
   describe "OrderBookDelta.new/1" do
@@ -524,10 +579,15 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "rejects a ratio that is not a positive integer" do
       # A ratio of 0 is a leg that trades nothing; 1.0 and a Decimal are counts a venue would
       # round. Each built before, and the spread still validated as a spread.
-      for bad <- [0, -1, 1.0, Decimal.new(1), "1"] do
+      for bad <- [0, -1, Decimal.new(1), "1"] do
         assert_raise ArgumentError, ~r/ratio.*positive integer/, fn ->
           OrderLeg.new(Keyword.put(@valid, :ratio, bad))
         end
+      end
+
+      # A float is refused for being a float, before the ratio check is reached.
+      assert_raise ArgumentError, ~r/ratio.*float/, fn ->
+        OrderLeg.new(Keyword.put(@valid, :ratio, 1.0))
       end
     end
 
@@ -812,6 +872,29 @@ defmodule DpExchange.Core.Types.ValidateTest do
 
   describe "unrepresentable values inside a level (found 2026-10-10)" do
     @book [symbol: "BTC-USD", asks: [], observed_at: @ts, provider: :reference]
+
+    test "a float in a Decimal field or inside a level is refused, an integer is not" do
+      assert_raise ArgumentError, ~r/bids.*float/, fn ->
+        OrderBook.new(Keyword.put(@book, :bids, [{100.5, Decimal.new("1")}]))
+      end
+
+      assert_raise ArgumentError, ~r/price.*float/, fn ->
+        Quote.new(
+          symbol: "BTC-USD",
+          price: 0.1,
+          observed_at: @ts,
+          provider: :reference
+        )
+      end
+
+      assert %Quote{} =
+               Quote.new(
+                 symbol: "BTC-USD",
+                 price: 1,
+                 observed_at: @ts,
+                 provider: :reference
+               )
+    end
 
     test "a NaN price inside an OrderBook level is refused" do
       bids = [{Decimal.new("100"), Decimal.new("1")}, {Decimal.new("NaN"), Decimal.new("1")}]

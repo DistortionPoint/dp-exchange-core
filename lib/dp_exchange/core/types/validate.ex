@@ -38,8 +38,11 @@ defmodule DpExchange.Core.Types.Validate do
   **Closed vocabularies are checked per type, not here.** `new!/3` knows nothing about which
   field is a `:buy | :sell`. A type whose typespec states one pipes its result through
   `one_of!/3` (and `positive_integer!/2` for a count), so `Fill`, `Trade`, `Position` and
-  `OrderLeg` refuse a side outside what they state. The `Decimal` fields are not type-checked:
-  a venue builds these with integers in its own tests and the typespec is the contract.
+  `OrderLeg` refuse a side outside what they state. The `Decimal` fields are not type-checked
+  for being a `Decimal` (an integer is accepted, and a venue builds these with integers in its
+  own tests), but a **float** is refused at the top level of any field and inside a list or
+  tuple, because no field of any type is a float and a float has already lost digits. Free-form
+  maps (`details`, `line_items`, `metrics`) may still hold one: they are the venue's own.
 
   ## Struct literals still work
 
@@ -136,8 +139,34 @@ defmodule DpExchange.Core.Types.Validate do
   # deeper. Found 2026-10-10 by reading the path. Structs other than these two are not
   # descended into: a nested `Types.*` value was built by its own `new/1`.
   defp refuse_unrepresentable!(module, attrs_map) do
-    Enum.each(attrs_map, fn {field, value} -> refuse_value!(module, field, value) end)
+    Enum.each(attrs_map, fn {field, value} ->
+      refuse_value!(module, field, value)
+      refuse_float!(module, field, value)
+    end)
   end
+
+  # **A float is refused too, but only where no type could mean one.** No `Types.*` field is
+  # typed `float()`; every number is a `Decimal` or an integer, and a float in one is a venue
+  # decoder that let `Jason` turn `"0.1"`-style JSON numbers into binary floats (`0.1` is
+  # `0.1000000000000000055511151231257827…`), after which every digit past the 17th is gone
+  # and the value still prints as plausible. Scanned at the top level and inside lists and
+  # tuples (the `{price, quantity}` levels of an order book). NOT inside plain maps: the
+  # free-form `term()` payloads (`details`, `line_items`, `metrics`) are the venue's own and
+  # may hold any JSON value.
+  defp refuse_float!(module, field, value) when is_float(value) do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} holds float #{inspect(value)} " <>
+            "— every number in this family is a Decimal (or an integer), and a float has " <>
+            "already lost digits; decode the venue's number as a Decimal"
+  end
+
+  defp refuse_float!(module, field, values) when is_list(values),
+    do: Enum.each(values, &refuse_float!(module, field, &1))
+
+  defp refuse_float!(module, field, value) when is_tuple(value),
+    do: value |> Tuple.to_list() |> Enum.each(&refuse_float!(module, field, &1))
+
+  defp refuse_float!(_module, _field, _value), do: :ok
 
   defp refuse_value!(module, field, %Decimal{coef: coef}) when coef in [:NaN, :inf] do
     raise ArgumentError,
