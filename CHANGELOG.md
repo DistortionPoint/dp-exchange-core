@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.68] - 2026-10-11
+
 ### Changed
 
 - **Conformance assertion 31 round-trips every order-minting call, not only
