@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.73] - 2026-10-11
+
 ### Changed
 
 - **`Instrument.new/1` refuses an `:instrument` or `:status` outside the closed vocabularies
