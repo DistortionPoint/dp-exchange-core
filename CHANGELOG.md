@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.67] - 2026-10-11
+
 Found by reading `unwired_check.ex`, `link_safety_check.ex`, `credential_redaction_check.ex`,
 `venue.ex`, `adapter_contract.ex` and `usage-rules/adapter.md` line by line. **None of this has
 been run**: it was written without `mix`, so the suite, `mix quality` and the five venues'
