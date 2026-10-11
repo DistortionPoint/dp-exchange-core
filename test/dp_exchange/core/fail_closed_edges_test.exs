@@ -51,6 +51,19 @@ defmodule DpExchange.Core.FailClosedEdgesTest do
       end
     end
 
+    test "details keyed by a term with no String.Chars (tuple, pid) are not a crash" do
+      # `to_string/1` ran on every key, so a `{symbol, side}` key raised
+      # `Protocol.UndefinedError` out of `new/3` — in the venue's transport, over a key that
+      # was never a credential.
+      details = %{{"BTC-USD", :buy} => 1, self() => 2, "symbol" => "BTC-USD"}
+
+      assert %Notice{details: ^details} = Notice.new(:degraded, :v, details: details)
+
+      assert_raise ArgumentError, ~r/credential-shaped/, fn ->
+        Notice.new(:degraded, :v, details: Map.put(details, "api_key", "x"))
+      end
+    end
+
     test "a nil provider or a NaiveDateTime :at is refused" do
       assert_raise ArgumentError, ~r/provider/, fn -> Notice.new(:link_up, nil) end
 

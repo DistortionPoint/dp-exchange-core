@@ -48,7 +48,16 @@ defmodule DpExchange.Core.Types.Fill do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:side` that is not `:buy` or `:sell`, and on a `:liquidity` that is not
+  `:maker`, `:taker` or `nil`: `side: :long` on a fill reads as no side to a consumer
+  matching the two the type states, and a `"maker"` string matches neither.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:side, [:buy, :sell])
+    |> Validate.one_of!(:liquidity, [:maker, :taker, nil])
+  end
 end

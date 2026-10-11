@@ -160,9 +160,19 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   not apply in practice; it is noted only for completeness.
   """
 
+  # The spellings a secret takes beyond the first fifteen are the ones `Core.Notice` already
+  # refuses as `details` keys (`x_api_key`, `signing_key`, `cookie`) and the obvious
+  # compounds a venue reaches for when its credential is a session rather than a key pair
+  # (`session_token`, `id_token`, `jwt`, `secret_key`, `api_passphrase`, `api_token`,
+  # `auth_token`, `bearer_token`, `private_key_pem`). The check compares field NAMES, so a
+  # secret under a name that is not here was never looked at: `defstruct [:secret_key]`
+  # printed in cleartext and passed. `credentials` is deliberately absent: it usually holds
+  # a struct that is itself redacted, and flagging it would fail correct code.
   @secret_field_names ~w(api_key api_secret app_key app_secret secret password passphrase
                          token access_token refresh_token client_secret private_key
-                         signature authorization bearer)a
+                         signature authorization bearer x_api_key signing_key cookie
+                         session_token id_token jwt secret_key api_passphrase api_token
+                         auth_token bearer_token private_key_pem)a
 
   # A plain list, not a `MapSet`: see `DpExchange.Core.Notice`'s own `@credential_keys` for
   # why — a `MapSet` literal built from a module attribute fails Dialyzer's PLT check with

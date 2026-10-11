@@ -556,5 +556,44 @@ defmodule DpExchange.Core.CapabilitiesTest do
       assert caps().measured_at == nil
       assert caps().measured_against == nil
     end
+
+    test "provenance that cannot be compared or read is refused, not stored" do
+      # A string date or an empty `measured_against` is a label that reads as provenance and
+      # carries none — worse than an absent one.
+      for bad <- ["2026-08-27", ~U[2026-08-27 00:00:00Z], ~N[2026-08-27 00:00:00], 20_260_827] do
+        assert_raise ArgumentError, ~r/measured_at must be a Date/, fn ->
+          caps(measured_at: bad)
+        end
+      end
+
+      for bad <- ["", :exchange_info, 42] do
+        assert_raise ArgumentError, ~r/measured_against must be a non-empty string/, fn ->
+          caps(measured_against: bad)
+        end
+      end
+    end
+  end
+
+  describe "scalar fields a consumer reads without a second look" do
+    test "supported_quotes must be a list of non-empty strings" do
+      # `[:USD]` built the right pair strings and then failed every `in ["USD"]` a consumer
+      # wrote against it.
+      for bad <- [[:USD], ["USD", ""], [nil], "USD", nil] do
+        assert_raise ArgumentError, ~r/supported_quotes must be a list/, fn ->
+          caps(supported_quotes: bad)
+        end
+      end
+    end
+
+    test "max_candles_per_request is a positive integer or nil" do
+      assert caps(max_candles_per_request: 300).max_candles_per_request == 300
+      assert caps(max_candles_per_request: nil).max_candles_per_request == nil
+
+      for bad <- [0, -1, 300.0, "300", :infinity] do
+        assert_raise ArgumentError, ~r/max_candles_per_request/, fn ->
+          caps(max_candles_per_request: bad)
+        end
+      end
+    end
   end
 end

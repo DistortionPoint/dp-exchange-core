@@ -64,7 +64,9 @@ defmodule DpExchange.Core.CanonicalPair do
 
   Input with no quote part is not a pair and is never decorated with a trailing separator,
   which would be a symbol no venue was ever asked about. It comes back uppercased, with an
-  `asset_aliases` entry reversed if one applies, and otherwise as it was given.
+  `asset_aliases` entry reversed if one applies, and otherwise as it was given. Input with
+  no base part (`"-USD"`) is not a pair either, and comes back uppercased and otherwise
+  untouched rather than as the bare quote.
   """
   @spec to_exchange(mapping(), String.t()) :: String.t()
   def to_exchange(mapping, canonical) when is_map(mapping) and is_binary(canonical) do
@@ -83,6 +85,15 @@ defmodule DpExchange.Core.CanonicalPair do
       # `dp_exchange_coinbase` and `dp_exchange_robinhood` both map with `sep: "-"`; the
       # concat venues were never exposed, because joining with `""` is a no-op. The test
       # covering a bare symbol used the concat mapping, which is why this survived.
+      #
+      # **A pair with no base is not a pair either.** `"-USD"` split to `{"", "USD"}` and was
+      # joined to `"" <> sep <> "USD"`: `"USD"` on a concat venue, the QUOTE currency sent as
+      # though it were a product, and `"-USD"` with the separator on one that has one.
+      # `to_canonical/2` already returns a native symbol with an empty side as it came
+      # (`split_native/2` answers `:nomatch`), so the two directions agree again.
+      {"", _quote} ->
+        String.upcase(canonical)
+
       {base, ""} ->
         reverse_alias(aliases(mapping), base)
 

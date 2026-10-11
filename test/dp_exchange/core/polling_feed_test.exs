@@ -92,6 +92,51 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert {:error, {:invalid_option, :fetch_all, _two_arity}} =
                PollingFeed.start_link(sink: sink_to_self(), fetch_all: fn _a, _b -> :ok end)
     end
+
+    test "a duration that is not a usable integer is refused at start, naming the option" do
+      # `interval_ms: 0` re-polled the venue as fast as the fetch returned; a negative or
+      # non-integer value raised inside `init/1` naming `send_after/3`, not the option; and a
+      # `fetch_timeout_ms` of 0 timed every fetch out before it began.
+      Process.flag(:trap_exit, true)
+      base = [sink: sink_to_self(), fetch: &event/1, symbols: ["A"]]
+
+      for {key, bad} <- [
+            interval_ms: 0,
+            interval_ms: -5,
+            interval_ms: "30000",
+            interval_ms: 1.5,
+            start_delay_ms: -1,
+            start_delay_ms: "0",
+            fetch_timeout_ms: 0,
+            fetch_timeout_ms: :infinity
+          ] do
+        assert {:error, {:invalid_option, ^key, ^bad}} =
+                 PollingFeed.start_link(Keyword.put(base, key, bad))
+      end
+    end
+
+    test "a start delay of zero is still valid" do
+      pid = start_feed(fetch: fn s -> {:ok, event(s)} end, symbols: ["A"], start_delay_ms: 0)
+      assert Process.alive?(pid)
+    end
+  end
+
+  describe "a malformed bulk refusal list is a failure, not a crash of the feed" do
+    test "a refusal element that is not {symbol, reason} does not kill the feed" do
+      # The reduce matched `{symbol, reason}` in its fn head, so one malformed element raised
+      # `FunctionClauseError` in the feed and the restart lost the runtime symbol scope.
+      pid =
+        start_feed(
+          fetch_all: fn _symbols -> {:refused, ["DOGE-USD", {"X", :a, :b}]} end,
+          symbols: ["DOGE-USD"],
+          on_refusal: fn symbol, reason -> send(self(), {:refused, symbol, reason}) end
+        )
+
+      status = await_status(pid, &(&1.last_error != nil))
+
+      assert {:bad_fetch_result, {:refused, ["DOGE-USD", {"X", :a, :b}]}} = status.last_error
+      assert Process.alive?(pid)
+    end
   end
 
   describe "bulk mode (:fetch_all)" do

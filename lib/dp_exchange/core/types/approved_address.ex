@@ -48,9 +48,19 @@ defmodule DpExchange.Core.Types.ApprovedAddress do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:status` that is not `:pending`, `:active` or `:rejected`. This is the
+  gate on a withdrawal destination: `usable?/2` has a clause for each of the three and none
+  for a fourth, so a venue's own word (`"pending-time"`, `:expired`, a string) built here
+  and then crashed the caller's process the first time it asked whether it could withdraw.
+  A status this contract has no word for is the venue's news to map, not this type's to guess.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:status, [:pending, :active, :rejected])
+  end
 
   @doc """
   Whether this address can be withdrawn to as at `now`.
@@ -67,4 +77,10 @@ defmodule DpExchange.Core.Types.ApprovedAddress do
   def usable?(%__MODULE__{status: :pending, active_from: active_from}, now) do
     DateTime.compare(now, active_from) != :lt
   end
+
+  # A status outside the three (a struct literal can carry any; `new/1` refuses them) is
+  # unknown, not usable: `nil`, the same answer as a pending address with no stated time.
+  # There was no clause, so asking whether a withdrawal destination was usable raised
+  # `FunctionClauseError` in the caller's process.
+  def usable?(%__MODULE__{}, _now), do: nil
 end

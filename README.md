@@ -6,7 +6,7 @@
 > openly so it can be used and reported on, not because it is finished.
 >
 > - **The API may change without a major version.** While it is `0.x`, a minor bump
->   can break you. Pin three-part (`~> 0.1.0`), not `~> 0.1`.
+>   can break you. Pin three-part (`~> 0.3.0`), not `~> 0.3`.
 > - **Verification is uneven, and the gaps are on the expensive side.** The conformance
 >   suite passes against fakes the authors wrote, and against venues' live public
 >   endpoints. **Order placement and authenticated flows are thinly covered.** No test
@@ -90,7 +90,7 @@ the ones a consumer can live without, with the reason for each.
 ```elixir
 def deps do
   [
-    {:dp_exchange_core, "~> 0.1.0"}
+    {:dp_exchange_core, "~> 0.3.0"}
   ]
 end
 ```

@@ -5,7 +5,7 @@ defmodule DpExchange do
   > #### ⚠️ EXPERIMENTAL {: .warning}
   >
   > No package in this family has run in production. While they are `0.x` the API may
-  > change without a major version — pin all three segments (`~> 0.1.0`). Coverage is
+  > change without a major version — pin all three segments (`~> 0.3.0`). Coverage is
   > uneven *by design*: in-process fakes and live public endpoints are well covered,
   > order placement and authenticated flows are not.
   >
@@ -92,8 +92,11 @@ defmodule DpExchange do
   ## Fails closed
 
   Returns `{:error, :unknown_venue}` — never a guess, never a nearby substitute — when
-  the name does not correspond to a loaded venue module. Three distinct ways to be
+  the name does not correspond to a loaded venue module. Four distinct ways to be
   unknown, all one answer:
+
+    * the name is a path rather than a single segment. A `.` or `/` in it is refused
+      outright, so `"coinbase/rest"` can never resolve to a module nested under a venue;
 
     * the atom does not exist, because no such module was ever compiled. `Module.safe_concat/2`
       raises rather than minting an atom from caller input, so a hostile or mistyped name
@@ -117,11 +120,21 @@ defmodule DpExchange do
   """
   @spec venue(String.t() | atom()) :: {:ok, module()} | {:error, :unknown_venue}
   def venue(name) when is_binary(name) or is_atom(name) do
-    name
-    |> to_string()
-    |> Macro.camelize()
-    |> then(&Module.safe_concat(DpExchange, &1))
-    |> validate_venue()
+    text = to_string(name)
+
+    # **One segment, not a path.** `Macro.camelize/1` turns `/` into `.`, so
+    # `"schwab/capabilities"` resolved to `DpExchange.Schwab.Capabilities`, and any module
+    # under a venue's namespace that happens to export `capabilities/0` (a venue package's own
+    # declaration module is the likely one) answered as though it were the venue facade. A
+    # venue is `DpExchange.<Name>`, never `DpExchange.<Name>.<Anything>`.
+    if String.contains?(text, [".", "/"]) do
+      {:error, :unknown_venue}
+    else
+      text
+      |> Macro.camelize()
+      |> then(&Module.safe_concat(DpExchange, &1))
+      |> validate_venue()
+    end
   rescue
     ArgumentError -> {:error, :unknown_venue}
   end

@@ -151,7 +151,10 @@ defmodule DpExchange.Core.Fanout do
 
   ## Options
 
-    * `:max_queue_len` — the bound, defaulting to `default_max_queue_len/0`.
+    * `:max_queue_len` — the bound, defaulting to `default_max_queue_len/0` (also when
+      given as `nil`). Any other value that is not a positive integer raises
+      `ArgumentError`: a string or an `:infinity` compares as larger than every queue and
+      would switch back-pressure off without a word.
 
   A subscriber that has died, or a registered name that resolves to nothing, is skipped
   silently: that is not back-pressure, it is an absent consumer, and every venue in this
@@ -173,7 +176,14 @@ defmodule DpExchange.Core.Fanout do
     # The two answers differ because the costs do. At `init/1` a refusal is loud and costs a
     # restart, so `max_queue_len!/2` refuses. Here, per message, the safe direction is the
     # stated bound — an unbounded mailbox is the failure this module exists to prevent.
-    max = Config.opt(opts, :max_queue_len, default_max_queue_len())
+    #
+    # **And a value that is present but is not a positive integer is refused, not compared.**
+    # `queue_len >= "10000"` is false for every queue length (a number sorts below a binary,
+    # as it does below an atom), so a string or `:infinity` switched back-pressure off the
+    # same silent way `nil` did, while `0` or a negative made every subscriber look over its
+    # bound and dropped everything. A bound is a positive integer or it is a mistake, and
+    # this raises on the first message rather than running unbounded.
+    max = opts |> Config.opt(:max_queue_len, default_max_queue_len()) |> bound!()
 
     # Resolved and deduplicated first. One process registered both as a pid and by name was
     # two entries, so it got every message twice, and both iterations read the same old
@@ -185,6 +195,14 @@ defmodule DpExchange.Core.Fanout do
     |> Enum.reduce({0, MapSet.new(), []}, fn pid, acc ->
       deliver_one(pid, message, max, dropping, acc)
     end)
+  end
+
+  defp bound!(value) when is_integer(value) and value > 0, do: value
+
+  defp bound!(other) do
+    raise ArgumentError,
+          "Fanout.deliver/4 :max_queue_len must be a positive integer of messages, got " <>
+            "#{inspect(other)}"
   end
 
   @doc """

@@ -223,10 +223,12 @@ defmodule DpExchange.Core.PollingFeed do
     * `:fetch_all` - `t:fetch_all/0`, the whole symbol set per call. At least one of
       `:fetch` and `:fetch_all` is required; with neither the feed stops with `:no_fetcher`.
     * `:symbols` - the symbols to poll (default: `[]`; see `update_symbols/2`).
-    * `:interval_ms` - poll interval (default: `#{@default_interval_ms}`).
-    * `:start_delay_ms` - wait before the first sweep (default: `#{@default_start_delay_ms}`).
-    * `:fetch_timeout_ms` - a fetch still running after this is a failure (default: the
-      interval, clamped to `#{@min_fetch_timeout_ms}`..`#{@max_fetch_timeout_ms}`).
+    * `:interval_ms` - poll interval, a positive integer (default: `#{@default_interval_ms}`).
+    * `:start_delay_ms` - wait before the first sweep, a non-negative integer (default:
+      `#{@default_start_delay_ms}`).
+    * `:fetch_timeout_ms` - a fetch still running after this is a failure, a positive
+      integer (default: the interval, clamped to
+      `#{@min_fetch_timeout_ms}`..`#{@max_fetch_timeout_ms}`).
     * `:label` - names this feed in notices and logs (default: `"polling-feed"`).
     * `:provider` - what a `Core.Notice` from this feed names as its provider (default:
       `:label`).
@@ -234,6 +236,10 @@ defmodule DpExchange.Core.PollingFeed do
       no-op).
     * `:on_notice` - `t:notice_handler/0` (default: no-op).
     * `:name` - registered name (default: unregistered).
+
+  A duration that is not of the stated kind stops the feed at start with
+  `{:invalid_option, key, value}`, the way a missing `:sink` does. `interval_ms: 0` would
+  otherwise re-poll the venue as fast as the fetch returns.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -371,12 +377,20 @@ defmodule DpExchange.Core.PollingFeed do
       scheduled: MapSet.new()
     }
 
-    cond do
-      is_nil(state.fetch) and is_nil(state.fetch_all) ->
-        # Neither fetcher means a feed that would run forever delivering nothing,
-        # which is indistinguishable from a quiet venue. Refuse to start instead.
-        {:stop, :no_fetcher}
+    case validate_options(state) do
+      :ok -> {:ok, start_polling(state)}
+      {:error, reason} -> {:stop, reason}
+    end
+  end
 
+  # The first option that cannot work, in the order a reader would fix them, or `:ok`.
+  # Every check is a plain boolean over `state`, so none can raise, and the list is data
+  # rather than a `cond` so adding a check does not add a branch to `init/1`.
+  defp validate_options(state) do
+    [
+      # Neither fetcher means a feed that would run forever delivering nothing, which is
+      # indistinguishable from a quiet venue. Refuse to start instead.
+      {not (is_nil(state.fetch) and is_nil(state.fetch_all)), :no_fetcher},
       # **Checked here, at start, because the alternative was a crash loop.** `:sink` is
       # read with `Keyword.fetch!/2`, which proves only that the KEY is present — `sink: nil`
       # passes it. The feed then started cleanly and died with `{:badfun, nil}` on its first
@@ -385,19 +399,30 @@ defmodule DpExchange.Core.PollingFeed do
       # wrong. It is the shape this module's own `init/1` comment records for `:on_refusal`,
       # arriving through the one required function the `Config.opt/3` fix could not reach —
       # a required option has no default to fall back to.
-      not is_function(state.sink, 1) ->
-        {:stop, {:invalid_option, :sink, state.sink}}
-
-      not (is_nil(state.fetch) or is_function(state.fetch, 1)) ->
-        {:stop, {:invalid_option, :fetch, state.fetch}}
-
-      not (is_nil(state.fetch_all) or is_function(state.fetch_all, 1)) ->
-        {:stop, {:invalid_option, :fetch_all, state.fetch_all}}
-
-      true ->
-        {:ok, start_polling(state)}
-    end
+      {is_function(state.sink, 1), {:invalid_option, :sink, state.sink}},
+      {is_nil(state.fetch) or is_function(state.fetch, 1),
+       {:invalid_option, :fetch, state.fetch}},
+      {is_nil(state.fetch_all) or is_function(state.fetch_all, 1),
+       {:invalid_option, :fetch_all, state.fetch_all}},
+      # **The three durations are checked here, at start, for the same reason as `:sink`.**
+      # `interval_ms: 0` made `Process.send_after/3` fire at once, forever: a feed that
+      # re-polled the venue as fast as the fetch returned, which is the request-rate
+      # multiplier this module's moduledoc is built to prevent. A negative or non-integer
+      # value raised inside `init/1`, a restart loop whose message named `send_after/3`
+      # rather than the option. A `fetch_timeout_ms` of `0` timed every fetch out before it
+      # started, so the feed delivered nothing and reported it as a venue fault.
+      {is_integer(state.interval_ms) and state.interval_ms > 0,
+       {:invalid_option, :interval_ms, state.interval_ms}},
+      {is_integer(state.start_delay_ms) and state.start_delay_ms >= 0,
+       {:invalid_option, :start_delay_ms, state.start_delay_ms}},
+      {is_integer(state.fetch_timeout_ms) and state.fetch_timeout_ms > 0,
+       {:invalid_option, :fetch_timeout_ms, state.fetch_timeout_ms}}
+    ]
+    |> Enum.find_value(:ok, &first_invalid/1)
   end
+
+  defp first_invalid({true, _reason}), do: nil
+  defp first_invalid({false, reason}), do: {:error, reason}
 
   @impl true
   def handle_call(:coverage, _from, state) do
@@ -618,12 +643,7 @@ defmodule DpExchange.Core.PollingFeed do
         # See `t:fetch_all/0` — the batch analogue of `fetch`'s own `{:refused, reason}`.
         # Each named symbol is reported once, the same as the per-symbol path, rather than
         # silently retried forever as an ordinary `{:error, reason}` would be.
-        state =
-          Enum.reduce(refusals, state, fn {symbol, reason}, acc ->
-            report_refusal(acc, symbol, reason)
-          end)
-
-        record_failure(state, "bulk fetch", {:refused, refusals})
+        apply_refusals(state, refusals)
 
       {:error, reason} ->
         record_failure(state, "bulk fetch", reason)
@@ -680,6 +700,24 @@ defmodule DpExchange.Core.PollingFeed do
       # clause above: a failure, never a crash of the feed.
       other ->
         record_failure(state, symbol, {:bad_fetch_result, other})
+    end
+  end
+
+  # **A refusal list that is not `[{symbol, reason}]` is a failure, not a crash.** The reduce
+  # matched `{symbol, reason}` in its fn head, so one malformed element (a bare symbol, a
+  # three-tuple) raised `FunctionClauseError` in this process and the restart lost every
+  # runtime `update_symbols/2` scope: the same incident the catch-all clauses above close for
+  # an answer outside `t:fetch_all/0`, reached through a malformed element of a valid one.
+  defp apply_refusals(state, refusals) do
+    if Enum.all?(refusals, &match?({symbol, _reason} when is_binary(symbol), &1)) do
+      state =
+        Enum.reduce(refusals, state, fn {symbol, reason}, acc ->
+          report_refusal(acc, symbol, reason)
+        end)
+
+      record_failure(state, "bulk fetch", {:refused, refusals})
+    else
+      record_failure(state, "bulk fetch", {:bad_fetch_result, {:refused, refusals}})
     end
   end
 

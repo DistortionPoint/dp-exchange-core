@@ -90,6 +90,17 @@ defmodule DpExchange.Core.CanonicalPairTest do
       # symbol with a dangling separator.
       assert "BTC" = CanonicalPair.to_exchange(@dashed, "BTC-")
     end
+
+    test "a canonical with an empty base is not turned into the bare quote" do
+      # `"-USD"` split to `{"", "USD"}` and was joined to `"" <> sep <> "USD"` — `"USD"` on a
+      # concat venue, the quote currency sent as though it were a product. It is not a pair,
+      # so it comes back as it was given, which is what `to_canonical/2` does with the same
+      # shape.
+      assert "-USD" = CanonicalPair.to_exchange(@concat, "-USD")
+      assert "-USD" = CanonicalPair.to_exchange(@dashed, "-usd")
+      assert "-USD" = CanonicalPair.to_exchange(@aliased, "-USD")
+      assert "-USD" = CanonicalPair.to_canonical(@dashed, "-USD")
+    end
   end
 
   describe "quotes is sorted longest-first internally, regardless of caller order (C6)" do

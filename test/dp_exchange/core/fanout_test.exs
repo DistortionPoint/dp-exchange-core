@@ -119,6 +119,21 @@ defmodule DpExchange.Core.FanoutTest do
       assert MapSet.member?(dropping, subscriber)
       assert queue_len(subscriber) == Fanout.default_max_queue_len()
     end
+
+    test "a bound that is present but not a positive integer is refused, never compared" do
+      # `queue_len >= "10000"` is false for every queue (a number sorts below a binary), so a
+      # string bound switched back-pressure off exactly as `nil` did; `0` and negatives made
+      # every subscriber look over the bound and dropped everything.
+      subscriber = stalled_subscriber()
+
+      for bad <- ["10000", 0, -1, 1.5, :infinity] do
+        assert_raise ArgumentError, ~r/positive integer/, fn ->
+          Fanout.deliver([subscriber], :payload, MapSet.new(), max_queue_len: bad)
+        end
+      end
+
+      assert queue_len(subscriber) == 0
+    end
   end
 
   describe "transitions are reported once, not per dropped message" do

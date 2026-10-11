@@ -1,7 +1,7 @@
 # Using `dp_exchange_core`
 
 > **EXPERIMENTAL.** This package has not run in production. While it is `0.x` a minor
-> version may break you — pin all three segments (`~> 0.1.0`). Maturity is declared
+> version may break you — pin all three segments (`~> 0.3.0`). Maturity is declared
 > **per endpoint** through `capabilities/0`, not per package: read that, not this banner.
 
 `dp_exchange_core` is the contract for the DpExchange family. It talks to no exchange. It

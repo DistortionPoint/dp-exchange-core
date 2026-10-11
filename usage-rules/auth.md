@@ -135,6 +135,14 @@ Robinhood applies the same rule earlier still: a private key that is not a 32-by
 refused locally with `{:invalid_private_key, {:expected_32_bytes, n}}`, rather than
 producing a signature the venue rejects with nothing to explain it.
 
+`Core.HttpClient`'s generic schemes (`:bearer`, `:basic`, `:hmac_sha256`) follow the same
+rule: a credential that is missing, `nil` or an empty string raises `ArgumentError` naming
+the field, instead of being interpolated into `Authorization: Bearer ` and sent. And
+`HttpClient` logs a request's **endpoint**, never its URL: the query string, fragment and
+`user:pass@` userinfo are dropped from the debug line and the retry warning, as they already
+were from telemetry metadata, so a venue that authenticates in the URL does not write its
+credential into a log.
+
 ## What to hold, per venue
 
 ```elixir

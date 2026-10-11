@@ -491,6 +491,24 @@ defmodule DpExchange.Core.AdapterContract do
                    "compiler's missing-callback check is the cheapest of these assertions"
         end
 
+        # **Several groups below skip, or loop zero times, when `sample_pairs:` is empty.**
+        # 14, 20, 23 and 25 are guarded by `@sample_pairs != []` and report green having run
+        # nothing; 29 iterates `Enum.take(pairs, 1)` and passes on an empty list. Assertion 4
+        # already refuses an empty list for the round trip, but only for a venue that names a
+        # `symbol_format:`. A venue configured without pairs therefore passed the whole suite
+        # for having checked almost none of it, which is worse than a red run. Stated once,
+        # here, rather than in each group.
+        test "the suite is configured with a fake and sample pairs to drive it" do
+          assert @fake,
+                 "`fake:` is not set, so every fake-driven group has nothing to drive. " <>
+                   "Pass the venue's in-process fake."
+
+          assert @sample_pairs != [],
+                 "`sample_pairs:` is empty, so groups 14, 20, 23, 25 and 29 skip or loop " <>
+                   "zero times and report green having checked nothing. Name at least two " <>
+                   "pairs this venue lists."
+        end
+
         test "optional callbacks are implemented or absent, never half" do
           Code.ensure_loaded!(@venue)
 

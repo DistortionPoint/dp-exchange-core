@@ -11,7 +11,7 @@ Stated here rather than only per-release, because a reader arriving at a specifi
 version needs it as much as one reading the top.
 
 This package has not run in production. While it is `0.x` the API may change without a
-major version — pin three-part (`~> 0.1.0`). Coverage is uneven by design: fakes and
+major version — pin three-part (`~> 0.3.0`). Coverage is uneven by design: fakes and
 live public endpoints are well covered, order placement and authenticated flows are
 not.
 
@@ -20,6 +20,76 @@ which venue, what was run against it, and when. "Marked proven" with no evidence
 an acceptable changelog line.
 
 ## [Unreleased]
+
+### Changed
+
+Constructors and options that accepted a plausible wrong value now refuse it, found
+by reading `lib/` against the fail-closed rule. A caller that relied on any of
+these must now pass the value the type states.
+
+- **`Capabilities.new/1` checks the scalar fields' kind.** `supported_quotes` must be a list
+  of non-empty strings (`[:USD]` built the right pair strings and failed every
+  `in ["USD"]`), `max_candles_per_request` a positive integer or `nil` (`0`, `"300"` and
+  `300.0` were accepted), `measured_at` a `Date` or `nil`, and `measured_against` a non-empty
+  string or `nil`. A string date or an empty `measured_against` read as provenance and
+  carried none. All five venues declare these correctly.
+- **`Fill.new/1`, `Trade.new/1`, `Position.new/1`, `OrderLeg.new/1` refuse a value outside
+  the vocabulary their typespec states.** `side` must be `:buy | :sell` (`Trade` also `nil`)
+  or `:long | :short` for a `Position`; `Fill.liquidity` `:maker | :taker | nil`;
+  `OrderLeg.ratio` a positive integer and `position_effect` `:open | :close | nil`;
+  `Trade.broken` a boolean. `Position` built `:buy` was read by a consumer matching
+  `:long | :short` as no side or the wrong one. Venues build these as struct literals, so
+  none is affected. `Validate.one_of!/3` and `Validate.positive_integer!/2` are new and public.
+- **`ApprovedAddress.new/1` refuses a `status` other than `:pending | :active | :rejected`,**
+  and `ApprovedAddress.usable?/2` answers `nil` ("unknown, not usable") for a struct literal
+  carrying any other, where it raised `FunctionClauseError` in the caller's process.
+- **`PollingFeed` refuses an unusable duration at start.** `interval_ms` and
+  `fetch_timeout_ms` must be positive integers and `start_delay_ms` a non-negative one;
+  anything else stops the feed with `{:invalid_option, key, value}`. `interval_ms: 0`
+  re-polled the venue as fast as the fetch returned, and a negative or non-integer value
+  raised inside `init/1` naming `send_after/3` rather than the option.
+- **`Fanout.deliver/4` raises on a `:max_queue_len` that is present but not a positive
+  integer.** `queue_len >= "10000"` is false for every queue, so a string or `:infinity`
+  switched back-pressure off exactly as `nil` once did (`nil` still means the default).
+- **`HttpClient.build_auth_headers/5` raises `ArgumentError` for a missing, `nil` or empty
+  credential under `:bearer`, `:basic` and `:hmac_sha256`.** `"#{nil}"` is `""`, so an unset
+  config value built `Authorization: Bearer ` and the request went out looking signed.
+- **`DpExchange.venue/1` refuses a name containing `.` or `/`.** `Macro.camelize/1` turns `/`
+  into `.`, so `"schwab/capabilities"` resolved to any module nested under a venue that
+  exports `capabilities/0`.
+- **`CanonicalPair.to_exchange/2` returns a canonical symbol with no base (`"-USD"`)
+  uppercased and untouched,** where it returned the bare quote `"USD"` on a concat venue.
+- **`Core.AdapterContract` group 1 fails when `fake:` or `sample_pairs:` is missing.** Groups
+  14, 20, 23 and 25 skip on an empty `sample_pairs:` and 29 loops zero times, so a venue
+  configured without them passed the suite having checked almost none of it. All five venues
+  and the reference venue pass both.
+- **`CredentialRedactionCheck` recognises more secret field names:** `x_api_key`,
+  `signing_key`, `cookie`, `session_token`, `id_token`, `jwt`, `secret_key`,
+  `api_passphrase`, `api_token`, `auth_token`, `bearer_token`, `private_key_pem`. A struct
+  with `defstruct [:secret_key]` printed in cleartext and passed. `credentials` is left out
+  on purpose: it normally holds a struct that is itself redacted.
+
+### Fixed
+
+- **`HttpClient` wrote the full request URL to the log.** `request/5`'s debug line printed the
+  URL whole and the retry warning kept `user:pass@` and any `#fragment`, so a venue that
+  authenticates in the query string or the URL's userinfo wrote its credential to the log on
+  every request. Both now use `Telemetry.endpoint/1`, as the telemetry metadata already did.
+- **`HttpClient.get/3` undid `decode_body: false`.** The option (0.3.65) hands back the bytes
+  so a JSON number keeps its digits, and `get/3` then decoded them with native floats, losing
+  the digits one function later for the only caller that had asked otherwise. With
+  `decode_body: false` it now decodes with `floats: :decimals`, so a number is a `Decimal`.
+- **`PollingFeed` crashed on a malformed bulk refusal list.** A `{:refused, refusals}` with an
+  element that is not `{symbol, reason}` raised `FunctionClauseError` in the feed, and the
+  restart lost every runtime `update_symbols/2` scope. It is now a failed cycle,
+  `{:bad_fetch_result, {:refused, refusals}}`.
+- **`Notice.new/3` raised `Protocol.UndefinedError` for `details` keyed by a tuple or pid.**
+  Only an atom or a binary can name a credential, so only those are tested.
+- **`usage-rules/testing.md`'s conformance example had no `fake:`,** which the suite requires.
+- **The install snippet pinned `~> 0.1.0`.** That requirement resolves to `>= 0.1.0 and < 0.2.0`,
+  so the README's `{:dp_exchange_core, "~> 0.1.0"}` installed a release from before nearly
+  everything here. README, `usage-rules.md`, the `DpExchange` moduledoc and the status
+  section above now say `~> 0.3.0`.
 
 ## [0.3.65] - 2026-10-11
 

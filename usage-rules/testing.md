@@ -6,6 +6,7 @@
 defmodule DpExchange.YourVenue.ContractTest do
   use DpExchange.Core.AdapterContract,
     venue: DpExchange.YourVenue,
+    fake: DpExchange.YourVenue.Fake,
     symbol_format: DpExchange.YourVenue.SymbolFormat,
     sample_pairs: ~w(BTC-USD ETH-USD),
     credentials: %{api_key: "test", api_secret: "test"}
@@ -15,6 +16,12 @@ end
 Thirty assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**`fake:` and `sample_pairs:` are not optional in practice.** Every group that calls an
+active endpoint drives the fake, never the real venue, and several skip or loop zero times
+on an empty `sample_pairs:`. The suite now fails group 1 if either is missing, rather than
+reporting green for having checked almost none of it. Name at least two pairs the venue
+lists (group 26 needs two to tell "added" from "replaced").
 
 ## The four verification tiers, and only two ever run unattended
 

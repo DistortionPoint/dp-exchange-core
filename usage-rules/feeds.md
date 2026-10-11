@@ -327,7 +327,13 @@ through `:on_refusal` rather than retried forever as an ordinary `{:error, reaso
 be. If your bulk endpoint's response format cannot yet tell you which symbol in a batch
 was bad — verify that live before assuming it can — return `{:error, reason}` for the
 whole cycle instead; that fails closed (retried, never silently dropped) rather than
-guessing which symbol to blame.
+guessing which symbol to blame. A `refusals` list with an element that is not
+`{symbol, reason}` is recorded as a failed cycle (`{:bad_fetch_result, {:refused, _}}`), not
+a crash of the feed.
+
+`:interval_ms` and `:fetch_timeout_ms` must be positive integers and `:start_delay_ms` a
+non-negative one; anything else stops the feed at start with `{:invalid_option, key, value}`.
+An interval of `0` is refused because it would re-poll the venue as fast as the fetch returns.
 
 ## Reconnection is the package's problem, and the notice is yours
 

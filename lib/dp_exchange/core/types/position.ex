@@ -76,9 +76,17 @@ defmodule DpExchange.Core.Types.Position do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:side` that is not `:long` or `:short`. A position built `:buy` is
+  read by a consumer matching the two sides as no side at all, or as the wrong one, and
+  the contract's whole point is that the sign never decides direction twice.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.one_of!(:side, [:long, :short])
+  end
 
   @doc """
   Normalises a venue's signed quantity into `{side, positive_quantity}`.

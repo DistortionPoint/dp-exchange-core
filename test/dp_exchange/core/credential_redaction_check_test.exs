@@ -402,6 +402,41 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     end
   end
 
+  describe "run/2 — the secret field names it recognises" do
+    test "a secret under a compound name is caught, not skipped for want of a match" do
+      # The check compares field NAMES, so `defstruct [:secret_key]` printed in cleartext and
+      # passed. A struct with the same field redacted still passes.
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "session.ex",
+            code: """
+            defmodule LeakySession#{u} do
+              defstruct [:secret_key, :session_token, :jwt, :cookie, :public_id]
+            end
+
+            defmodule SafeSession#{u} do
+              @derive {Inspect, except: [:secret_key, :session_token, :jwt, :cookie]}
+              defstruct [:secret_key, :session_token, :jwt, :cookie, :public_id]
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      leaky = Module.concat([:"Elixir", "LeakySession#{u}"])
+      safe = Module.concat([:"Elixir", "SafeSession#{u}"])
+
+      found = for {^leaky, field} <- violation_fields(violations), do: field
+
+      assert Enum.sort(found) == Enum.sort([:secret_key, :session_token, :jwt, :cookie])
+
+      refute Enum.any?(violations, &(&1.module == safe))
+    end
+  end
+
   describe "format/1" do
     test "renders one line per violation naming the module, field and location" do
       violations = [%{module: Some.Credentials, field: :api_secret, file: "/a/credentials.ex"}]

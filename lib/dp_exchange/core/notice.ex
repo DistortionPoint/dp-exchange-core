@@ -314,12 +314,7 @@ defmodule DpExchange.Core.Notice do
     offending =
       details
       |> Map.keys()
-      |> Enum.filter(fn key ->
-        # `-` and `_` are one separator: `"api-key"` and `"X-Api-Key"` are header spellings
-        # of the same credential, and were let through.
-        normalised = key |> to_string() |> String.downcase() |> String.replace("-", "_")
-        normalised in @credential_key_strings
-      end)
+      |> Enum.filter(&credential_key?/1)
 
     # Top level only, deliberately. A nested map is often the venue's own decoded payload
     # (`dp_exchange_webull` puts its broker notice body there), and raising on a key inside
@@ -338,6 +333,21 @@ defmodule DpExchange.Core.Notice do
   defp reject_credentials!(other) do
     raise ArgumentError, "notice details must be a map, got #{inspect(other)}"
   end
+
+  # Only an atom or a binary can be a credential's NAME. This ran `to_string/1` on every key,
+  # and a map key is any term: a `{symbol, side}` tuple, a pid or a reference has no
+  # `String.Chars` implementation, so a notice whose details were keyed by one raised
+  # `Protocol.UndefinedError` out of `new/3` — in the venue's transport, over a key that was
+  # never a credential.
+  #
+  # `-` and `_` are one separator: `"api-key"` and `"X-Api-Key"` are header spellings of the
+  # same credential, and were let through.
+  defp credential_key?(key) when is_atom(key) or is_binary(key) do
+    normalised = key |> to_string() |> String.downcase() |> String.replace("-", "_")
+    normalised in @credential_key_strings
+  end
+
+  defp credential_key?(_not_a_name), do: false
 
   # `severity` is as closed a vocabulary as `kind` — "not a log level, a call to
   # action" — but had no runtime check at all before this fix. `kind` raising on a typo

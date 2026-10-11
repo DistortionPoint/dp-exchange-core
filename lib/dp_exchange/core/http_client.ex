@@ -52,7 +52,7 @@ defmodule DpExchange.Core.HttpClient do
   alias DpExchange.Core.{Config, DefaultRateLimiter, Telemetry}
 
   # Suppress dialyzer warnings for functions that dialyzer incorrectly analyzes
-  @dialyzer {:nowarn_function, [parse_response_body: 1, get: 3]}
+  @dialyzer {:nowarn_function, [parse_response_body: 2, get: 3]}
 
   @type http_method :: :get | :post | :put | :delete
   @type headers :: [{String.t(), String.t()}]
@@ -204,8 +204,14 @@ defmodule DpExchange.Core.HttpClient do
     retry_attempts = Config.opt(opts, :retry_attempts, 3)
     log_requests = Config.opt(opts, :log_requests, true)
 
+    # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
+    # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
+    # the log on every request. `Telemetry.endpoint/1` is the one place that decides what part
+    # of a URL is safe to emit, and the telemetry metadata and the retry warning already use it.
     if log_requests do
-      Logger.debug("HTTP Request: #{method |> to_string() |> String.upcase()} #{url}")
+      Logger.debug(
+        "HTTP Request: #{method |> to_string() |> String.upcase()} #{Telemetry.endpoint(url)}"
+      )
     end
 
     do_request_with_rate_limiting(method, url, headers, body, opts, retry_attempts)
@@ -222,7 +228,8 @@ defmodule DpExchange.Core.HttpClient do
   - `opts`: Additional options
 
   ## Returns
-  - `{:ok, parsed_json}` on success
+  - `{:ok, parsed_json}` on success. With `decode_body: false` the bytes are decoded here
+    with `Jason`'s `floats: :decimals`, so a JSON number is a `Decimal` and keeps its digits.
   - `{:error, reason}` on failure
   """
   @spec get(String.t(), keyword() | map(), rate_limited_request_options()) ::
@@ -237,7 +244,7 @@ defmodule DpExchange.Core.HttpClient do
     # not correct on the wire. Found by a venue package's tier-2 tests.
     case request(:get, full_url, Config.opt(opts, :headers, []), nil, opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
-        parse_response_body(body)
+        parse_response_body(body, Config.opt(opts, :decode_body, true))
 
       {:ok, %{status: status, body: body}} ->
         wrap_exchange_error(opts, "HTTP #{status}: #{inspect(body)}")
@@ -247,18 +254,25 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
-  defp parse_response_body(body) when is_map(body) or is_list(body) do
+  defp parse_response_body(body, _decode_body) when is_map(body) or is_list(body) do
     {:ok, body}
   end
 
-  defp parse_response_body(body) when is_binary(body) do
-    case Jason.decode(body) do
+  # **`decode_body: false` is honoured here too.** It exists so a JSON number keeps its digits
+  # (`request/5`'s `:decode_body`), and `get/3` then decoded the bytes it was handed with
+  # `Jason.decode/1`, whose floats are native: the loss the option was passed to avoid
+  # happened one function later, silently, for the one caller that had asked for it not to.
+  # A number in that body is now a `Decimal`.
+  defp parse_response_body(body, decode_body) when is_binary(body) do
+    floats = if decode_body == false, do: :decimals, else: :native
+
+    case Jason.decode(body, floats: floats) do
       {:ok, json} -> {:ok, json}
       {:error, _last} -> {:error, "Invalid JSON response"}
     end
   end
 
-  defp parse_response_body(_body) do
+  defp parse_response_body(_body, _decode_body) do
     {:error, "Unexpected response format"}
   end
 
@@ -556,7 +570,9 @@ defmodule DpExchange.Core.HttpClient do
           attempts_made = total_attempts - attempts_left + 1
           backoff_delay = retry_delay * attempts_made
           provider = Config.opt(opts, :provider, "unknown")
-          short_url = url |> String.split("?") |> List.first() |> String.slice(0, 80)
+          # Through `Telemetry.endpoint/1`, not a split on "?": that kept `user:pass@` and a
+          # `#fragment`, so a credential in the URL's userinfo reached the warning.
+          short_url = url |> Telemetry.endpoint() |> String.slice(0, 80)
 
           Logger.warning(
             "[HttpClient] retry provider=#{provider} #{method} #{short_url} " <>
@@ -807,23 +823,42 @@ defmodule DpExchange.Core.HttpClient do
     message = timestamp <> (method |> to_string() |> String.upcase()) <> path <> (body || "")
 
     signature =
-      :crypto.mac(:hmac, :sha256, credentials.api_secret, message)
+      :crypto.mac(:hmac, :sha256, credential!(credentials, :api_secret), message)
       |> Base.encode16(case: :lower)
 
     [
-      {"CB-ACCESS-KEY", credentials.api_key},
+      {"CB-ACCESS-KEY", credential!(credentials, :api_key)},
       {"CB-ACCESS-SIGN", signature},
       {"CB-ACCESS-TIMESTAMP", timestamp}
     ]
   end
 
   defp build_basic_auth_headers(credentials) do
-    auth_string = Base.encode64("#{credentials.api_key}:#{credentials.api_secret}")
-    [{"Authorization", "Basic #{auth_string}"}]
+    key = credential!(credentials, :api_key)
+    secret = credential!(credentials, :api_secret)
+    [{"Authorization", "Basic #{Base.encode64("#{key}:#{secret}")}"}]
   end
 
   defp build_bearer_headers(credentials) do
-    [{"Authorization", "Bearer #{credentials.api_key}"}]
+    [{"Authorization", "Bearer #{credential!(credentials, :api_key)}"}]
+  end
+
+  # **A credential that is not a non-empty string is refused, never interpolated.** `"#{nil}"`
+  # is `""`, so `:bearer` with a `nil` `api_key` (an unset config value, which is the usual
+  # way to get one) built `Authorization: Bearer ` and `:basic` built `Basic Og==`, and the
+  # request went out looking authenticated and failed at the venue as a 401 that reads as a
+  # rejected key. Nothing named the credential that was never there. The message names the
+  # field and never the value.
+  defp credential!(credentials, field) do
+    case Map.get(credentials, field) do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _absent ->
+        raise ArgumentError,
+              "credentials #{inspect(field)} is missing, nil or empty — refusing to build " <>
+                "an authentication header from nothing"
+    end
   end
 
   # Rate limiting helper functions

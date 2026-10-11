@@ -463,6 +463,10 @@ defmodule DpExchange.Core.Capabilities do
   declaration that is wrong is worse than one that is missing, because a consumer will act
   on it.
 
+  The scalar fields are checked for kind as well as for vocabulary: `supported_quotes` is a
+  list of non-empty strings, `max_candles_per_request` a positive integer or `nil`,
+  `measured_at` a `Date` or `nil`, and `measured_against` a non-empty string or `nil`.
+
   ## Examples
 
       iex> caps = DpExchange.Core.Capabilities.new(
@@ -492,6 +496,7 @@ defmodule DpExchange.Core.Capabilities do
     validate_orders!(declaration)
     validate_catalog!(declaration)
     validate_staking!(declaration)
+    validate_scalars!(declaration)
 
     declaration
   end
@@ -912,6 +917,71 @@ defmodule DpExchange.Core.Capabilities do
     raise ArgumentError,
           "max_leverage #{inspect(leverage)} is neither a Decimal nor :per_account — a " <>
             "leverage a caller must parse by guessing its type is a leverage it will get wrong"
+  end
+
+  # **The scalar fields a consumer reads without a second look.** Each of these used to be
+  # accepted as anything, and each is read by arithmetic or string-building that does not
+  # care what it was handed:
+  #
+  #   * `supported_quotes` of atoms (`[:USD]`) passed, and `"BTC-#{quote}"` built the right
+  #     string for them, so the declaration looked fine until a consumer compared it with
+  #     `in ["USD"]`, which is false for every entry.
+  #   * `max_candles_per_request: 0` made a consumer's paging loop divide by it or request
+  #     nothing; `"300"` and `300.0` were read as a page size by whoever got there first.
+  #   * `measured_at` and `measured_against` are the only record of whether a number above
+  #     was measured. A string date or an empty `measured_against` is a label that reads as
+  #     provenance and carries none, which CLAUDE.md names as worse than an absent one.
+  #
+  # Read through `Map.from_struct/1`: the struct's `@type` says these fields are already the
+  # right kind, which is exactly the claim being checked, and dialyzer otherwise trusts it.
+  defp validate_scalars!(declaration) do
+    fields = Map.from_struct(declaration)
+
+    validate_quotes!(fields.supported_quotes)
+    validate_page_size!(fields.max_candles_per_request)
+    validate_provenance!(fields.measured_at, fields.measured_against)
+  end
+
+  defp validate_quotes!(quotes) do
+    if is_list(quotes) and Enum.all?(quotes, &(is_binary(&1) and &1 != "")) do
+      :ok
+    else
+      raise ArgumentError,
+            "supported_quotes must be a list of non-empty strings such as \"USD\", got " <>
+              inspect(quotes)
+    end
+  end
+
+  defp validate_page_size!(nil), do: :ok
+  defp validate_page_size!(size) when is_integer(size) and size > 0, do: :ok
+
+  defp validate_page_size!(size) do
+    raise ArgumentError,
+          "max_candles_per_request must be a positive integer or nil (nil says the venue " <>
+            "states no page size), got #{inspect(size)}"
+  end
+
+  defp validate_provenance!(measured_at, measured_against) do
+    validate_measured_at!(measured_at)
+    validate_measured_against!(measured_against)
+  end
+
+  defp validate_measured_at!(nil), do: :ok
+  defp validate_measured_at!(%Date{}), do: :ok
+
+  defp validate_measured_at!(other) do
+    raise ArgumentError,
+          "measured_at must be a Date or nil, got #{inspect(other)} — nil says the " <>
+            "declaration was not measured; a string says nothing a consumer can compare"
+  end
+
+  defp validate_measured_against!(nil), do: :ok
+  defp validate_measured_against!(what) when is_binary(what) and what != "", do: :ok
+
+  defp validate_measured_against!(other) do
+    raise ArgumentError,
+          "measured_against must be a non-empty string naming what was measured, or nil, " <>
+            "got #{inspect(other)}"
   end
 
   defp check_subset!(values, allowed, name) when is_list(values) do

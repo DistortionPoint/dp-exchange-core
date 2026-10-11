@@ -246,6 +246,26 @@ defmodule DpExchange.Core.Types.ValidateTest do
         Fill.new(Keyword.put(@valid, :price, nil))
       end
     end
+
+    test "rejects a side or liquidity outside the vocabulary the type states" do
+      # `:long` on a fill reads as no side to a consumer matching `:buy | :sell`, and
+      # `"maker"` matches neither `:maker` nor `:taker`. Both built before.
+      for bad <- [:long, "buy", :Buy, nil] do
+        assert_raise ArgumentError, ~r/side|nil/, fn ->
+          Fill.new(Keyword.put(@valid, :side, bad))
+        end
+      end
+
+      for bad <- ["maker", :both] do
+        assert_raise ArgumentError, ~r/liquidity/, fn ->
+          Fill.new(Keyword.put(@valid, :liquidity, bad))
+        end
+      end
+
+      for ok <- [:maker, :taker, nil] do
+        assert %Fill{liquidity: ^ok} = Fill.new(Keyword.put(@valid, :liquidity, ok))
+      end
+    end
   end
 
   describe "FinancialStatement.new/1" do
@@ -436,6 +456,29 @@ defmodule DpExchange.Core.Types.ValidateTest do
         OrderLeg.new(Keyword.put(@valid, :ratio, nil))
       end
     end
+
+    test "rejects a ratio that is not a positive integer" do
+      # A ratio of 0 is a leg that trades nothing; 1.0 and a Decimal are counts a venue would
+      # round. Each built before, and the spread still validated as a spread.
+      for bad <- [0, -1, 1.0, Decimal.new(1), "1"] do
+        assert_raise ArgumentError, ~r/ratio.*positive integer/, fn ->
+          OrderLeg.new(Keyword.put(@valid, :ratio, bad))
+        end
+      end
+    end
+
+    test "rejects a side or position effect outside the vocabulary the type states" do
+      assert_raise ArgumentError, ~r/side/, fn ->
+        OrderLeg.new(Keyword.put(@valid, :side, :long))
+      end
+
+      assert_raise ArgumentError, ~r/position_effect/, fn ->
+        OrderLeg.new(Keyword.put(@valid, :position_effect, :flatten))
+      end
+
+      assert %OrderLeg{position_effect: :close} =
+               OrderLeg.new(Keyword.put(@valid, :position_effect, :close))
+    end
   end
 
   describe "Portfolio.new/1" do
@@ -463,6 +506,18 @@ defmodule DpExchange.Core.Types.ValidateTest do
       assert_raise ArgumentError, ~r/side/, fn ->
         Position.new(Keyword.put(@valid, :side, nil))
       end
+    end
+
+    test "rejects a side that is not :long or :short" do
+      # `:buy` is an order's side, not a position's. It built, and a consumer matching
+      # `:long | :short` read it as no side or as the wrong one.
+      for bad <- [:buy, :sell, "long", :Long] do
+        assert_raise ArgumentError, ~r/side/, fn ->
+          Position.new(Keyword.put(@valid, :side, bad))
+        end
+      end
+
+      assert %Position{side: :short} = Position.new(Keyword.put(@valid, :side, :short))
     end
   end
 
@@ -602,6 +657,20 @@ defmodule DpExchange.Core.Types.ValidateTest do
       # `"B"`/`"S"` and answers `nil` otherwise — "a real trade with an unknown aggressor,
       # rather than a guess that would put volume on the wrong side of a delta".
       assert %Trade{side: nil} = Trade.new(Keyword.put(@valid, :side, nil))
+    end
+
+    test "rejects a side outside :buy | :sell | nil, and a broken that is not a boolean" do
+      # `"buy"` and `:Buy` match neither branch of a consumer's `case`, so the volume lands on
+      # no side and nothing says why.
+      for bad <- ["buy", :Buy, :long] do
+        assert_raise ArgumentError, ~r/side/, fn ->
+          Trade.new(Keyword.put(@valid, :side, bad))
+        end
+      end
+
+      assert_raise ArgumentError, ~r/broken/, fn ->
+        Trade.new(Keyword.put(@valid, :broken, "yes"))
+      end
     end
 
     test "still rejects the fields no venue has an honest nil for" do

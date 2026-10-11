@@ -35,6 +35,12 @@ defmodule DpExchange.Core.Types.Validate do
   these types can carry, and a `NaiveDateTime`, because every time in this family is a
   `DateTime` and a time with no zone cannot be placed.
 
+  **Closed vocabularies are checked per type, not here.** `new!/3` knows nothing about which
+  field is a `:buy | :sell`. A type whose typespec states one pipes its result through
+  `one_of!/3` (and `positive_integer!/2` for a count), so `Fill`, `Trade`, `Position` and
+  `OrderLeg` refuse a side outside what they state. The `Decimal` fields are not type-checked:
+  a venue builds these with integers in its own tests and the typespec is the contract.
+
   ## Struct literals still work
 
   Nothing here removes `defstruct` or `@enforce_keys` from any `Types.*` module, and
@@ -69,6 +75,50 @@ defmodule DpExchange.Core.Types.Validate do
               "#{inspect(module)}.new/1: required field #{inspect(field)} is nil or absent — " <>
                 "a nil here is what a decode bug on a renamed venue field produces, and this " <>
                 "constructor fails closed rather than build a struct the typespec says cannot occur"
+    end
+  end
+
+  @doc """
+  Returns `built` if its `field` holds one of `allowed`, and raises `ArgumentError` naming
+  the field and the value otherwise.
+
+  For a closed vocabulary a type's own typespec states — `side: :buy | :sell`,
+  `liquidity: :maker | :taker | nil`. `new!/3` refuses a `nil` and a NaN; it cannot refuse
+  `side: :long` on a `Fill`, `side: "buy"` on a `Trade`, or `:buy` on a `Position`, and each
+  of those is a plausible value with the wrong meaning: a position built `:buy` is read by
+  a consumer matching `:long | :short` as no side at all, or as the wrong one. Include `nil`
+  in `allowed` only where the type's typespec does.
+  """
+  @spec one_of!(struct(), atom(), [term()]) :: struct()
+  def one_of!(%module{} = built, field, allowed) when is_atom(field) and is_list(allowed) do
+    value = Map.fetch!(built, field)
+
+    if value in allowed do
+      built
+    else
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — must " <>
+              "be one of #{inspect(allowed)}"
+    end
+  end
+
+  @doc """
+  Returns `built` if its `field` holds a positive integer, and raises `ArgumentError`
+  naming the field and the value otherwise.
+
+  For a count or a ratio whose typespec is `pos_integer()`. A `Decimal` `1`, a float `1.0`
+  and a `0` all read as "one leg" or "no legs" to whoever gets there first.
+  """
+  @spec positive_integer!(struct(), atom()) :: struct()
+  def positive_integer!(%module{} = built, field) when is_atom(field) do
+    case Map.fetch!(built, field) do
+      value when is_integer(value) and value > 0 ->
+        built
+
+      value ->
+        raise ArgumentError,
+              "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — " <>
+                "must be a positive integer"
     end
   end
 

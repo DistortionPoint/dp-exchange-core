@@ -37,6 +37,27 @@ defmodule DpExchange.Core.Types.MoneyMovementTest do
       # immediately. Reading an unstated activation as "usable now" removes the protection.
       assert ApprovedAddress.usable?(approved(:pending), ~U[2026-08-31 12:00:00Z]) == nil
     end
+
+    test "a status the contract has no word for is nil, not a crash in the caller" do
+      # No clause matched, so `usable?/2` raised `FunctionClauseError` for a venue's own word
+      # such as "pending-time" built as a struct literal.
+      for status <- [:expired, "pending-time", nil] do
+        assert ApprovedAddress.usable?(approved(status), ~U[2026-08-31 12:00:00Z]) == nil
+      end
+    end
+
+    test "new/1 refuses a status outside :pending | :active | :rejected" do
+      attrs = [address: "0xabc", network: "ethereum", provider: :reference]
+
+      for bad <- [:expired, "active", :pending_time] do
+        assert_raise ArgumentError, ~r/status/, fn ->
+          ApprovedAddress.new([status: bad] ++ attrs)
+        end
+      end
+
+      assert %ApprovedAddress{status: :rejected} =
+               ApprovedAddress.new([status: :rejected] ++ attrs)
+    end
   end
 
   describe "DepositAddress" do

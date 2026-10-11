@@ -49,7 +49,18 @@ defmodule DpExchange.Core.Types.OrderLeg do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:ratio` that is not a positive integer (a `0` leg, a fractional one, or
+  a `Decimal` that a venue would round), a `:side` that is not `:buy` or `:sell`, and a
+  `:position_effect` that is not `:open`, `:close` or `nil`. A spread with one leg
+  mis-sided or at ratio `0` is a different trade that still validates as a spread.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.positive_integer!(:ratio)
+    |> Validate.one_of!(:side, [:buy, :sell])
+    |> Validate.one_of!(:position_effect, [:open, :close, nil])
+  end
 end

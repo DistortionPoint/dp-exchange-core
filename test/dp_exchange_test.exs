@@ -12,6 +12,14 @@ defmodule DpExchange.TestVenue do
   def capabilities, do: %{}
 end
 
+# Under a venue's namespace and exporting `capabilities/0`, the way a venue package's own
+# declaration module does. It is not the facade, and a path into it must not resolve.
+defmodule DpExchange.TestVenue.Nested do
+  @moduledoc false
+  @spec capabilities() :: map()
+  def capabilities, do: %{}
+end
+
 # Under the namespace, loadable, and deliberately NOT a venue. This is the module that
 # would wrongly resolve if `venue/1` checked only that the name existed.
 defmodule DpExchange.NotAVenue do
@@ -69,6 +77,15 @@ defmodule DpExchangeTest do
 
     test "the Core namespace itself does not resolve as a venue" do
       assert {:error, :unknown_venue} = DpExchange.venue("core")
+    end
+
+    test "a path into a venue's namespace does not resolve as a venue" do
+      # `Macro.camelize/1` turns "/" into ".", so "test_venue/nested" named
+      # `DpExchange.TestVenue.Nested`. Anything under a venue that exports `capabilities/0`
+      # would have answered as the facade.
+      assert {:error, :unknown_venue} = DpExchange.venue("test_venue/nested")
+      assert {:error, :unknown_venue} = DpExchange.venue("TestVenue.Nested")
+      assert Code.ensure_loaded?(DpExchange.TestVenue.Nested)
     end
 
     test "an unrelated existing module does not resolve" do

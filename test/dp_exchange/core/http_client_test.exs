@@ -325,6 +325,57 @@ defmodule DpExchange.Core.HttpClientTest do
         HttpClient.build_auth_headers(:get, "/x", nil, @credentials, :no_such_scheme)
       end
     end
+
+    test "a missing, nil or empty credential is refused, not interpolated as an empty string" do
+      # `"#{nil}"` is "", so `:bearer` built `Authorization: Bearer ` and `:basic` built
+      # `Basic Og==` from an unset config value, and the request went out looking signed.
+      for scheme <- [:bearer, :basic, :hmac_sha256],
+          bad <- [%{api_key: nil, api_secret: "s"}, %{api_key: "", api_secret: "s"}, %{}] do
+        assert_raise ArgumentError, ~r/missing, nil or empty/, fn ->
+          HttpClient.build_auth_headers(:get, "/x", nil, bad, scheme)
+        end
+      end
+
+      assert_raise ArgumentError, ~r/:api_secret/, fn ->
+        HttpClient.build_auth_headers(:get, "/x", nil, %{api_key: "k"}, :basic)
+      end
+    end
+
+    test "the refusal names the field and never carries a value" do
+      error =
+        assert_raise ArgumentError, fn ->
+          HttpClient.build_auth_headers(:get, "/x", nil, %{api_key: "k", api_secret: nil}, :basic)
+        end
+
+      refute error.message =~ ~s("k")
+    end
+  end
+
+  describe "the request log never carries a credential in the URL" do
+    test "the debug line and the retry warning drop the query, the fragment and userinfo" do
+      use_stub()
+      plug = fn conn -> Req.Test.json(%{conn | status: 503}, %{}) end
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          HttpClient.request(
+            :get,
+            "http://user:hunter2@venue.test/x?api_key=SECRET-IN-QUERY#frag",
+            [],
+            nil,
+            provider: "v",
+            plug: plug,
+            retry_attempts: 2,
+            retry_delay: 1
+          )
+        end)
+
+      assert log =~ "HTTP Request: GET http://venue.test/x"
+      assert log =~ "[HttpClient] retry"
+      refute log =~ "SECRET-IN-QUERY"
+      refute log =~ "hunter2"
+      refute log =~ "user:"
+    end
   end
 
   describe "parse_rate_limit_headers/1 — standard shape only" do
@@ -520,6 +571,17 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert {:ok, %{"amount" => exact}} = Jason.decode(raw, floats: :decimals)
       assert Decimal.equal?(exact, Decimal.new("1234.567890123456789"))
+
+      # `get/3` used to decode those bytes with native floats, undoing the option one
+      # function later for the only caller that asked for it not to be undone.
+      assert {:ok, %{"amount" => via_get}} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: plug,
+                 decode_body: false,
+                 retry_attempts: 0
+               )
+
+      assert Decimal.equal?(via_get, Decimal.new("1234.567890123456789"))
     end
 
     test "4xx is a client error and is not retried" do
