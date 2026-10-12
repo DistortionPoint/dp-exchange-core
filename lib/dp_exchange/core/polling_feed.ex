@@ -300,6 +300,19 @@ defmodule DpExchange.Core.PollingFeed do
 
   @impl true
   def init(opts) do
+    # **Every fetch task is LINKED to this process (`Task.async/1`), and a linked process that
+    # dies abnormally takes an untrapping owner with it.** `safely/1` converts a raise, exit
+    # or throw INSIDE the fetch, but not a task killed from outside: a heap limit, a process
+    # the fetch itself linked to crashing, an operator's `Process.exit/2`. Any of those sent
+    # the exit signal here, the feed died, and the restart came back from its static start
+    # opts and lost every scope set by `update_symbols/2`: the incident this module's
+    # moduledoc records for a raising callback, arriving through the link instead of a raise.
+    # Trapping turns the signal into an `{:EXIT, _, _}` message (ignored by the catch-all
+    # `handle_info/2`) and leaves the monitor's `:DOWN` to record the fetch as failed, which
+    # is what the `:DOWN` clause below was always documented to do and could not reach.
+    # Core's own `LinkSafetyCheck` flags this exact shape in a venue's process.
+    Process.flag(:trap_exit, true)
+
     # Bound first: the fetch timeout's own default is derived from the interval.
     interval_ms = Config.opt(opts, :interval_ms, @default_interval_ms)
 

@@ -21,6 +21,13 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`PollingFeed`: a fetch task killed from outside took the feed down with it.** Each fetch
+  runs in a task linked to the feed, and the feed did not trap exits, so a task killed by a
+  heap limit, a crashing process it had linked to, or `Process.exit/2` killed the feed. The
+  supervisor restarted it from its start options, and every scope set by `update_symbols/2`
+  was lost. The feed now traps exits: the fetch is recorded as failed and the feed and its
+  scope survive. A parent's or supervisor's shutdown is still honoured.
+
 ## [0.3.86] - 2026-10-12
 
 - Docs: docs build is warning-free (18 references fixed).

@@ -1556,4 +1556,45 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert metadata.provider == provider
     end
   end
+
+  describe "found 2026-10-12 (long-running stability)" do
+    test "a fetch task killed from outside does not take the feed, or its runtime scope, down" do
+      # The task is linked to the feed. `safely/1` only converts a raise, exit or throw raised
+      # INSIDE the fetch, so a task killed from outside (a heap limit, a process it linked to
+      # crashing) sent its exit signal to a feed that did not trap exits. The feed died, its
+      # supervisor restarted it from the static start opts, and the scope set by
+      # `update_symbols/2` was gone.
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ["A"],
+          interval_ms: 60_000,
+          fetch: fn
+            "A" ->
+              send(test, {:blocked, self()})
+
+              receive do
+                :never -> :ok
+              end
+
+            other ->
+              {:error, {:no_data, other}}
+          end
+        )
+
+      assert_receive {:blocked, task}, 5_000
+
+      PollingFeed.update_symbols(feed, ["A", "B"])
+      assert PollingFeed.status(feed).symbols == 2
+
+      Process.exit(task, :kill)
+
+      # Answered by the SAME pid with the runtime scope intact: a restart would have reset it
+      # to the one start symbol, and a call to the dead pid would exit instead of answering.
+      status = await_status(feed, &(&1.failures_since_ok >= 1))
+      assert status.symbols == 2
+      assert Process.alive?(feed)
+    end
+  end
 end
