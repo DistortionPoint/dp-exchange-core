@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.79] - 2026-10-12
+
 ### Added
 
 - **The family conventions are part of the contract, and four new conformance assertions hold
