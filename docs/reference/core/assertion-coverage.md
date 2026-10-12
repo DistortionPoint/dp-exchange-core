@@ -791,3 +791,27 @@ and both fakes were fixed to take `depth` levels a side before the venues moved 
 **Also changed:** the reference venue no longer sends `:link_up` when `subscribe_notices/1`
 registers a subscriber (family convention 9: a registration is not an event); the teeth test
 that asserted it now asserts that no notice arrives and that a bad subscriber is refused.
+
+## Fourth axis, 2026-10-12 — can the assertion be shown to fail?
+
+The first three axes asked whether an assertion exists, whether it runs on every venue, and
+whether its fixture is deep enough to fail. This one asks whether anything proves the
+*decision* can reject. Groups 4, 7, 12, 15 to 17, 20 to 22 and 31 to 39, and the required-callback
+half of 1, already had a public decision function or a broken fixture with a teeth test. Groups
+1 (optional callbacks), 3, 5, 8 (the
+declaration checks), 11 (the process walk), 14, 23, 24, 25, 26, 27, 28, 29 and 30 made their
+verdict inline in a quoted `test` body, where only a consuming package could run it. Each is now
+a public function in `Core.AdapterContract` (`half_implemented_optionals/1`,
+`provider_name_fault/1`, `runtime_id_fault/2`, `asset_classes_fault/1`, `answer_type_fault/2`,
+`unrecorded_absences/2`, `streamed_but_absent/2`, `unknown_stream_kinds/1`, `carries_process?/1`,
+`time_fault/2`, `balance_fault/1`, `book_ordering_fault/2`, `subscription_set_fault/3`,
+`nil_recipient_fault/4`, `streaming_call_fault/1`, `lower_case_delivery_fault/4`,
+`volume_window_fault/1`), and `contract_teeth_decisions_test.exs` hands each one a value wrong in
+one specific way (a fake whose `subscribe/2` replaces, an `unsubscribe/2` that clears, a nil
+recipient that raises, exits or goes quiet, an epoch integer in `venue_time`, a balance with a
+blank currency, a book one level deep, ...). Groups 13 (process-scoped isolation) and 2
+(a validated `%Capabilities{}`) are held by `Core.Config`'s and `Core.Capabilities`' own tests,
+which are the code those groups exercise.
+
+Two tightenings came with it: a `Balance.currency` of only whitespace and a `Balance.provider`
+of `""` are now faults.

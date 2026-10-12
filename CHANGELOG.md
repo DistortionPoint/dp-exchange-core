@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed
+
+- **Conformance decisions that lived only inside `test` bodies are public functions, and each
+  is shown to fail.** Assertions 1, 3, 5, 8, 11, 14, 23, 24, 25, 26, 27, 28, 29 and 30 made
+  their verdict inline in the quoted suite, so nothing could hand them a value that was wrong
+  in one specific way. They now call `AdapterContract.half_implemented_optionals/1`,
+  `provider_name_fault/1`, `runtime_id_fault/2`, `asset_classes_fault/1`,
+  `answer_type_fault/2`, `unrecorded_absences/2`, `streamed_but_absent/2`,
+  `unknown_stream_kinds/1`, `carries_process?/1`, `time_fault/2`, `balance_fault/1`,
+  `book_ordering_fault/2`, `subscription_set_fault/3`, `nil_recipient_fault/4`,
+  `streaming_call_fault/1`, `lower_case_delivery_fault/4` and `volume_window_fault/1`, and
+  `contract_teeth_decisions_test.exs` hands each one the specific wrongness it exists to
+  catch. The checks are the same ones, with two tightenings: a `Balance.currency` of only
+  whitespace is refused (assertion 24), and a `Balance.provider` of `""` is refused as well
+  as `nil`. The assertion 11 test whose name claimed the facade takes no functions (it asserts
+  `child_spec/1` is exported) is renamed for what it asserts.
+- **The reference venue obeys the conventions its own suite checks.** `get_historical_prices/4`
+  returned a bar at the quote's time whatever the width, so a `"1d"` request answered a bar
+  opening at 12:00; the bar now opens on the width's boundary (assertion 37's grid).
+  `get_order_book/2` raised on a `:depth` that was not a number and clamped one above its two
+  levels; it now answers `{:error, {:invalid_option, :depth, value}}` for anything but 1 or 2
+  (`Core.Venue`, MD5).
+
+### Fixed
+
+- **Timing-dependent tests in `PollingFeed`, `HttpClient`, `DefaultRateLimiter` and
+  `Telemetry`.** A removed-and-re-added symbol's timer test compared fetch counts over
+  `Process.sleep(500)` and now compares them over twelve fetches of the control symbol; the
+  "once, not once per cycle" refusal test waits for four fetch cycles instead of a 300 ms
+  quiet window; the queued-symbols test waits for the queue to be full instead of sleeping
+  300 ms; the dark-feed test polls `status/1` instead of sleeping 250 ms; in-flight-result
+  tests read the mailbox after the feed answered a call instead of after a 100 ms window; the
+  boot-delay test uses a one-second delay against a 150 ms window; `penalize/3` tests hold for
+  a minute, not two seconds, so a loaded machine cannot move the remaining wait out of range;
+  the weight-N and trickle-response tests no longer assume a refill or a response takes less
+  than a second; the huge-negative-reset test counts reductions instead of milliseconds; and
+  the telemetry tests wait 5 s for events. "The caller waits, not the limiter" could not fail
+  (a limiter blocked for the wait still answered within the call timeout); it now holds a
+  twenty-second reservation and requires another provider to be answered while the first
+  caller is still asleep.
+
 ## [0.3.84] - 2026-10-12
 
 ### Fixed

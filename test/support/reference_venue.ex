@@ -286,7 +286,9 @@ defmodule DpExchange.Core.ReferenceVenue do
         bar = %Types.Candle{
           symbol: symbol,
           timeframe: timeframe,
-          opened_at: at,
+          # On the width's own grid (MD2): the bar that contains the price's time, so a "1d"
+          # request is answered with a bar opening at 00:00 and not at the quote's 12:00.
+          opened_at: DpExchange.Core.Timeframe.boundary(at, timeframe),
           open: price,
           high: price,
           low: price,
@@ -313,12 +315,19 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_order_book(symbol, opts) do
-    with :ok <- check_symbol(symbol) do
-      booked(symbol, Keyword.get(opts, :depth))
+    with :ok <- check_symbol(symbol),
+         {:ok, depth} <- check_depth(Keyword.get(opts, :depth)) do
+      booked(symbol, depth)
     end
   end
 
-  # `:depth` is levels per side (MD5); `:limit`, which this venue has no use for, is ignored.
+  # `:depth` is levels per side (MD5): absent, or a whole number of levels the venue carries
+  # (it carries two a side). Anything else, above the maximum included, is refused rather than
+  # clamped or raised on, as `Core.Venue` states. `:limit` has no use here and is ignored.
+  defp check_depth(nil), do: {:ok, nil}
+  defp check_depth(depth) when depth in 1..2//1, do: {:ok, depth}
+  defp check_depth(depth), do: {:error, {:invalid_option, :depth, depth}}
+
   defp booked(symbol, depth) do
     if symbol in @symbols do
       {:ok,

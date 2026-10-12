@@ -477,16 +477,29 @@ defmodule DpExchange.Core.HttpClientTest do
       # `DateTime.add/3`, negatives included. `DateTime.add/3` computes a date for any
       # offset, and for one this large that took longer than 4 seconds in the calling
       # process, on a request that had already succeeded.
+      #
+      # Measured in reductions of the calling process, not in milliseconds: the work the old
+      # code did was billions of reductions, the fix is a few thousand, and a count of work
+      # does not move with how loaded the machine running the suite is.
       task =
         Task.async(fn ->
-          HttpClient.parse_rate_limit_headers([
-            {"X-RateLimit-Limit", "100"},
-            {"X-RateLimit-Remaining", "37"},
-            {"X-RateLimit-Reset", "-99999999999999999999999"}
-          ])
+          {:reductions, before} = Process.info(self(), :reductions)
+
+          parsed =
+            HttpClient.parse_rate_limit_headers([
+              {"X-RateLimit-Limit", "100"},
+              {"X-RateLimit-Remaining", "37"},
+              {"X-RateLimit-Reset", "-99999999999999999999999"}
+            ])
+
+          {:reductions, finished} = Process.info(self(), :reductions)
+          {parsed, finished - before}
         end)
 
-      assert {:ok, %{limit: 100, remaining: 37, reset_time: nil}} = Task.yield(task, 1_000)
+      assert {:ok, {%{limit: 100, remaining: 37, reset_time: nil}, reductions}} =
+               Task.yield(task, 30_000) || Task.shutdown(task, :brutal_kill)
+
+      assert reductions < 1_000_000
     end
 
     test "a reset value outside the representable range is nil, not a raise" do
@@ -1248,9 +1261,12 @@ defmodule DpExchange.Core.HttpClientTest do
         end)
 
       assert {:ok, {:error, _reason}} =
-               Task.yield(task, 3_000) || Task.shutdown(task, :brutal_kill)
+               Task.yield(task, 10_000) || Task.shutdown(task, :brutal_kill)
 
-      assert System.monotonic_time(:millisecond) - started < 2_000
+      # The body would take 10,000 bytes at 100 ms each (~1,000 s) if `:timeout` did not cut
+      # it off, so any bound well under that tells the two apart; this one leaves a loaded
+      # machine room to be slow without the test deciding anything about speed.
+      assert System.monotonic_time(:millisecond) - started < 8_000
 
       Process.unlink(server)
       Process.exit(server, :kill)

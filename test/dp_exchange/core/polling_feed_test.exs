@@ -54,6 +54,57 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
   end
 
+  # Waits until `:counters` slot `index` reaches `target`, or fails after 10 seconds. A window
+  # defined by how many fetches a control symbol has made, not by how long a machine took.
+  defp await_count(counter, index, target) do
+    do_await_count(counter, index, target, System.monotonic_time(:millisecond) + 10_000)
+  end
+
+  defp do_await_count(counter, index, target, deadline) do
+    cond do
+      :counters.get(counter, index) >= target ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("counter #{index} stuck at #{:counters.get(counter, index)}, wanted #{target}")
+
+      true ->
+        receive do
+        after
+          10 -> :ok
+        end
+
+        do_await_count(counter, index, target, deadline)
+    end
+  end
+
+  # Waits until the feed's job queue holds `wanted` jobs, or fails after 10 seconds. The queue
+  # is internal state, read through `:sys.get_state/1`, because it is exactly what the test
+  # about a queue that stays FIFO needs to have seen full.
+  defp await_queue_length(pid, wanted) do
+    do_await_queue_length(pid, wanted, System.monotonic_time(:millisecond) + 10_000)
+  end
+
+  defp do_await_queue_length(pid, wanted, deadline) do
+    queued = pid |> :sys.get_state() |> Map.fetch!(:queue) |> :queue.len()
+
+    cond do
+      queued == wanted ->
+        :ok
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("the queue held #{queued} jobs, wanted #{wanted}")
+
+      true ->
+        receive do
+        after
+          10 -> :ok
+        end
+
+        do_await_queue_length(pid, wanted, deadline)
+    end
+  end
+
   describe "a feed with no fetcher refuses to start" do
     test "neither :fetch nor :fetch_all stops with :no_fetcher" do
       # A feed that would run forever delivering nothing is indistinguishable from
@@ -277,15 +328,22 @@ defmodule DpExchange.Core.PollingFeedTest do
       test = self()
 
       start_feed(
-        fetch: fn symbol -> {:refused, "not listed: #{symbol}"} end,
+        fetch: fn symbol ->
+          send(test, {:fetching, symbol})
+          {:refused, "not listed: #{symbol}"}
+        end,
         symbols: ~w(DOGE-USD),
         on_refusal: fn symbol, reason -> send(test, {:refused, symbol, reason}) end
       )
 
       assert_receive {:refused, "DOGE-USD", "not listed: DOGE-USD"}, 5_000
-      # Once, not once per cycle: at a 50 ms interval several more cycles refuse in this
-      # window, and each used to call `on_refusal` again.
-      refute_receive {:refused, "DOGE-USD", _reason}, 300
+
+      # Once, not once per cycle: each cycle used to call `on_refusal` again. Not a quiet
+      # window, a count of cycles: the feed finishes handling one sweep before it starts the
+      # next, so by the time a fourth fetch has begun the three before it have each been
+      # refused and reported (or not) already, and nothing is still on its way.
+      for _cycle <- 1..4, do: assert_receive({:fetching, "DOGE-USD"}, 5_000)
+      refute_received {:refused, "DOGE-USD", _reason}
     end
 
     test "a refused symbol that starts delivering is reported again if refused later" do
@@ -443,9 +501,10 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert_receive {:published, _event}, 5_000
       Agent.update(up, fn _up -> false end)
 
-      # Past the coverage window (2 intervals of 50 ms), measured from the last success.
-      Process.sleep(250)
-      status = PollingFeed.status(pid)
+      # Past the coverage window (2 intervals of 50 ms), measured from the last success. A
+      # bounded poll of the status instead of a guessed sleep: it returns the moment the
+      # window has passed, and fails with the last status if it never does.
+      status = await_status(pid, &(not &1.delivering and &1.covered == 0))
 
       refute status.delivering
       assert status.covered == 0
@@ -627,17 +686,21 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       churned_before = :counters.get(counts, 1)
       control_before = :counters.get(counts, 2)
-      Process.sleep(500)
+
+      # The window is twelve fetches of the control symbol, not a stretch of wall-clock time:
+      # a slow machine makes the window longer, not the comparison noisier.
+      await_count(counts, 2, control_before + 12)
       churned = :counters.get(counts, 1) - churned_before
       control = :counters.get(counts, 2) - control_before
 
-      assert control > 0,
+      assert control >= 12,
              "the control symbol was not polled at all, so the comparison below proves nothing"
 
-      # One fetch of slack: the two symbols' timers are offset, so a window edge can catch one
+      # Two fetches of slack: the two symbols' timers are offset, so a window edge can catch one
       # more tick of either (9 against 8 failed the full suite once, 2026-10-01). A stacked
-      # timer doubles the rate, and three cycles quadrupled it, so one extra cannot hide it.
-      assert churned <= control + 1,
+      # timer doubles the rate, and three cycles quadrupled it, so two extra cannot hide it:
+      # twelve control fetches mean at least twenty-four from a symbol with a second timer.
+      assert churned <= control + 2,
              "the churned symbol was fetched #{churned} times against the control's " <>
                "#{control} in the same window. Removing and re-adding a symbol left its old " <>
                "timer pending and set a second one, and every cycle stacks another."
@@ -671,7 +734,12 @@ defmodule DpExchange.Core.PollingFeedTest do
       send(task, :release)
 
       assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
-      refute_receive {:published, %{symbol: "ETH-USD"}}, 100
+
+      # The sink is called from the feed's own handler, so a call that the feed answers is
+      # one it answers after that handler returned: if ETH-USD was going to be published it
+      # is in the mailbox by now, and no quiet window is needed to find out.
+      _sync = PollingFeed.status(pid)
+      refute_received {:published, %{symbol: "ETH-USD"}}
       assert Map.keys(PollingFeed.coverage(pid)) == ["BTC-USD"]
     end
 
@@ -688,9 +756,15 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       PollingFeed.update_symbols(pid, [])
       _sync = PollingFeed.status(pid)
+      ref = Process.monitor(task)
       send(task, :release)
 
-      refute_receive {:published, _event}, 100
+      # The task has exited, so its reply is already in the feed's mailbox ahead of the next
+      # call: the result is applied (or dropped) before `status/1` answers, and a delivery
+      # would be in this mailbox by then.
+      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+      _sync = PollingFeed.status(pid)
+      refute_received {:published, _event}
       assert PollingFeed.coverage(pid) == %{}
     end
 
@@ -721,7 +795,7 @@ defmodule DpExchange.Core.PollingFeedTest do
       # next call: the result is applied (or dropped) before `status/1` answers.
       assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
       assert %{failures_since_ok: 0, last_error: nil} = PollingFeed.status(pid)
-      refute_receive {:refused, _symbol, _reason}, 100
+      refute_received {:refused, _symbol, _reason}
     end
 
     test "a bulk refusal naming a symbol nobody asked for is not reported" do
@@ -765,9 +839,11 @@ defmodule DpExchange.Core.PollingFeedTest do
       start_feed(
         fetch: fn symbol -> {:ok, event(symbol)} end,
         symbols: ~w(BTC-USD),
-        start_delay_ms: 300
+        start_delay_ms: 1_000
       )
 
+      # A delay of a second against a quiet window of 150 ms: the window can only be cut short
+      # by the test process being stalled for most of a second, not by a slow scheduler.
       refute_receive {:published, _event}, 150
       assert_receive {:published, _event}, 5_000
     end
@@ -1269,7 +1345,10 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert_receive {:telemetry, [:dp_exchange, :link, :event], _m1, _md1}, 5_000
       assert_receive {:telemetry, [:dp_exchange, :link, :event], _m2, _md2}, 5_000
       assert_receive {:telemetry, [:dp_exchange, :link, :event], _m3, _md3}, 5_000
-      refute_receive {:telemetry, [:dp_exchange, :link, :up], _m, _md}, 100
+
+      # The feed emits an up before the event of the same delivery, in one process, so a second
+      # up would already be in this mailbox ahead of the third event: no quiet window needed.
+      refute_received {:telemetry, [:dp_exchange, :link, :up], _m, _md}
     end
 
     test "crossing into delivering-nothing is a link down, and recovery is a link up" do
@@ -1402,25 +1481,28 @@ defmodule DpExchange.Core.PollingFeedTest do
       symbols = for n <- 1..300, do: "S#{n}"
       first_call = :atomics.new(1, [])
 
-      start_feed(
-        symbols: symbols,
-        interval_ms: 20,
-        fetch: fn symbol ->
-          if :atomics.compare_exchange(first_call, 1, 0, 1) == :ok do
-            send(test, {:blocked, self()})
+      feed =
+        start_feed(
+          symbols: symbols,
+          interval_ms: 20,
+          fetch: fn symbol ->
+            if :atomics.compare_exchange(first_call, 1, 0, 1) == :ok do
+              send(test, {:blocked, self()})
 
-            receive do
-              :go -> :ok
+              receive do
+                :go -> :ok
+              end
             end
-          end
 
-          {:ok, event(symbol)}
-        end
-      )
+            {:ok, event(symbol)}
+          end
+        )
 
       assert_receive {:blocked, task}, 5_000
-      # Every other symbol's first tick has fired by now and is waiting in the queue.
-      Process.sleep(300)
+
+      # Every other symbol's first tick has fired and is waiting in the queue: observed, not
+      # slept for, so the drain below really is the drain of a full queue.
+      await_queue_length(feed, length(symbols) - 1)
       send(task, :go)
 
       collect = fn collect, seen ->

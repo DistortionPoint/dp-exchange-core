@@ -117,7 +117,8 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
 
   describe "D-E.1 — a weight-N acquire is ONE atomic reservation" do
     test "acquiring weight N consumes N tokens, not N separate acquires" do
-      opts = start_limiter(%{default: %{limit: 10, per_ms: 10_000, burst: 10}})
+      # A refill interval of ten seconds, so the bucket cannot refill between the two calls.
+      opts = start_limiter(%{default: %{limit: 10, per_ms: 100_000, burst: 10}})
 
       assert :ok = Limiter.acquire(:venue, 10, opts)
 
@@ -360,11 +361,32 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       # One slow caller must not stall the limiter for everyone else.
       opts = start_limiter(%{default: %{limit: 10, per_ms: 1_000, burst: 1}})
 
-      waiter = Task.async(fn -> Limiter.acquire(:slow_venue, 5, opts ++ [timeout: 5_000]) end)
+      # Two hundred tokens at ten a second: a reservation the caller sleeps out for ~20 s, far
+      # longer than any pause in this test, and shut down below rather than waited for.
+      waiter =
+        Task.async(fn -> Limiter.acquire(:slow_venue, 200, opts ++ [timeout: 60_000]) end)
 
-      # While that caller sleeps out its reservation, the limiter still answers.
+      # Wait until the limiter has taken that reservation, or the check below would only be
+      # asking an idle limiter and prove nothing about a held one.
+      :ok = await_rate_limited(:slow_venue, opts)
+
+      # While that caller sleeps out its reservation, the limiter still answers, and the
+      # caller is still asleep: had the limiter slept for it, this call could not have been
+      # answered before the waiter finished.
       assert :ok = Limiter.check(:other_venue, 1, opts)
-      assert :ok = Task.await(waiter)
+      assert Task.yield(waiter, 0) == nil
+      Task.shutdown(waiter, :brutal_kill)
+    end
+
+    defp await_rate_limited(provider, opts, tries \\ 500) do
+      case Limiter.check(provider, 1, opts) do
+        {:rate_limited, _wait} ->
+          :ok
+
+        :ok when tries > 0 ->
+          Process.sleep(10)
+          await_rate_limited(provider, opts, tries - 1)
+      end
     end
   end
 
@@ -416,20 +438,22 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
     test "holds a bucket with room closed for the stated time" do
       opts = start_limiter(fast())
 
-      :ok = Limiter.penalize("v", 2_000, opts)
+      # A minute, so that the seconds a loaded machine can spend between the two calls do not
+      # move the remaining wait out of the window below.
+      :ok = Limiter.penalize("v", 60_000, opts)
 
       assert {:rate_limited, wait_ms} = Limiter.check("v", 1, opts)
-      assert wait_ms > 1_900 and wait_ms <= 2_000
+      assert wait_ms > 55_000 and wait_ms <= 60_000
     end
 
     test "never shortens a hold already in place" do
       opts = start_limiter(fast())
 
-      :ok = Limiter.penalize("v", 5_000, opts)
+      :ok = Limiter.penalize("v", 60_000, opts)
       :ok = Limiter.penalize("v", 1_000, opts)
 
       assert {:rate_limited, wait_ms} = Limiter.check("v", 1, opts)
-      assert wait_ms > 4_000
+      assert wait_ms > 50_000
     end
 
     test "holds only the bucket it names" do
@@ -496,6 +520,11 @@ defmodule DpExchange.Core.DefaultRateLimiterPruneTest do
 
     assert :ok = Limiter.acquire("venue /orders/1", 1, limiter: name)
     assert :ok = Limiter.penalize("venue /bars", 60_000, limiter: name)
+
+    # The idle key's theoretical arrival time is `now + 1 ms` at a 1,000-per-second rate, so it
+    # is swept only once a whole millisecond of the limiter's monotonic clock has passed. A
+    # sleep is a lower bound on elapsed time, never an upper one, so this cannot be too short
+    # on a slow machine, only wasteful, and 5 ms of waste is the whole cost.
     Process.sleep(5)
 
     send(pid, :prune)

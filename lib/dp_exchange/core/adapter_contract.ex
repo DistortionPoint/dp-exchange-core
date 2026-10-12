@@ -911,6 +911,361 @@ defmodule DpExchange.Core.AdapterContract do
 
   def book_limit_fault(_baseline, _answer), do: nil
 
+  # --- the decisions of the groups whose checks used to live only inside the quoted tests.
+  # Each is public so a test can hand it a value that is wrong in one specific way and see it
+  # named: a decision that exists only inside a `test` body in a consuming package cannot be
+  # shown to fail, and an assertion that cannot be shown to fail is not known to bite.
+
+  @doc """
+  What is wrong with one side of an order book a fake returned, or `nil`. Assertion 25.
+
+  `direction` is `:desc` for bids and `:asc` for asks. `{:too_thin, n}`: fewer than two levels,
+  which no comparator can order wrongly, so the assertion would pass having checked nothing.
+  `{:unreadable_level, level}`: a level that is not `{Decimal, size}`. `{:unsorted, prices}`:
+  the prices are not best first.
+  """
+  @spec book_ordering_fault(term(), :asc | :desc) ::
+          nil
+          | {:too_thin, non_neg_integer()}
+          | {:unreadable_level, term()}
+          | {:unsorted, [Decimal.t()]}
+  def book_ordering_fault(levels, direction) when direction in [:asc, :desc] do
+    cond do
+      not is_list(levels) -> {:unreadable_level, levels}
+      length(levels) < 2 -> {:too_thin, length(levels)}
+      true -> levels_ordering_fault(levels, direction)
+    end
+  end
+
+  defp levels_ordering_fault(levels, direction) do
+    Enum.find_value(levels, &unreadable_price/1) || unsorted_prices(levels, direction)
+  end
+
+  defp unreadable_price({%Decimal{}, _size}), do: nil
+  defp unreadable_price(other), do: {:unreadable_level, other}
+
+  defp unsorted_prices(levels, direction) do
+    prices = Enum.map(levels, &elem(&1, 0))
+    if prices != Enum.sort_by(prices, & &1, {direction, Decimal}), do: {:unsorted, prices}
+  end
+
+  @doc """
+  What is wrong with the times on a struct a fake returned, or `nil`. Assertions 14 and 23.
+
+  `module` is the struct the endpoint promises (`Quote`, `OrderBook` or `TopOfBook`).
+  `{:wrong_struct, value}`; `{:observed_at, value}` unless it is a `DateTime`; `{:venue_time,
+  value}` unless it is a `DateTime` or `nil`: the venue's own time, never an epoch integer, a
+  `NaiveDateTime` or a stand-in.
+  """
+  @spec time_fault(term(), module()) ::
+          nil | {:wrong_struct, term()} | {:observed_at, term()} | {:venue_time, term()}
+  def time_fault(%module{} = value, module) do
+    cond do
+      not match?(%DateTime{}, value.observed_at) -> {:observed_at, value.observed_at}
+      is_nil(value.venue_time) or match?(%DateTime{}, value.venue_time) -> nil
+      true -> {:venue_time, value.venue_time}
+    end
+  end
+
+  def time_fault(other, _module), do: {:wrong_struct, other}
+
+  @doc """
+  What is wrong with a `Balance` a fake returned, or `nil`. Assertion 24.
+
+  `{:currency, value}` unless it is non-blank text (an amount attributable to no asset cannot
+  be sized, booked or reconciled), `{:timestamp, value}` unless a `DateTime`, `{:provider,
+  value}` when empty. `:balance` is deliberately not judged: it may honestly be `nil`.
+  """
+  @spec balance_fault(term()) ::
+          nil
+          | {:wrong_struct, term()}
+          | {:currency | :timestamp | :provider, term()}
+  def balance_fault(%DpExchange.Core.Types.Balance{} = value) do
+    cond do
+      not (is_binary(value.currency) and String.trim(value.currency) != "") ->
+        {:currency, value.currency}
+
+      not match?(%DateTime{}, value.timestamp) ->
+        {:timestamp, value.timestamp}
+
+      value.provider in [nil, ""] ->
+        {:provider, value.provider}
+
+      true ->
+        nil
+    end
+  end
+
+  def balance_fault(other), do: {:wrong_struct, other}
+
+  @doc """
+  What is wrong with the volume window on a `Quote` a fake returned, or `nil`. Assertion 30.
+
+  A quote with no volume names no window: `{:window_without_volume, window}`. A quote with a
+  volume names which quantity it is (one of `Quote.volume_windows/0`): `{:unstated_window,
+  window}`.
+  """
+  @spec volume_window_fault(term()) ::
+          nil | {:wrong_struct, term()} | {:window_without_volume | :unstated_window, term()}
+  def volume_window_fault(%ContractQuote{volume: nil, volume_window: nil}), do: nil
+
+  def volume_window_fault(%ContractQuote{volume: nil, volume_window: window}),
+    do: {:window_without_volume, window}
+
+  def volume_window_fault(%ContractQuote{volume_window: window}) do
+    if window in ContractQuote.volume_windows(), do: nil, else: {:unstated_window, window}
+  end
+
+  def volume_window_fault(other), do: {:wrong_struct, other}
+
+  @doc """
+  What is wrong with the answer of an endpoint to assertion 5's question, or `nil`: does a
+  success hold the `Core.Types` struct (one of `modules`) its callback promises?
+
+  Returns a short description of the offence: a struct of another module, a raw map, a list
+  holding something else, or a raise. A refusal or an error is not a success and is not judged.
+  """
+  @spec answer_type_fault(term(), [module()]) :: nil | String.t()
+  def answer_type_fault({:ok, %module{}}, modules),
+    do: if(module in modules, do: nil, else: inspect(module))
+
+  def answer_type_fault({:ok, list}, modules) when is_list(list) do
+    Enum.find_value(list, fn
+      %module{} -> if module in modules, do: nil, else: "a list containing #{inspect(module)}"
+      other -> "a list containing #{other |> inspect() |> String.slice(0, 60)}"
+    end)
+  end
+
+  def answer_type_fault({:ok, %{} = raw}, _modules),
+    do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
+
+  # A fake that raised did not answer, and counted as conforming: a fake crashing on every
+  # endpoint passed this group.
+  def answer_type_fault({:raised, error}, _modules),
+    do: "a raise: #{error |> Exception.message() |> String.slice(0, 80)}"
+
+  def answer_type_fault(_not_a_success, _modules), do: nil
+
+  @doc """
+  What is wrong with a fake's subscription set after four calls, or `nil`. Assertion 26.
+
+  `subscribe/2` adds to the live set, `update_symbols/2` replaces it, `unsubscribe/2` removes
+  only what it names; the set is read back through `coverage/1`. Needs two symbols the fake
+  serves. The fault names the first rule broken: `{:never_covered, symbol}` (nothing to compare
+  with), `{:subscribe_dropped, symbols}`, `{:subscribe_missed, symbol}`,
+  `{:unsubscribe_left, symbol}`, `{:unsubscribe_overreached, symbol}`,
+  `{:update_not_taken, symbol}` or `{:update_left, symbol}`.
+  """
+  @spec subscription_set_fault(module(), [String.t(), ...], keyword()) ::
+          nil | {atom(), term()}
+  def subscription_set_fault(fake, [first, second | _rest], opts) do
+    covered = fn -> fake.coverage(opts) |> Map.keys() |> MapSet.new() end
+
+    fake.update_symbols([], opts)
+    fake.subscribe([first], opts)
+    after_first = covered.()
+    fake.subscribe([second], opts)
+    after_second = covered.()
+    fake.unsubscribe([first], opts)
+    after_unsub = covered.()
+    fake.update_symbols([first], opts)
+    after_update = covered.()
+
+    dropped = after_first |> MapSet.difference(after_second) |> MapSet.to_list()
+
+    [
+      {:never_covered, first, not MapSet.member?(after_first, first)},
+      {:subscribe_dropped, dropped, dropped != []},
+      {:subscribe_missed, second, not MapSet.member?(after_second, second)},
+      {:unsubscribe_left, first, MapSet.member?(after_unsub, first)},
+      {:unsubscribe_overreached, second, not MapSet.member?(after_unsub, second)},
+      {:update_not_taken, first, not MapSet.member?(after_update, first)},
+      {:update_left, second, MapSet.member?(after_update, second)}
+    ]
+    |> Enum.find_value(fn {fault, detail, broken?} -> if broken?, do: {fault, detail} end)
+  end
+
+  @doc """
+  What is wrong with a fake's `subscribe/2` given `to: nil`, or `nil`. Assertion 27.
+
+  A forwarded `nil` is a caller that said nothing, and nothing means the caller: it must not
+  raise and must deliver to the calling process. `wait` is how long to wait for the delivery.
+  `{:raised, error}` or `{:escaped, kind, reason}`; `:nothing_delivered`.
+  """
+  @spec nil_recipient_fault(module(), [String.t()], keyword(), non_neg_integer()) ::
+          nil | {:raised, Exception.t()} | {:escaped, atom(), term()} | :nothing_delivered
+  def nil_recipient_fault(fake, pairs, opts, wait) do
+    fake.subscribe(pairs, Keyword.put(opts, :to, nil))
+
+    receive do
+      {:dp_exchange, _venue, _payload} -> nil
+    after
+      wait -> :nothing_delivered
+    end
+  rescue
+    error -> {:raised, error}
+  catch
+    kind, reason -> {:escaped, kind, reason}
+  end
+
+  @doc """
+  What is wrong with a fake's `subscribe/2` given a lower-case pair, or `nil`. Assertion 29.
+
+  The real facade upper-cases subscribed symbols, so the payload arrives under `pair` (the
+  canonical form). `:not_delivered` when nothing arrived under it within `wait` milliseconds.
+  """
+  @spec lower_case_delivery_fault(module(), String.t(), keyword(), non_neg_integer()) ::
+          nil | :not_delivered
+  def lower_case_delivery_fault(fake, pair, opts, wait) do
+    fake.subscribe([String.downcase(pair)], Keyword.put(opts, :to, self()))
+
+    receive do
+      {:dp_exchange, _venue, %{symbol: ^pair}} -> nil
+    after
+      wait -> :not_delivered
+    end
+  end
+
+  @doc """
+  What is wrong with a streaming call made while no feed runs, or `nil`. Assertion 28.
+
+  `call` is a zero-arity function making the call. A streaming callback returns a value
+  (`:ok`, `{:error, _}` or a map); `{:escaped, kind, reason}` when it exited, threw or raised
+  in the caller, `{:not_a_value, result}` for any other answer.
+  """
+  @spec streaming_call_fault((-> term())) ::
+          nil | {:escaped, atom(), term()} | {:not_a_value, term()}
+  def streaming_call_fault(call) when is_function(call, 0) do
+    result =
+      try do
+        call.()
+      catch
+        kind, reason -> {:escaped, kind, reason}
+      end
+
+    cond do
+      match?({:escaped, _kind, _reason}, result) -> result
+      result == :ok or match?({:error, _reason}, result) or is_map(result) -> nil
+      true -> {:not_a_value, result}
+    end
+  end
+
+  @doc """
+  The identity fault of a venue's `provider_name/0` answer, or `nil`. Assertion 3.
+  """
+  @spec provider_name_fault(term()) :: nil | {:provider_name, term()}
+  def provider_name_fault(name) do
+    if is_binary(name) and String.trim(name) != "", do: nil, else: {:provider_name, name}
+  end
+
+  @doc """
+  The identity fault of a venue's `runtime_id/0` answer, or `nil`. Assertion 3.
+
+  The id is an atom equal to the module's last segment, underscored: `DpExchange.Coinbase` is
+  `:coinbase`. `to_string/1` is compared, because `nil`, `true` and `false` stringify to words
+  no module segment is.
+  """
+  @spec runtime_id_fault(module(), term()) :: nil | {:runtime_id, term(), String.t()}
+  def runtime_id_fault(venue, id) when is_atom(venue) do
+    segment = venue |> Module.split() |> List.last() |> Macro.underscore()
+    if is_atom(id) and to_string(id) == segment, do: nil, else: {:runtime_id, id, segment}
+  end
+
+  @asset_classes [:crypto, :equity, :option, :future, :event_contract]
+
+  @doc """
+  The identity fault of a venue's `asset_classes/0` answer, or `nil`. Assertion 3: a non-empty
+  list of the classes a host switches on.
+  """
+  @spec asset_classes_fault(term()) :: nil | {:asset_classes, term()}
+  def asset_classes_fault([_first | _rest] = classes) do
+    if Enum.all?(classes, &(&1 in @asset_classes)), do: nil, else: {:asset_classes, classes}
+  end
+
+  def asset_classes_fault(other), do: {:asset_classes, other}
+
+  @doc """
+  The endpoints `venue_does_not_serve/0` names that `caps` does not declare `:unsupported`.
+  Assertion 8: an endpoint the venue does not serve cannot also be one the package answers.
+  """
+  @spec unrecorded_absences([{atom(), arity()}], DpExchange.Core.Capabilities.t()) ::
+          [{atom(), arity()}]
+  def unrecorded_absences(venue_absences, %DpExchange.Core.Capabilities{endpoints: endpoints}) do
+    unsupported = for {endpoint, :unsupported} <- endpoints, do: endpoint
+    Enum.reject(venue_absences, &(&1 in unsupported))
+  end
+
+  @stream_pull_pairs [
+    quotes: {:get_price, 2},
+    top_of_book: {:get_top_of_book, 2},
+    trades: {:get_trades, 2},
+    candles: {:get_historical_prices, 4}
+  ]
+
+  @doc """
+  The `{kind, endpoint}` pairs a package declares streamable while saying the venue does not
+  serve the matching pull endpoint at all (`absent`). Assertion 8: the two cannot both be
+  true.
+  """
+  @spec streamed_but_absent([{atom(), arity()}], [atom()]) :: [{atom(), {atom(), arity()}}]
+  def streamed_but_absent(absent, streamable) do
+    for {kind, endpoint} <- @stream_pull_pairs,
+        kind in streamable,
+        endpoint in absent,
+        do: {kind, endpoint}
+  end
+
+  @doc """
+  The kinds in `streamable` or `authenticated_streamable` that this contract has no word for
+  (`Capabilities.data_kinds/0`). Assertion 8.
+  """
+  @spec unknown_stream_kinds(DpExchange.Core.Capabilities.t()) :: [term()]
+  def unknown_stream_kinds(%DpExchange.Core.Capabilities{} = caps) do
+    known = DpExchange.Core.Capabilities.data_kinds()
+
+    (caps.streamable ++ caps.authenticated_streamable)
+    |> Enum.uniq()
+    |> Enum.reject(&(&1 in known))
+  end
+
+  @doc """
+  Whether a term holds a pid, port or reference anywhere inside it, structs and map keys
+  included. Assertion 11: a facade answer is data, never a process the caller must manage.
+  """
+  @spec carries_process?(term()) :: boolean()
+  def carries_process?(term) when is_pid(term) or is_port(term) or is_reference(term),
+    do: true
+
+  def carries_process?(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.any?(&carries_process?/1)
+
+  def carries_process?(term) when is_list(term), do: Enum.any?(term, &carries_process?/1)
+
+  def carries_process?(%_struct{} = term),
+    do: term |> Map.from_struct() |> carries_process?()
+
+  def carries_process?(term) when is_map(term),
+    do: Enum.any?(term, fn {key, value} -> carries_process?(key) or carries_process?(value) end)
+
+  def carries_process?(_scalar), do: false
+
+  @doc """
+  The optional callbacks `module` implements at the wrong arity, as `{name, arity, arities}`:
+  the callback's name is exported at `arities` but not at the one the behaviour declares, so a
+  caller at the declared arity gets an `UndefinedFunctionError`. Assertion 1.
+  """
+  @spec half_implemented_optionals(module()) :: [{atom(), arity(), [arity()]}]
+  def half_implemented_optionals(module) do
+    Code.ensure_loaded!(module)
+    exports = module.__info__(:functions)
+
+    for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:optional_callbacks),
+        not function_exported?(module, name, arity),
+        other = for({^name, a} <- exports, do: a),
+        other != [],
+        do: {name, arity, other}
+  end
+
   @positive_fields %{
     DpExchange.Core.Types.Quote => [:price],
     DpExchange.Core.Types.Trade => [:price],
@@ -1143,8 +1498,7 @@ defmodule DpExchange.Core.AdapterContract do
       order_arg_helpers(),
       value_arg_helpers(),
       value_arg_more_helpers(),
-      process_helpers(),
-      process_walk_helpers()
+      process_helpers()
     ]
   end
 
@@ -1273,23 +1627,17 @@ defmodule DpExchange.Core.AdapterContract do
         end
 
         test "optional callbacks are implemented or absent, never half" do
-          Code.ensure_loaded!(@venue)
-
           # "Half" is the callback's NAME exported at some other arity and not at the one the
           # behaviour declares: a consumer calling it at the declared arity gets an
           # `UndefinedFunctionError`, and `function_exported?/3` at that arity says absent
           # while the module plainly meant to implement it. It asserted `is_boolean/1` of
-          # `function_exported?/3`, which is always true.
-          exports = @venue.__info__(:functions)
+          # `function_exported?/3`, which is always true. The decision is
+          # `AdapterContract.half_implemented_optionals/1`, public so it can be shown to fail.
+          half = DpExchange.Core.AdapterContract.half_implemented_optionals(@venue)
 
-          for {name, arity} <- Venue.behaviour_info(:optional_callbacks),
-              not function_exported?(@venue, name, arity) do
-            other_arities = for {^name, a} <- exports, do: a
-
-            assert other_arities == [],
-                   "#{name}/#{arity} is an optional callback; #{inspect(@venue)} exports " <>
-                     "#{name} at #{inspect(other_arities)} but not at #{arity}"
-          end
+          assert half == [],
+                 "#{inspect(@venue)} implements an optional callback at the wrong arity " <>
+                   "(`{name, declared arity, arities exported}`): #{inspect(half)}"
         end
       end
     end
@@ -1351,7 +1699,9 @@ defmodule DpExchange.Core.AdapterContract do
       describe "3. identity" do
         test "provider_name/0 is a non-empty string" do
           name = @venue.provider_name()
-          assert is_binary(name) and String.trim(name) != ""
+
+          assert DpExchange.Core.AdapterContract.provider_name_fault(name) == nil,
+                 "provider_name/0 is #{inspect(name)}; it must be a non-blank string"
         end
 
         # It asserted `is_atom/1` only, which `nil` passes, and so does `:foo` on
@@ -1359,25 +1709,26 @@ defmodule DpExchange.Core.AdapterContract do
         # underscored — `DpExchange.Coinbase` is `:coinbase`.
         test "runtime_id/0 is an atom matching the namespace segment" do
           id = @venue.runtime_id()
-          segment = @venue |> Module.split() |> List.last() |> Macro.underscore()
 
-          # `to_string/1` compared with the segment: `nil`, `true` and `false` stringify to
-          # words no module segment is. Comparing `id` with those atoms directly warns under
-          # the type checker, which knows each venue's literal `runtime_id/0`.
-          assert is_atom(id) and to_string(id) == segment,
-                 "runtime_id/0 is #{inspect(id)}; #{inspect(@venue)} names #{inspect(segment)}"
+          # The decision is `AdapterContract.runtime_id_fault/2`: it compares `to_string/1`
+          # with the segment, because `nil`, `true` and `false` stringify to words no module
+          # segment is, and comparing `id` with those atoms directly warns under the type
+          # checker, which knows each venue's literal `runtime_id/0`.
+          assert DpExchange.Core.AdapterContract.runtime_id_fault(@venue, id) == nil,
+                 "runtime_id/0 is #{inspect(id)}; it must be the atom of #{inspect(@venue)}'s " <>
+                   "last segment, underscored"
         end
 
         test "asset_classes/0 is a non-empty list of known classes" do
           classes = @venue.asset_classes()
 
-          assert is_list(classes) and classes != []
-
           # The vocabulary a host switches on. It widened from `[:crypto, :equity]` on
           # 2026-09-01, when the first package started serving option, futures and
           # event-contract endpoints — a class a venue serves and cannot declare is a class
-          # the host cannot route to.
-          assert classes -- [:crypto, :equity, :option, :future, :event_contract] == []
+          # the host cannot route to. See `AdapterContract.asset_classes_fault/1`.
+          assert DpExchange.Core.AdapterContract.asset_classes_fault(classes) == nil,
+                 "asset_classes/0 is #{inspect(classes)}; it must be a non-empty list of " <>
+                   "[:crypto, :equity, :option, :future, :event_contract]"
         end
       end
     end
@@ -1618,7 +1969,7 @@ defmodule DpExchange.Core.AdapterContract do
             # A raise is not an answer. `call_on/3` returns it as `{:raised, error}`, which
             # is `!= {:error, :not_supported}`, so a fake that crashed on an active
             # endpoint used to pass this check for the wrong reason (the same hole assertion
-            # 5's `wrong_type/2` closes for struct-typed callbacks). The decision is
+            # 5's `answer_type_fault/2` closes for struct-typed callbacks). The decision is
             # `AdapterContract.active_endpoint_fault/1`, public so it can be shown to fail.
             case DpExchange.Core.AdapterContract.active_endpoint_fault(result) do
               nil ->
@@ -1712,18 +2063,13 @@ defmodule DpExchange.Core.AdapterContract do
             # without it.
             #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
-            venue_absences = MapSet.new(apply(@venue, :venue_does_not_serve, []))
+            venue_absences = apply(@venue, :venue_does_not_serve, [])
 
-            unsupported =
-              caps.endpoints
-              |> Enum.filter(fn {_endpoint, maturity} -> maturity == :unsupported end)
-              |> MapSet.new(fn {endpoint, _maturity} -> endpoint end)
+            stray = DpExchange.Core.AdapterContract.unrecorded_absences(venue_absences, caps)
 
-            stray = MapSet.difference(venue_absences, unsupported)
-
-            assert MapSet.size(stray) == 0,
+            assert stray == [],
                    "venue_does_not_serve/0 names endpoints that are not declared " <>
-                     ":unsupported: #{inspect(MapSet.to_list(stray))}. An endpoint the " <>
+                     ":unsupported: #{inspect(stray)}. An endpoint the " <>
                      "venue does not serve cannot also be one this package answers."
           end
         end
@@ -1739,16 +2085,11 @@ defmodule DpExchange.Core.AdapterContract do
           # and every test passed for a release. A structural check cannot prove delivery,
           # but it can refuse a vocabulary this contract does not define, which is where
           # over-declaration usually starts.
-          caps = @venue.capabilities()
-          known = MapSet.new(Capabilities.data_kinds())
+          unknown = DpExchange.Core.AdapterContract.unknown_stream_kinds(@venue.capabilities())
 
-          for list <- [caps.streamable, caps.authenticated_streamable] do
-            unknown = list |> MapSet.new() |> MapSet.difference(known) |> MapSet.to_list()
-
-            assert unknown == [],
-                   "streamable declares kinds this contract has no word for: " <>
-                     "#{inspect(unknown)}"
-          end
+          assert unknown == [],
+                 "streamable declares kinds this contract has no word for: " <>
+                   "#{inspect(unknown)}"
         end
 
         test "a declared streaming kind is not contradicted by its own pull endpoint" do
@@ -1764,18 +2105,10 @@ defmodule DpExchange.Core.AdapterContract do
             # exemption is deliberate.
             #
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
-            absent = MapSet.new(apply(@venue, :venue_does_not_serve, []))
+            absent = apply(@venue, :venue_does_not_serve, [])
 
             contradictions =
-              for {kind, endpoint} <- [
-                    {:quotes, {:get_price, 2}},
-                    {:top_of_book, {:get_top_of_book, 2}},
-                    {:trades, {:get_trades, 2}},
-                    {:candles, {:get_historical_prices, 4}}
-                  ],
-                  kind in caps.streamable,
-                  MapSet.member?(absent, endpoint),
-                  do: {kind, endpoint}
+              DpExchange.Core.AdapterContract.streamed_but_absent(absent, caps.streamable)
 
             assert contradictions == [],
                    "these kinds are declared streamable while the same package says the " <>
@@ -1952,16 +2285,18 @@ defmodule DpExchange.Core.AdapterContract do
 
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
             case apply(@fake, :get_price, endpoint_args(:get_price, 2)) do
-              {:ok, %DpExchange.Core.Types.Quote{volume: nil} = quote_struct} ->
-                assert is_nil(quote_struct.volume_window),
-                       "a window describes a volume, and this quote carries none"
-
               {:ok, %DpExchange.Core.Types.Quote{} = quote_struct} ->
-                assert quote_struct.volume_window in ContractQuote.volume_windows(),
+                # `AdapterContract.volume_window_fault/1`: a quote with no volume names no
+                # window, and one with a volume names which quantity it is.
+                fault = DpExchange.Core.AdapterContract.volume_window_fault(quote_struct)
+
+                assert fault == nil,
                        "get_price/2 returned volume #{inspect(quote_struct.volume)} with " <>
-                         "volume_window #{inspect(quote_struct.volume_window)}. State which " <>
-                         "quantity it is — one print, a running total, or a rolling 24h " <>
-                         "total — because a consumer aggregates each differently."
+                         "volume_window #{inspect(quote_struct.volume_window)} (#{inspect(fault)}). " <>
+                         "A window describes a volume, so a quote with none names no window; a " <>
+                         "quote with one states which quantity it is — one print, a running " <>
+                         "total, or a rolling 24h total — because a consumer aggregates each " <>
+                         "differently."
 
               # The same refusal-is-not-a-pass rule as the assertion above.
               other ->
@@ -2034,16 +2369,17 @@ defmodule DpExchange.Core.AdapterContract do
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
             case apply(@fake, :get_top_of_book, endpoint_args(:get_top_of_book, 2)) do
               {:ok, top} ->
-                assert %DpExchange.Core.Types.TopOfBook{} = top,
-                       "a BBO carries resting orders; a Quote carries a traded price, and " <>
-                         "they are not interchangeable"
+                # `AdapterContract.time_fault/2`. A BBO carries resting orders and a Quote a
+                # traded price, so they are not interchangeable; `observed_at` is required (a
+                # BBO is stale the instant it is read, so when it was read is part of the
+                # value); `venue_time` is the venue's own or nil, never a stand-in for it.
+                module = DpExchange.Core.Types.TopOfBook
+                fault = DpExchange.Core.AdapterContract.time_fault(top, module)
 
-                assert %DateTime{} = top.observed_at,
-                       "observed_at is required: a BBO is stale the instant it is read, so " <>
-                         "when it was read is part of the value"
-
-                assert is_nil(top.venue_time) or match?(%DateTime{}, top.venue_time),
-                       "venue_time is the venue's own or nil — never a stand-in for it"
+                assert fault == nil,
+                       "get_top_of_book/2 must return a TopOfBook with a DateTime " <>
+                         "observed_at and a venue_time that is the venue's own DateTime or " <>
+                         "nil. Got #{inspect(fault)}"
 
               # A refusal from an endpoint `capabilities/0` declares ACTIVE is not a pass.
               # See assertion 24's helper for the incident: the identical
@@ -2121,10 +2457,12 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       describe "11. self-sufficiency" do
-        test "the facade takes data, never functions or modules" do
-          # A callback in an argument list is an injected sink wearing a different name.
+        test "the package supervises itself through its own child_spec/1" do
           # The venue must start, subscribe and serve with nothing but credentials and
-          # options.
+          # options: a callback in an argument list is an injected sink wearing a different
+          # name, and the entry point a consumer supervises is `child_spec/1`. (That the
+          # facade takes data and no function is the next test's walk over its answers and
+          # assertion 7's imports check; this one asserts only the entry point.)
           # `Code.ensure_loaded!/1` first: `function_exported?/3` answers false for a
           # module that is merely not loaded, so without it this asserts "not exported"
           # while meaning "does not exist".
@@ -2663,29 +3001,39 @@ defmodule DpExchange.Core.AdapterContract do
         # every venue?". Both were yes here. The question it did not ask is whether an
         # assertion that runs is **able to fail**, and the answer has to be checked against
         # the fixture, not against the assertion.
-        assert length(levels) >= 2,
-               "the fake's #{side} carry #{length(levels)} level(s), and this assertion " <>
-                 "cannot fail on fewer than two — a list of one is sorted under every " <>
-                 "comparator, so the ordering contract is not being checked for this " <>
-                 "package at all. This is a requirement on the FAKE's fixture and not on " <>
-                 "the venue: give `Fake.get_order_book/2` at least two levels a side, in " <>
-                 "the order `Core.Types.OrderBook` requires, so that getting it wrong is " <>
-                 "something this assertion can see."
+        # The decision is `AdapterContract.book_ordering_fault/2`, public so a test can hand it
+        # a side that is too thin, unreadable or out of order and see each named.
+        case DpExchange.Core.AdapterContract.book_ordering_fault(levels, direction) do
+          nil ->
+            :ok
 
-        for {price, _quantity} <- levels do
-          assert match?(%Decimal{}, price),
-                 "every #{side} level carries a real Decimal price — `Core.Types.OrderBook`'s " <>
-                   "`level/0` is `{Decimal.t(), Decimal.t()}`, and a caller reading " <>
-                   "`hd(#{side})` as the #{superlative} price cannot be handed a nil"
+          {:too_thin, count} ->
+            flunk(
+              "the fake's #{side} carry #{count} level(s), and this assertion " <>
+                "cannot fail on fewer than two — a list of one is sorted under every " <>
+                "comparator, so the ordering contract is not being checked for this " <>
+                "package at all. This is a requirement on the FAKE's fixture and not on " <>
+                "the venue: give `Fake.get_order_book/2` at least two levels a side, in " <>
+                "the order `Core.Types.OrderBook` requires, so that getting it wrong is " <>
+                "something this assertion can see."
+            )
+
+          {:unreadable_level, level} ->
+            flunk(
+              "every #{side} level carries a real Decimal price — `Core.Types.OrderBook`'s " <>
+                "`level/0` is `{Decimal.t(), Decimal.t()}`, and a caller reading " <>
+                "`hd(#{side})` as the #{superlative} price cannot be handed " <>
+                "#{inspect(level)}"
+            )
+
+          {:unsorted, prices} ->
+            flunk(
+              "#{side} must be #{direction}ending so `hd(#{side})` is the #{superlative} — " <>
+                "the ordering is part of `Core.Types.OrderBook`'s contract, not a " <>
+                "convenience, and a package returning venue-order without re-sorting has " <>
+                "broken it even though every value in it is true. Got: #{inspect(prices)}"
+            )
         end
-
-        prices = Enum.map(levels, fn {price, _quantity} -> price end)
-
-        assert prices == Enum.sort_by(prices, & &1, {direction, Decimal}),
-               "#{side} must be #{direction}ending so `hd(#{side})` is the #{superlative} — " <>
-                 "the ordering is part of `Core.Types.OrderBook`'s contract, not a " <>
-                 "convenience, and a package returning venue-order without re-sorting has " <>
-                 "broken it even though every value in it is true. Got: #{inspect(prices)}"
       end
     end
   end
@@ -2785,16 +3133,15 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_time_fields(value, expected_module, name, arity) do
-        assert %^expected_module{} = value,
-               "#{name}/#{arity} must return a #{inspect(expected_module)}"
+        # `AdapterContract.time_fault/2`. `observed_at` is mandatory: it is what lets
+        # `venue_time` be nil without any caller having to invent a time. `venue_time` is the
+        # venue's own DateTime or nil, never an unparsed epoch, a NaiveDateTime, or a
+        # stand-in for a time the venue did not send.
+        fault = DpExchange.Core.AdapterContract.time_fault(value, expected_module)
 
-        assert %DateTime{} = value.observed_at,
-               "observed_at is mandatory: it is what lets venue_time be nil without any " <>
-                 "caller having to invent a time"
-
-        assert is_nil(value.venue_time) or match?(%DateTime{}, value.venue_time),
-               "venue_time is the venue's own DateTime or nil — never an unparsed epoch, " <>
-                 "a NaiveDateTime, or a stand-in for a time the venue did not send"
+        assert fault == nil,
+               "#{name}/#{arity} must return a #{inspect(expected_module)} with a DateTime " <>
+                 "observed_at and a venue_time that is a DateTime or nil. Got #{inspect(fault)}"
       end
     end
   end
@@ -2996,20 +3343,16 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_balance(value) do
-        assert %DpExchange.Core.Types.Balance{} = value,
-               "get_balances/2 must return DpExchange.Core.Types.Balance structs"
+        # `AdapterContract.balance_fault/1`. `currency` must name the asset this is a balance
+        # of: an amount attributable to nothing cannot be sized, booked or reconciled, and
+        # unlike a missing quantity there is no "the venue declined to say" reading of it.
+        # `timestamp` is when the balance was asked for (a balance with no freshness is
+        # indistinguishable from a stale one) and `provider` says which venue answered.
+        fault = DpExchange.Core.AdapterContract.balance_fault(value)
 
-        assert is_binary(value.currency) and value.currency != "",
-               "Balance.currency must name the asset this is a balance of, got " <>
-                 "#{inspect(value.currency)} — an amount attributable to nothing cannot be " <>
-                 "sized, booked or reconciled, and unlike a missing quantity there is no " <>
-                 "'the venue declined to say' reading of it"
-
-        assert %DateTime{} = value.timestamp,
-               "Balance.timestamp is when the balance was asked for, and a balance with no " <>
-                 "freshness is indistinguishable from a stale one"
-
-        assert value.provider, "Balance.provider must say which venue answered"
+        assert fault == nil,
+               "get_balances/2 must return DpExchange.Core.Types.Balance structs that name " <>
+                 "their currency, timestamp and provider. Got #{inspect(fault)}"
       end
     end
   end
@@ -3057,7 +3400,7 @@ defmodule DpExchange.Core.AdapterContract do
           end
 
         # **A group whose every active endpoint was refused checked no struct at all**, and
-        # `wrong_type/2` takes a refusal as "not a success, so nothing to compare". A fake
+        # `answer_type_fault/2` takes a refusal as "not a success, so nothing to compare". A fake
         # refusing everything (a missing `endpoint_opts:`) therefore passed this group.
         assert answers == [] or
                  Enum.any?(answers, fn {_name, _arity, _modules, result} ->
@@ -3071,7 +3414,7 @@ defmodule DpExchange.Core.AdapterContract do
 
         violations =
           for {name, arity, modules, result} <- answers,
-              violation = wrong_type(result, modules),
+              violation = DpExchange.Core.AdapterContract.answer_type_fault(result, modules),
               violation != nil do
             "  #{name}/#{arity} promises #{inspect(modules)} and answered #{violation}"
           end
@@ -3084,32 +3427,12 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
-  # What assertion 5 makes of one answer, apart from `return_types/0` so neither quoted
-  # block passes credo's complexity ceiling.
+  # What assertion 5 prints of one answer, apart from `return_types/0` so neither quoted
+  # block passes credo's complexity ceiling. The verdict is `answer_type_fault/2`.
   defp return_type_helpers do
     quote location: :keep do
       defp elem_tag(result) when is_tuple(result), do: elem(result, 0)
       defp elem_tag(_result), do: :other
-
-      defp wrong_type({:ok, %module{}}, modules),
-        do: if(module in modules, do: nil, else: inspect(module))
-
-      defp wrong_type({:ok, list}, modules) when is_list(list) do
-        Enum.find_value(list, fn
-          %module{} -> if module in modules, do: nil, else: "a list containing #{inspect(module)}"
-          other -> "a list containing #{other |> inspect() |> String.slice(0, 60)}"
-        end)
-      end
-
-      defp wrong_type({:ok, %{} = raw}, _modules),
-        do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
-
-      # A fake that raised did not answer, and counted as conforming: a fake crashing on
-      # every endpoint passed this group.
-      defp wrong_type({:raised, error}, _modules),
-        do: "a raise: #{error |> Exception.message() |> String.slice(0, 80)}"
-
-      defp wrong_type(_not_a_success, _modules), do: nil
     end
   end
 
@@ -3541,14 +3864,16 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_lower_case_delivered_one(fake, pair) do
-        opts = :opts |> arg_value({:subscribe, 2}) |> Keyword.put(:to, self())
-        fake.subscribe([String.downcase(pair)], opts)
+        opts = arg_value(:opts, {:subscribe, 2})
 
-        assert_receive {:dp_exchange, _venue, %{symbol: ^pair}},
-                       5_000,
-                       "subscribe/2 with #{inspect(String.downcase(pair))} delivered nothing " <>
-                         "under #{inspect(pair)}. The real facade upper-cases subscribed " <>
-                         "symbols; the fake must too, or it certifies silence."
+        # The decision is `AdapterContract.lower_case_delivery_fault/4`, public so it can be
+        # shown to fail. 5_000 ms is the wait for a delivery from an asynchronous fake.
+        fault = DpExchange.Core.AdapterContract.lower_case_delivery_fault(fake, pair, opts, 5_000)
+
+        assert fault == nil,
+               "subscribe/2 with #{inspect(String.downcase(pair))} delivered nothing " <>
+                 "under #{inspect(pair)}. The real facade upper-cases subscribed " <>
+                 "symbols; the fake must too, or it certifies silence."
       end
     end
   end
@@ -3584,21 +3909,14 @@ defmodule DpExchange.Core.AdapterContract do
                 {:coverage, 1, fn -> @venue.coverage(@absent_feed_opts) end}
               ],
               function_exported?(@venue, name, arity) do
-            result =
-              try do
-                call.()
-              catch
-                kind, reason -> {:escaped, kind, reason}
-              end
+            # `AdapterContract.streaming_call_fault/1`, public so it can be shown to fail.
+            fault = DpExchange.Core.AdapterContract.streaming_call_fault(call)
 
-            refute match?({:escaped, _kind, _reason}, result),
-                   "#{name}/#{arity} with no feed running #{inspect(result)}. A streaming " <>
-                     "call returns a value; wrap the call into the feed and answer " <>
-                     "`{:error, :feed_not_started}` rather than exiting the caller."
-
-            assert result == :ok or match?({:error, _reason}, result) or is_map(result),
-                   "#{name}/#{arity} with no feed running answered #{inspect(result)}, " <>
-                     "which is not a value its callback allows."
+            assert fault == nil,
+                   "#{name}/#{arity} with no feed running: #{inspect(fault)}. A streaming " <>
+                     "call returns a value (`:ok`, `{:error, _}` or a map); wrap the call " <>
+                     "into the feed and answer `{:error, :feed_not_started}` rather than " <>
+                     "exiting the caller."
           end
         end
       end
@@ -3639,24 +3957,27 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_nil_recipient_is_the_caller(fake, pairs) do
-        opts = :opts |> arg_value({:subscribe, 2}) |> Keyword.put(:to, nil)
+        opts = arg_value(:opts, {:subscribe, 2})
 
-        result =
-          try do
-            fake.subscribe(pairs, opts)
-          rescue
-            error -> {:raised, error}
-          end
+        # The decision is `AdapterContract.nil_recipient_fault/4`, public so it can be shown
+        # to fail. 5_000 ms is the wait for a delivery from a fake that sends asynchronously.
+        case DpExchange.Core.AdapterContract.nil_recipient_fault(fake, pairs, opts, 5_000) do
+          nil ->
+            :ok
 
-        refute match?({:raised, _error}, result),
-               "subscribe/2 raised on `to: nil`: #{inspect(result)}. A forwarded `nil` is a " <>
-                 "caller that said nothing, and nothing means the caller — resolve it with " <>
-                 "`DpExchange.Core.Config.opt/3`, not `Keyword.get/3`."
+          :nothing_delivered ->
+            flunk(
+              "subscribe/2 with `to: nil` delivered nothing to the caller. A `nil` " <>
+                "subscriber is delivered to nobody, and answers `:ok` while doing it."
+            )
 
-        assert_receive {:dp_exchange, _venue, _payload},
-                       5_000,
-                       "subscribe/2 with `to: nil` delivered nothing to the caller. A `nil` " <>
-                         "subscriber is delivered to nobody, and answers `:ok` while doing it."
+          raised ->
+            flunk(
+              "subscribe/2 raised on `to: nil`: #{inspect(raised)}. A forwarded `nil` is a " <>
+                "caller that said nothing, and nothing means the caller — resolve it with " <>
+                "`DpExchange.Core.Config.opt/3`, not `Keyword.get/3`."
+            )
+        end
       end
     end
   end
@@ -3708,55 +4029,53 @@ defmodule DpExchange.Core.AdapterContract do
     quote location: :keep do
       defp assert_subscription_set_semantics(fake, pairs) do
         opts = arg_value(:opts, {:subscribe, 2})
-        covered = fn -> fake.coverage(opts) |> Map.keys() |> MapSet.new() end
 
         # Needs two symbols the venue actually serves; with one, "added" and "replaced" are
         # the same answer and this assertion could not fail — see
-        # `docs/reference/core/assertion-coverage.md`, "Third axis".
-        [first, second | _rest] = pairs
+        # `docs/reference/core/assertion-coverage.md`, "Third axis". The decision is
+        # `AdapterContract.subscription_set_fault/3`, public so it can be shown to fail.
+        case DpExchange.Core.AdapterContract.subscription_set_fault(fake, pairs, opts) do
+          nil ->
+            :ok
 
-        fake.update_symbols([], opts)
-        fake.subscribe([first], opts)
-        after_first = covered.()
+          {:never_covered, symbol} ->
+            flunk(
+              "the fake reported no coverage for #{inspect(symbol)} after subscribing it, " <>
+                "so every comparison below is between empty sets and this assertion cannot " <>
+                "fail. See assertion 14's message for the two things that cause this."
+            )
 
-        assert MapSet.member?(after_first, first),
-               "the fake reported no coverage for #{inspect(first)} after subscribing it, so " <>
-                 "every comparison below is between empty sets and this assertion cannot " <>
-                 "fail. See assertion 14's message for the two things that cause this."
+          {:subscribe_dropped, dropped} ->
+            flunk(
+              "subscribe/2 dropped #{inspect(dropped)} when a second symbol was " <>
+                "subscribed. It ADDS to the live set — every real Feed in this family " <>
+                "unions — and a fake that replaces certifies consumer code that subscribes " <>
+                "once per symbol and silently keeps only the last. If this fake's " <>
+                "subscribe/2 and update_symbols/2 are the same line, that is why."
+            )
 
-        fake.subscribe([second], opts)
-        after_second = covered.()
+          {:subscribe_missed, symbol} ->
+            flunk("subscribe/2 did not add #{inspect(symbol)} to the live set")
 
-        assert MapSet.subset?(after_first, after_second),
-               "subscribe/2 dropped #{inspect(MapSet.to_list(MapSet.difference(after_first, after_second)))} " <>
-                 "when a second symbol was subscribed. It ADDS to the live set — every real " <>
-                 "Feed in this family unions — and a fake that replaces certifies consumer " <>
-                 "code that subscribes once per symbol and silently keeps only the last. If " <>
-                 "this fake's subscribe/2 and update_symbols/2 are the same line, that is why."
+          {:unsubscribe_left, symbol} ->
+            flunk(
+              "unsubscribe/2 left #{inspect(symbol)} covered — it stops delivery for the " <>
+                "symbols it names"
+            )
 
-        assert MapSet.member?(after_second, second),
-               "subscribe/2 did not add #{inspect(second)} to the live set"
+          {:unsubscribe_overreached, symbol} ->
+            flunk("unsubscribe/2 removed #{inspect(symbol)}, which it was not asked about")
 
-        fake.unsubscribe([first], opts)
-        after_unsub = covered.()
+          {:update_not_taken, symbol} ->
+            flunk("update_symbols/2 did not take: #{inspect(symbol)} is not covered")
 
-        refute MapSet.member?(after_unsub, first),
-               "unsubscribe/2 left #{inspect(first)} covered — it stops delivery for the " <>
-                 "symbols it names"
-
-        assert MapSet.member?(after_unsub, second),
-               "unsubscribe/2 removed #{inspect(second)}, which it was not asked about"
-
-        fake.update_symbols([first], opts)
-        after_update = covered.()
-
-        assert MapSet.member?(after_update, first),
-               "update_symbols/2 did not take: #{inspect(first)} is not covered"
-
-        refute MapSet.member?(after_update, second),
-               "update_symbols/2 left #{inspect(second)} covered. It REPLACES the set — that " <>
-                 "is the whole difference between it and subscribe/2, and a venue where both " <>
-                 "add has one callback doing two jobs and the other doing none."
+          {:update_left, symbol} ->
+            flunk(
+              "update_symbols/2 left #{inspect(symbol)} covered. It REPLACES the set — that " <>
+                "is the whole difference between it and subscribe/2, and a venue where " <>
+                "both add has one callback doing two jobs and the other doing none."
+            )
+        end
       end
     end
   end
@@ -3774,33 +4093,13 @@ defmodule DpExchange.Core.AdapterContract do
             Capabilities.active?(caps, {name, arity}) do
           result = call_on(fake, {name, arity}, endpoint_args(name, arity))
 
-          refute match?({:ok, _value}, result) and carries_process?(result),
+          carries? = DpExchange.Core.AdapterContract.carries_process?(result)
+
+          refute match?({:ok, _value}, result) and carries?,
                  "#{name}/#{arity} answered with a process, port or reference inside: " <>
                    inspect(result, limit: 8)
         end
       end
-    end
-  end
-
-  # The term walk behind `assert_no_process_in_answers/2`, apart so neither block is complex.
-  defp process_walk_helpers do
-    quote location: :keep do
-      defp carries_process?(term) when is_pid(term) or is_port(term) or is_reference(term),
-        do: true
-
-      defp carries_process?(term) when is_tuple(term),
-        do: term |> Tuple.to_list() |> Enum.any?(&carries_process?/1)
-
-      defp carries_process?(term) when is_list(term), do: Enum.any?(term, &carries_process?/1)
-
-      defp carries_process?(%_struct{} = term),
-        do: term |> Map.from_struct() |> carries_process?()
-
-      defp carries_process?(term) when is_map(term),
-        do:
-          Enum.any?(term, fn {key, value} -> carries_process?(key) or carries_process?(value) end)
-
-      defp carries_process?(_scalar), do: false
     end
   end
 

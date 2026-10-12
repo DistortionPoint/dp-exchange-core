@@ -11,8 +11,8 @@ defmodule DpExchange.Core.TelemetryTest do
   #
   # Every test here therefore attaches a real handler and asserts the event arrives. A test
   # that only called the emitter and checked it returned `:ok` would pass just as happily
-
   # against the version that emitted nothing.
+
   # Attaches a real handler and forwards matching events to the test process.
   #
   # **Scoped to one provider, and it has to be.** `:telemetry` handlers are GLOBAL to the
@@ -66,7 +66,7 @@ defmodule DpExchange.Core.TelemetryTest do
 
       for event <- Telemetry.event_prefixes() do
         assert_receive {:telemetry, ^event, _measurements, _metadata},
-                       500,
+                       5_000,
                        "no emitter reached #{inspect(event)} — it is declared and unimplemented"
       end
     end
@@ -183,14 +183,16 @@ defmodule DpExchange.Core.TelemetryTest do
                  provider
                )
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :start], _measurements, start_meta}
+      assert_receive {:telemetry, [:dp_exchange, :request, :start], _measurements, start_meta},
+                     5_000
+
       assert start_meta.provider == provider
       assert start_meta.method == :get
       # The token the caller passed never reaches metadata.
       assert start_meta.endpoint == "https://api.test/v1/ping"
       refute start_meta.endpoint =~ "SECRET"
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :stop], measurements, stop_meta}
+      assert_receive {:telemetry, [:dp_exchange, :request, :stop], measurements, stop_meta}, 5_000
       assert measurements.duration >= 0
       assert stop_meta.status == 200
       assert stop_meta.result == :ok
@@ -205,7 +207,7 @@ defmodule DpExchange.Core.TelemetryTest do
       assert {:error, _reason} =
                request("https://api.test/v1/ping", responding(503, %{error: "down"}), provider)
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :stop], _measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :stop], _measurements, metadata}, 5_000
       assert metadata.result == :error
       # No HTTP status is reported as `nil`, never `0` — a request that never got a status
       # must not put a value in a numeric series that means "not a status at all". A 503
@@ -223,7 +225,9 @@ defmodule DpExchange.Core.TelemetryTest do
         provider
       )
 
-      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], measurements, metadata},
+                     5_000
+
       assert measurements.count == 1
       # The venue's header said 2 SECONDS. One unit across the family is the point of a
       # shared spec; a panel summing a mixture is wrong by a factor of a thousand without
@@ -283,7 +287,9 @@ defmodule DpExchange.Core.TelemetryTest do
 
       assert :ok = DefaultRateLimiter.acquire(provider, 1, opts)
 
-      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :acquire], measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :acquire], measurements, metadata},
+                     5_000
+
       assert measurements.tokens == 1
       assert measurements.wait_ms == 0
       assert metadata.provider == provider
@@ -305,7 +311,7 @@ defmodule DpExchange.Core.TelemetryTest do
       assert {:rate_limited, wait_ms} = DefaultRateLimiter.check(provider, 1, opts)
       assert wait_ms > 0
 
-      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], %{count: 1}, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], %{count: 1}, metadata}, 5_000
       assert metadata.provider == provider
       assert metadata.retry_after_ms == wait_ms
     end
