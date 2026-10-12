@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.89] - 2026-10-12
+
 - **Security: `HttpClient` no longer quotes a refused request into its error.** Mint's
   `{:invalid_header_value, name, value}` carries the header's value (an `Authorization` or
   signature header, typically after a stray newline in a key), and it was printed into the error
