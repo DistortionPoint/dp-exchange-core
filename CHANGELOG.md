@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.82] - 2026-10-12
+
 ### Changed (documentation of the family contract; no behaviour in Core changes)
 
 - **Market-data conventions MD1 to MD11 are documented** on `c:get_historical_prices/4`,
