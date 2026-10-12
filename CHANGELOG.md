@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.85] - 2026-10-12
+
 ### Changed
 
 - **Conformance decisions that lived only inside `test` bodies are public functions, and each
