@@ -21,6 +21,12 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertion 34 failed every venue that declares no `:market` order type.** With no market
+  type `market_price_requests/2` builds no requests, and `market_price_fault([])` demanded a
+  price refusal anyway. An empty answer list is now `nil`: there was no price to refuse.
+
 ## [0.3.79] - 2026-10-12
 
 ### Added

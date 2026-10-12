@@ -648,6 +648,11 @@ defmodule DpExchange.Core.AdapterContract do
       nothing showed what the venue does with the price.
   """
   @spec market_price_fault([term()]) :: nil | :price_never_refused | {:answered, term()}
+  # No answers: the venue declares no `:market`, so `market_price_requests/2` built nothing and
+  # there is no price to refuse. Demanding a refusal there failed every venue without market
+  # orders (Gemini) for an order type it already refuses as unsupported.
+  def market_price_fault([]), do: nil
+
   def market_price_fault(answers) when is_list(answers) do
     case Enum.find(answers, &(not market_price_answer?(&1))) do
       nil ->

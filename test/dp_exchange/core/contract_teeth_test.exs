@@ -1120,7 +1120,8 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       # Only ever refused for the duration: nothing showed what the price does.
       assert AdapterContract.market_price_fault([duration]) == :price_never_refused
-      assert AdapterContract.market_price_fault([]) == :price_never_refused
+      # No market type declared: nothing was asked, so nothing is owed.
+      assert AdapterContract.market_price_fault([]) == nil
 
       assert AdapterContract.market_price_fault([{:raised, %ArgumentError{}}, price]) ==
                {:answered, {:raised, %ArgumentError{}}}
