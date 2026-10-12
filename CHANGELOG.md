@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.83] - 2026-10-12
+
 ### Added
 
 - **Conformance assertions 36 to 39** lock the tick R market-data conventions into
