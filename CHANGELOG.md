@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.87] - 2026-10-12
+
 - **`PollingFeed`: a fetch task killed from outside took the feed down with it.** Each fetch
   runs in a task linked to the feed, and the feed did not trap exits, so a task killed by a
   heap limit, a crashing process it had linked to, or `Process.exit/2` killed the feed. The
