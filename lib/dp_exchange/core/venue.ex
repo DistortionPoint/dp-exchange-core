@@ -213,8 +213,19 @@ defmodule DpExchange.Core.Venue do
   A write that **may have reached the venue** and whose success is not proven:
   `{:order_unconfirmed, client_order_id_or_nil, reason}`. Never a bare `{:error, _}`, and never
   `{:refused, _}`, for these outcomes. See `c:place_order/3`.
+
+  The id is the `client_order_id` actually sent, so the caller can look the order up:
+
+    * a `String.t()` for a single order;
+    * a **list of ids** for a venue's batch placement (Webull's batch endpoint), where one
+      request carries several client order ids and any of them may have been placed. The list
+      holds every id actually sent, in request order, so the caller reconciles each;
+    * `nil` when the venue has no client order id and none was generated.
+
+  A caller matches on the shape: a binary is one order to look up, a list is several, and
+  `nil` means there is nothing to look up by and the caller reconciles from `get_orders/2`.
   """
-  @type order_unconfirmed :: {:order_unconfirmed, String.t() | nil, term()}
+  @type order_unconfirmed :: {:order_unconfirmed, String.t() | [String.t()] | nil, term()}
 
   @typedoc """
   A **non-order write** that may have reached the venue and whose success is not proven:
@@ -353,6 +364,19 @@ defmodule DpExchange.Core.Venue do
 
   Conformance assertion 33 holds a venue's Fake to this for `get_price/2` and
   `get_top_of_book/2`.
+
+  ## What the quote's price and times mean (MD6, MD7, MD8)
+
+  `Quote.price` is a **traded** price. A traded price that is `0` or negative refuses the
+  reply; it is never passed through. `Quote.venue_time` is the venue's stated time **of the
+  last trade**, and `nil` when the venue states none. It is never an HTTP `Date` header, the
+  time a message was sent or assembled, or the time of another event (a quote's time is not
+  a trade's). `observed_at` is the package's own read time.
+
+  `Quote.volume_window` is `:print` **only when every print is delivered**. A conflated
+  stream (one that merges several trades into one update) reports the venue's cumulative
+  volume as `:running_total`, exactly as its REST quote does. It never reports the last
+  trade's size as `:print`, because summing those drops every trade the conflation skipped.
   """
   @callback get_price(symbol(), keyword()) :: result(Types.Quote.t())
 
@@ -368,6 +392,56 @@ defmodule DpExchange.Core.Venue do
   all. A series read in the wrong order still yields plausible returns and indicators, just
   wrong ones. A venue that has only one candle, or none, satisfies this trivially, which
   is why the conformance suite does not check it against a fake that answers with one.
+
+  ## The still-forming bar is not returned (MD1)
+
+  A bar is **in progress** when `opened_at + width > now`, where `now` is the venue's clock
+  if it states one and `DateTime.utc_now/0` otherwise. An in-progress bar is **not returned**
+  unless the caller passes `include_partial: true` (default `false`). A bar that is still
+  forming has a close that is only the latest price and a volume that is still growing;
+  stored as a finished bar it is a plausible, wrong value that is never corrected.
+
+  `Types.Candle` has no flag marking a partial bar, so with `include_partial: true` the last
+  bar is returned as-is and **may still change** on the next call. It is the only bar that
+  can be partial, and it is always the last. (Webull's former `real_time:` option is now
+  `include_partial:`.)
+
+  ## The range (MD2)
+
+  `opts[:start]` is **inclusive** and `opts[:end]` is **exclusive**, both on `opened_at`: a
+  bar whose `opened_at` equals `:end` is not returned and one equal to `:start` is. An absent
+  `:end` means *now*, and is never a venue default that ends earlier (a venue whose
+  parameter defaults to some past date is sent `now` explicitly). A range the venue cannot
+  return in one response is **walked to completion** or refused
+  `{:error, {:range_too_wide, detail}}`; it is never returned short, because a series that
+  silently stops early still looks like a series. A walk that stops at a bound the package
+  keeps is `{:error, :history_truncated}`.
+
+  ## `opened_at` is the bucket start (MD3)
+
+  `opened_at` is the **start** of the bucket, aligned to the timeframe's width
+  (`DpExchange.Core.Timeframe.aligned?/2`). A venue whose bar time is not provably the open
+  time checks alignment when it decodes: a bar not aligned to its width refuses the whole
+  reply, `{:error, {:unaligned_candle, time}}` (`time` is the venue's value as given). It does
+  not round, shift or guess; a close-stamped series misread as open-stamped is off by one
+  whole interval and every value in it still looks right. Which venues stamp their bars at
+  the open is recorded as **unmeasured** in that venue's documentation until it has been
+  checked against the live endpoint.
+
+  Equity **daily and weekly** bars are stamped by the venue at exchange-local midnight (or
+  another exchange-local instant). They are mapped to `00:00:00` UTC **of the same session
+  date**: the session *date* is the fact the venue states, and the instant is an artefact of
+  the zone it was written in. Converting the instant to UTC would move a New York bar onto the
+  previous or next calendar day depending on the season.
+
+  ## Limits and options a venue cannot honour (MD4, MD11)
+
+  `opts[:limit]` is sent to the venue where it has such a parameter. Above the venue's
+  documented maximum it is `{:error, {:invalid_option, :limit, value}}`; where the venue has
+  no such parameter it is `{:error, {:unsupported_option, :limit}}`. It is never accepted and
+  then ignored, and never applied to a page already fetched. The maximum a package declares in
+  `c:capabilities/0` (`max_candles_per_request`) is labelled as **documented** when it comes
+  from the vendor's page and **measured** only when it was probed.
   """
   @callback get_historical_prices(symbol(), String.t(), keyword(), keyword()) ::
               result([Types.Candle.t()])
@@ -389,6 +463,17 @@ defmodule DpExchange.Core.Venue do
 
   A `nil`, non-string or blank `symbol` is `{:error, {:invalid_symbol, symbol}}`, before
   credentials: see `c:get_price/2`.
+
+  ## Prices, sides and times (MD6, MD7)
+
+  A bid or ask price of **`0` means no resting order on that side**: that side's price and
+  size are `nil`, not `0`. A price that is **present but unreadable** (not a number, negative,
+  NaN) refuses the reply; it is never turned into `nil`, which would claim an empty side.
+
+  `TopOfBook.venue_time` is the venue's stated time **of that quote**, and `nil` when the
+  venue states none. It is never an HTTP `Date` header, the time a message was assembled or
+  sent, or a different event's time such as the last trade's. Callers needing a time read
+  `observed_at`.
   """
   @callback get_top_of_book(symbol(), keyword()) :: result(Types.TopOfBook.t())
 
@@ -814,7 +899,34 @@ defmodule DpExchange.Core.Venue do
   @doc "The roles this credential holds, as the venue defines them."
   @callback get_roles(keyword()) :: result(map())
 
-  @doc "The order book for `symbol`, best price first on both sides."
+  @doc """
+  The order book for `symbol`, best price first on both sides.
+
+  ## `opts[:depth]` (MD5)
+
+  The depth option is `:depth`, **levels per side**, on every venue. A venue whose own
+  parameter has another name (Coinbase's `limit`) maps `:depth` onto it; its old `:limit`
+  option is `{:error, {:unsupported_option, :limit}}`. A `:depth` above the venue's maximum
+  is `{:error, {:invalid_option, :depth, value}}`.
+
+  ## Levels that are unreadable, empty or invalid (MD5, MD6)
+
+    * A level that cannot be read refuses the **whole book**, on REST and on a stream. It is
+      never skipped, because a book with a level missing is a different book.
+    * In a **snapshot**, a level with size `<= 0` is dropped: it is no liquidity. (A *delta*
+      still carries size `0`, which means remove that price; see `Types.OrderBookDelta`.)
+    * A **negative** size, or a price `<= 0`, refuses the book.
+    * A side that is present but is not a list refuses the book.
+
+  `OrderBook.venue_time` is the venue's stated time of the book and `nil` when it states
+  none, never a `Date` header or a send time (MD7).
+
+  ## Stream gaps (MD9)
+
+  A snapshot-then-delta stream that detects a gap in the venue's sequence resubscribes the
+  affected symbols for a fresh snapshot, and emits a notice once. A frame whose sequence is
+  less than or equal to the last one applied is dropped, never applied.
+  """
   @callback get_order_book(symbol(), keyword()) :: result(Types.OrderBook.t())
 
   @doc """
@@ -831,7 +943,17 @@ defmodule DpExchange.Core.Venue do
   will error. Venues with no concept of busts have nothing to exclude.
 
   `opts[:since]` and `opts[:limit]` narrow the window where a venue supports them, and go
-  to the venue rather than being applied to the page it returned.
+  to the venue rather than being applied to the page it returned (MD4). Where the venue has
+  no such parameter the option is `{:error, {:unsupported_option, key}}`, and above its
+  documented maximum `:limit` is `{:error, {:invalid_option, :limit, value}}`: an option is
+  honoured or refused, never ignored. A `:since` read that returns exactly `limit` rows may
+  have a hole between `since` and the first row returned, and is
+  `{:error, :history_truncated}` rather than a short answer.
+
+  A trade's `:price` that is `<= 0` refuses that reply (MD6). `Trade.side` is the **taker's**
+  side (MD10). Where the venue does not document what its side code means (Webull's `B` and
+  `S`), `side` is `nil` if the type allows it; where a package keeps a mapping it records it
+  as **unmeasured** in its docs and CHANGELOG.
 
   **Oldest first, by each trade's own `:timestamp`**, as `get_historical_prices` is, and
   for the same reason. Venues send the tape newest first, oldest first, or without saying,
@@ -963,8 +1085,12 @@ defmodule DpExchange.Core.Venue do
   1. the request is a map: `{:error, {:invalid_order_request, request}}`. A non-map never
      raises `BadMapError`;
   2. no key the venue's builder does not read: `{:error, {:unsupported_order_field, key}}`.
-     That includes `:client_order_id` on a venue with no idempotency key. A key whose value is
-     `nil` is a forwarded unset option and counts as absent, as everywhere in this family;
+     That includes `:client_order_id` on a venue with no idempotency key. **A key the builder
+     does not read is refused whatever its value, `nil` included**: `%{stop_price: nil}` on a
+     venue with no stop price is `{:unsupported_order_field, :stop_price}`. (An order request
+     is not a forwarded option list: a `nil` there is a field the caller wrote, and dropping
+     it would place an order other than the one described.) A key the builder does read, with
+     a `nil` value, is judged by that key's own rule below;
   3. `:symbol`: `{:error, {:invalid_symbol, value}}` for `nil` or an absent key, a non-string
      or a blank one;
   4. `:side`: `{:error, {:missing_field, :side}}` when absent, otherwise
@@ -977,10 +1103,17 @@ defmodule DpExchange.Core.Venue do
   6. `:time_in_force`: `{:error, {:missing_field, :time_in_force}}` for a type whose venue
      request carries a duration, `{:error, {:unexpected_field, :time_in_force}}` for a type
      whose request carries none, `{:error, {:unsupported_order_combination, type, tif}}` for
-     a pair `capabilities/0` does not serve. A good-till-date order without its expiry key is
-     `{:error, {:missing_field, key}}`;
-  7. `:quantity`: `{:error, {:missing_field, :quantity}}` when absent, otherwise
-     `{:error, {:invalid_quantity, value}}`;
+     a pair `capabilities/0` does not serve (a duration the venue does not serve **for that
+     order type** is this, not a venue-worded atom). A good-till-date order without its
+     expiry key is `{:error, {:missing_field, key}}`, and that check belongs to this step: it
+     is made with the time in force and **before** any price field;
+  7. the sizing, `:quantity` or (where the venue takes it) `:quote_size`. Neither given is
+     `{:error, {:missing_field, :quantity}}`. Both given is
+     `{:error, {:unexpected_field, :quote_size}}`. A sizing the order type cannot take (a
+     cash-sized stop order, say) is `{:error, {:unexpected_field, key}}` naming the sizing
+     key given. These are tagged tuples; a bare atom (`:ambiguous_order_size`,
+     `:missing_order_size`) is not a family answer. A sizing value that is present but
+     unusable is `{:error, {:invalid_quantity, value}}`;
   8. the price fields: `{:error, {:missing_field, key}}` for one the type needs and the
      request lacks, otherwise `{:error, {:invalid_price, value}}` and
      `{:error, {:invalid_stop_price, value}}`. A field the order type does not use is
@@ -1011,7 +1144,22 @@ defmodule DpExchange.Core.Venue do
   exists"). A failure decided before sending (everything above, our own rate limiter
   refusing, a signing failure) stays a plain `{:error, reason}` and is **not** wrapped.
 
-  A 2xx body that confirms the order but lacks fields is still `{:ok, %Order{}}`.
+  A 2xx placement that carries **no readable order id** is `order_unconfirmed`, never
+  `{:ok, %Order{id: nil}}`: an order struct without an id cannot be looked up, cancelled or
+  reconciled. A 2xx body that confirms the order (it carries the id) but lacks other fields
+  is still `{:ok, %Order{}}`.
+
+  ## A 4xx is a refusal only on the first attempt (DV6)
+
+  On **every** venue, a 4xx answered to the **first** (only) attempt is
+  `{:refused, reason}`: the venue read the request and declined it, so no order exists. That
+  includes 409, 415, 422 and any other 4xx the venue does not document. The one exception is
+  **429**, which is a plain `{:error, reason}` (the venue did not look at the request, and
+  retrying later is correct). A 4xx answered to an internal **retry** is
+  `order_unconfirmed`, not a refusal: the first attempt may have been placed, and the retry's
+  4xx (a duplicate `client_order_id`) is evidence of that, not of its absence. A package that
+  sends once (`retry_attempts: 1`, or no idempotency key) has only a first attempt.
+  `t:order_unconfirmed/0` documents the shape of the id, which is a list for a batch.
 
   Conformance assertion 34 holds a venue's Fake to items 1, 2, 5 and 8 above.
   """
@@ -1032,6 +1180,10 @@ defmodule DpExchange.Core.Venue do
   either an order or the venue's refusal of that one. A package must not collapse that into
   a single ok-or-error: a caller told "the batch failed" when four of five were placed has
   four positions it does not know about.
+
+  A batch that may have reached the venue is
+  `{:error, {:order_unconfirmed, [client_order_id], reason}}`: the id is the **list** of
+  every client order id sent, in request order (`t:order_unconfirmed/0`).
 
   Venues cap the size — Webull at 50 — and a request over the cap is refused by the venue,
   not split here. Splitting would turn one atomic request into several and quietly undo the
@@ -1130,7 +1282,9 @@ defmodule DpExchange.Core.Venue do
   As for `c:place_order/3`: a transport error after sending, a 5xx, or a 2xx with an
   unreadable body or no new order id is
   `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`. Never a bare error and
-  never a refusal.
+  never a refusal. A 4xx answered to the first (only) attempt is `{:refused, reason}` except
+  429, which is a plain `{:error, reason}`; a 4xx answered to an internal retry is
+  unconfirmed (DV6, see `c:place_order/3`).
 
   **A replace the venue accepted whose read-back then failed** is
   `{:error, {:replace_accepted_unread, order_id, reason}}`. The amendment is in force; only
@@ -1277,6 +1431,29 @@ defmodule DpExchange.Core.Venue do
 
   Conformance assertion 32 holds a venue's Fake to 1 and 2, and its facade to 1 and 2 with no
   feed running.
+
+  ## What the pushed values mean is what the pull endpoints mean
+
+  The market-data rules of `c:get_price/2`, `c:get_top_of_book/2`, `c:get_order_book/2`,
+  `c:get_trades/2` and `c:get_historical_prices/4` bind the stream as they bind REST, and the
+  Fake as well:
+
+    * `Quote.venue_time` and `TopOfBook.venue_time` are the venue's stated time of the trade
+      or of the quote, `nil` when none is stated. A socket envelope's timestamp, a message
+      assembly time and another event's time are not substitutes (MD7).
+    * `Quote.volume_window` is `:print` only when **every** print is delivered. A conflated
+      stream reports cumulative volume as `:running_total`, never the last size as `:print`
+      (MD8).
+    * A book level that cannot be read refuses the whole book; a snapshot level of size `<= 0`
+      is dropped; a negative size or a price `<= 0` refuses the book (MD5, MD6).
+    * A delta stream that detects a sequence gap resubscribes the affected symbols for a fresh
+      snapshot and emits a notice once; a frame whose sequence is `<=` the last applied is
+      dropped, never applied (MD9).
+    * A bar delivered while it is still forming is not a finished bar. Unless the caller
+      passed `include_partial: true`, only closed bars are pushed (MD1).
+    * An option the stream cannot honour is `{:error, {:unsupported_option, key}}` or
+      `{:error, {:invalid_option, key, value}}` from the call that was given it, never
+      ignored (MD4).
   """
   @callback subscribe([symbol()], keyword()) :: :ok | {:error, term()}
 

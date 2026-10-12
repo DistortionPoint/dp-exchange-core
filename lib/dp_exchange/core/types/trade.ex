@@ -15,6 +15,11 @@ defmodule DpExchange.Core.Types.Trade do
   package mapping it to "the maker was selling" inverts every entry while every number
   stays real.
 
+  Where the venue does not document what its side code means (Webull's `B` and `S`), `:side`
+  is `nil` — this type allows it — rather than a mapping nobody has checked. A package that
+  keeps such a mapping records it as **unmeasured** in its docs and CHANGELOG. A trade
+  `:price` of `0` or less is not a traded price and refuses the reply.
+
   ## `:broken` — a trade the exchange cancelled
 
   Exchanges bust erroneous prints, and a broken trade **did not stand**: its price is not a

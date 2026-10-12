@@ -26,6 +26,15 @@ defmodule DpExchange.Core.Types.TopOfBook do
   Several BBO endpoints publish none at all — Robinhood's documents exactly `symbol`, `bid`
   and `ask`.
 
+  `:venue_time` is the venue's stated time **of that quote** and nothing else: never an HTTP
+  `Date` header, a message's send or assembly time, or another event's time — the last
+  trade's `last_trade_time`, a basic-quote `timestamp`. When the venue states no time for the
+  quote it is `nil`.
+
+  A bid or ask of `0` from the venue means no resting order on that side, so that side's price
+  and size are `nil`. A bid or ask that is present but unreadable refuses the reply; it is not
+  turned into `nil`.
+
   `:observed_at` is when **this package read it**, and is always present. A top-of-book is a
   real-time value: it describes the book at the instant of the call and is stale
   immediately. Recording when it was observed is not a substitute for a venue timestamp —

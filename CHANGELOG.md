@@ -21,6 +21,52 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed (documentation of the family contract; no behaviour in Core changes)
+
+- **Market-data conventions MD1 to MD11 are documented** on `c:get_historical_prices/4`,
+  `c:get_price/2`, `c:get_top_of_book/2`, `c:get_order_book/2`, `c:get_trades/2` and
+  `c:subscribe/2`, and in the `Candle`, `Quote`, `TopOfBook`, `OrderBook` and `Trade`
+  moduledocs, plus `usage-rules/adapter.md`. They bind REST, streams and Fakes:
+  - **BREAKING for venues:** the in-progress candle is returned only with
+    `include_partial: true` (default `false`); Webull stock's `real_time:` becomes
+    `include_partial:`.
+  - **BREAKING for venues:** `:start` is inclusive and `:end` exclusive on `opened_at`; an
+    absent `:end` is now; a range one response cannot hold is walked or
+    `{:error, {:range_too_wide, _}}`.
+  - `opened_at` is the bucket start; a bar not aligned to its width from a venue whose time
+    is not provably the open is `{:error, {:unaligned_candle, time}}`. Equity daily and weekly
+    bars map to 00:00 UTC of the same session date.
+  - **BREAKING for venues:** `:depth` is levels per side on every venue; Coinbase's `:limit`
+    on the order book is `{:error, {:unsupported_option, :limit}}`.
+  - An option a venue cannot honour is `{:error, {:unsupported_option, key}}` or
+    `{:error, {:invalid_option, key, value}}`, never ignored. A `since:` trade read that
+    returns exactly `limit` rows is `{:error, :history_truncated}`.
+  - Book levels: unreadable level, negative size, price `<= 0` or a non-list side refuses the
+    book; a snapshot level of size `<= 0` is dropped. Traded prices `<= 0` refuse; a bid or
+    ask of `0` is `nil`.
+  - `Quote.venue_time` is the venue's time of the last trade and `TopOfBook.venue_time` its
+    time of that quote, `nil` when none is stated, never a `Date` header, envelope or send
+    time. `volume_window: :print` only when every print is delivered; a conflated stream
+    reports `:running_total`.
+  - Delta streams resubscribe on a sequence gap and drop stale frames. `Trade.side` is the
+    taker's; undocumented side codes (Webull `B`/`S`) are `nil` or recorded as unmeasured.
+  - Numbers declared from vendor docs are labelled documented, not measured.
+  - Not asserted by the conformance suite yet: the venues are still changing.
+- **Order-request documentation updated** on `c:place_order/3`, `c:replace_order/4` and
+  `c:place_orders/3`: an unknown request key is refused whatever its value, `nil` included
+  (DV1); sizing refusals are tagged tuples (`{:missing_field, :quantity}`,
+  `{:unexpected_field, :quote_size}` or the sizing key) (DV4); a 2xx placement with no
+  readable id is `:order_unconfirmed` (DV5); a 4xx answered to the first attempt is
+  `{:refused, _}` except 429, and one answered to a retry is unconfirmed (DV6); a GTD expiry
+  is checked with the time in force, before price fields (DV10). This replaces the 0.3.79
+  text that said a `nil`-valued key counts as absent.
+
+### Changed
+
+- **`t:DpExchange.Core.Venue.order_unconfirmed/0` widened:** the id is
+  `String.t() | [String.t()] | nil`. A list is the client order ids of a batch placement
+  (Webull), in request order. Type only; no callback result changes shape for single orders.
+
 ## [0.3.81] - 2026-10-12
 
 ### Fixed

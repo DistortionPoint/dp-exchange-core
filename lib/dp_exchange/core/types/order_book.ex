@@ -26,6 +26,17 @@ defmodule DpExchange.Core.Types.OrderBook do
   `dp_exchange_schwab`'s Streamer book is the model for `:venue_time`: it reads the venue's
   `snapshot_time` and fails closed when absent, rather than substituting.
 
+  ## Sizes and prices
+
+  In a snapshot a level whose size is `<= 0` is **dropped**: it is no liquidity and does not
+  belong in the book. A **negative** size, or a price `<= 0`, refuses the whole book, and so
+  does a level that cannot be read, or a side that is present but not a list. An unreadable
+  level is never skipped, because a book missing a level is a different book. (A delta,
+  `Types.OrderBookDelta`, is different: size `0` there means "remove this price".) The depth a
+  caller asks for is the `:depth` option, in levels per side, on every venue.
+
+  ## Sequence
+
   `:sequence` is the venue's book sequence number where it publishes one, for callers
   reconciling snapshots against a delta stream, and `nil` where it does not.
   """

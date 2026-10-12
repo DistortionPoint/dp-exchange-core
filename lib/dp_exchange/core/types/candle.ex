@@ -26,6 +26,27 @@ defmodule DpExchange.Core.Types.Candle do
   subtracts the interval on the way in; a venue whose convention is unclear is a venue whose
   candles this package should not be shipping.
 
+  ## `:opened_at` is the bucket start, aligned to the width
+
+  `:opened_at` is the **start** of the bucket and is aligned to the timeframe's width
+  (`DpExchange.Core.Timeframe.aligned?/2`). A venue whose bar time is not provably the open
+  time checks that on decode and refuses a reply holding a bar that is not aligned,
+  `{:error, {:unaligned_candle, time}}`, rather than rounding it into place.
+
+  **Equity daily and weekly bars** are stamped by the venue at exchange-local midnight (or
+  another local instant). They are mapped to `00:00:00` UTC **of the same session date**.
+  The date is the fact; the instant is an artefact of the zone it was written in, and
+  converting the instant would put a New York session on the neighbouring calendar day
+  depending on the season. Two venues' daily series therefore join on `opened_at` exactly.
+
+  ## A bar may still be forming
+
+  A bar is **in progress** while `opened_at + width > now`. `get_historical_prices/4` does not
+  return one unless the caller passes `include_partial: true` (default `false`). This struct
+  has **no flag** saying a bar is partial, so with `include_partial: true` the last bar is
+  as-of the call and **may still change**: do not store it as a finished bar. Only the last
+  bar of a series can be in progress.
+
   ## `:volume` is `nil` when the venue publishes none
 
   Never `0`. One venue in this family reports no crypto volume anywhere, and a `0` there

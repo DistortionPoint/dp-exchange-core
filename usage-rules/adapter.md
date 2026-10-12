@@ -309,6 +309,33 @@ Two things follow that are worth stating because they are easy to get backwards:
 - **An option this package does not recognise is ignored, not an error.** A consumer moving
   between venues carries options that only one of them reads, and refusing them would make
   the uniform facade unusable for the thing it is for.
+- **A family option the venue cannot honour is refused, not ignored.** The market-data
+  options below have one meaning on every venue. A venue that has no such parameter answers
+  `{:error, {:unsupported_option, key}}`; one that has it but with a smaller maximum answers
+  `{:error, {:invalid_option, key, value}}`. Silently dropping `limit:` or `depth:` returns a
+  different amount of data than was asked for, and every value in it looks right.
+
+### Market-data conventions (MD1 to MD11), binding on REST, streams and Fakes
+
+Documented on the `Core.Venue` callbacks and the `Types.*` moduledocs; summarised here.
+
+| Option / rule | Meaning |
+|---|---|
+| `include_partial:` (candles, default `false`) | The still-forming bar (`opened_at + width > now`, venue clock if stated) is returned only with `true`. `Candle` has no partial flag: that last bar may still change. Webull stock's `real_time:` is now `include_partial:` |
+| `:start` / `:end` | `:start` inclusive, `:end` exclusive, on `opened_at`. Absent `:end` is *now*, never a venue default that ends earlier. A range one response cannot hold is walked, or `{:error, {:range_too_wide, _}}`, never returned short |
+| `opened_at` | Bucket start, aligned to the width. A bar not provably open-stamped is checked on decode: `{:error, {:unaligned_candle, time}}`. Equity daily and weekly bars map to 00:00 UTC of the **same session date** |
+| `limit:` (candles, trades), `since:` (trades) | Sent to the venue. Above the maximum `{:invalid_option, :limit, v}`; no such parameter `{:unsupported_option, :limit}`. A `since:` read returning exactly `limit` rows is `{:error, :history_truncated}` |
+| `depth:` (order book) | Levels per side on every venue. Coinbase's old `limit:` is `{:unsupported_option, :limit}` |
+| Book levels | Unreadable level, negative size, price `<= 0`, or non-list side refuses the whole book. A snapshot level of size `<= 0` is dropped |
+| Prices | A traded price (`Quote`, `Trade`, candle OHLC) `<= 0` refuses. A bid or ask of `0` is no resting order: `nil` price and size. A present, unreadable bid or ask refuses |
+| `venue_time` | `Quote`: the venue's time of the last trade. `TopOfBook`: the venue's time of that quote. `nil` if none stated. Never a `Date` header, an envelope or send time, or another event's time |
+| `volume_window: :print` | Only when every print is delivered. A conflated stream reports cumulative volume as `:running_total` |
+| Stream gaps | A delta stream resubscribes affected symbols for a fresh snapshot on a sequence gap and notices once. Sequence `<=` the last applied is dropped |
+| `Trade.side` | The taker's side. Undocumented venue codes (Webull `B`/`S`) are `nil`, or recorded as unmeasured |
+| Declared numbers | A `capabilities/0` number from vendor docs is labelled documented, not measured (Webull `max_candles_per_request: 1200`) |
+
+The conformance suite does not assert these yet; each venue holds itself to them in its own
+tests.
 
 ### A forwarded `opts` turns "never configured" into `key: nil`, not into absence
 
@@ -772,9 +799,21 @@ to them (and, for 32, your real facade on the no-feed path). A callback you decl
   checks come from `endpoint_opts:`; the id is also tried with none, since it must be
   refused first.
 - **A write that may have reached the venue is not an ordinary error.** `place_order/3` and
-  `replace_order/4` answer `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`;
+  `replace_order/4` answer `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`
+  (the id is a **list of ids** for a batch placement, Webull's);
   every other state-changing write answers `{:error, {:write_unconfirmed, key_or_nil,
   reason}}`. Neither is a bare `{:error, _}` (a caller retries those) or a `{:refused, _}`.
+  A 2xx placement with no readable order id is unconfirmed, never `{:ok, %Order{id: nil}}`.
+  A 4xx answered to the **first** (only) attempt is `{:refused, _}` on every venue (409, 415,
+  422 and any other 4xx included) except 429, which is a plain `{:error, _}`; a 4xx answered
+  to an internal **retry** is unconfirmed.
+- **Order-request refusals are tagged tuples, and a `nil`-valued unknown key is refused.**
+  `%{stop_price: nil}` on a venue that reads no `:stop_price` is
+  `{:unsupported_order_field, :stop_price}`. Sizing: neither `quantity` nor `quote_size` is
+  `{:missing_field, :quantity}`, both is `{:unexpected_field, :quote_size}`, and a sizing the
+  type cannot take is `{:unexpected_field, key}`. A time in force the venue does not serve for
+  a type is `{:unsupported_order_combination, type, tif}`, and a good-till-date expiry is
+  checked with the time in force, before the price fields.
   A write is retried internally only under an idempotency key the venue honours; a cancel
   is sent once. These are documented on the callbacks (rules W1 to W7 for non-order
   writes) and are not yet asserted by the suite; hold your venue to them in its own tests.

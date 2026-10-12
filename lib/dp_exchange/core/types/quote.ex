@@ -35,6 +35,11 @@ defmodule DpExchange.Core.Types.Quote do
     not an omission: it says the venue did not date this.
   * **`:observed_at`** — when this package read it. Always present, never `nil`.
 
+  **`:venue_time` is the venue's stated time of the last trade** `:price` came from — not of
+  a quote, and never an HTTP `Date` header, a message's send or assembly time, a socket
+  envelope's timestamp, or another event's time. Where the venue states no trade time it is
+  `nil`.
+
   `TopOfBook` has had exactly this shape from the start, and its own doc already explained
   why. This is that decision finishing its journey to the other two payload types.
 
@@ -75,7 +80,10 @@ defmodule DpExchange.Core.Types.Quote do
   is now stated on every quote that carries a volume:
 
   * **`:print`** — the size of the one trade `:price` came from. Sum these for an interval's
-    volume.
+    volume. **Only valid when every print is delivered.** A conflated stream (several trades
+    merged into one update, as Schwab's `LEVELONE` is) skips prints, so summing its last
+    sizes undercounts silently; such a stream reports the venue's cumulative volume as
+    `:running_total`, the same as its REST quote.
   * **`:running_total`** — a cumulative total that the venue resets at a boundary of its
     own (a trading day, a session). **Difference consecutive values, never sum them**, and
     treat a decrease as a reset.
