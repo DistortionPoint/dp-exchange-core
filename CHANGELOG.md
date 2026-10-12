@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- Docs: docs build is warning-free (18 references fixed).
+
 ## [0.3.85] - 2026-10-12
 
 ### Changed
@@ -104,7 +106,7 @@ an acceptable changelog line.
   validates `:depth` but returns a fixed ladder now fails 38 (expected: Gemini, Webull).
   Decisions are public functions (`probe_timeframe/1`, `candle_series_fault/3`,
   `range_fault/3`, `book_depth_fault/2`, `book_limit_fault/2`, `market_value_fault/1`, ...).
-- **MD3 is narrowed for session-traded instruments** (documented on `c:get_historical_prices/4`
+- **MD3 is narrowed for session-traded instruments** (documented on `c:DpExchange.Core.Venue.get_historical_prices/4`
   and `Candle`): crypto stays strict on the UTC grid; for equities, options, futures and events
   widths of 30 minutes and under stay strict, wider intraday widths need only 30-minute
   alignment (sessions open 09:30 ET), daily and longer map to 00:00 UTC of the session date.
@@ -114,9 +116,10 @@ an acceptable changelog line.
 
 ### Changed (documentation of the family contract; no behaviour in Core changes)
 
-- **Market-data conventions MD1 to MD11 are documented** on `c:get_historical_prices/4`,
-  `c:get_price/2`, `c:get_top_of_book/2`, `c:get_order_book/2`, `c:get_trades/2` and
-  `c:subscribe/2`, and in the `Candle`, `Quote`, `TopOfBook`, `OrderBook` and `Trade`
+- **Market-data conventions MD1 to MD11 are documented** on `c:DpExchange.Core.Venue.get_historical_prices/4`,
+  `c:DpExchange.Core.Venue.get_price/2`, `c:DpExchange.Core.Venue.get_top_of_book/2`,
+  `c:DpExchange.Core.Venue.get_order_book/2`, `c:DpExchange.Core.Venue.get_trades/2` and
+  `c:DpExchange.Core.Venue.subscribe/2`, and in the `Candle`, `Quote`, `TopOfBook`, `OrderBook` and `Trade`
   moduledocs, plus `usage-rules/adapter.md`. They bind REST, streams and Fakes:
   - **BREAKING for venues:** the in-progress candle is returned only with
     `include_partial: true` (default `false`); Webull stock's `real_time:` becomes
@@ -143,8 +146,8 @@ an acceptable changelog line.
     taker's; undocumented side codes (Webull `B`/`S`) are `nil` or recorded as unmeasured.
   - Numbers declared from vendor docs are labelled documented, not measured.
   - Not asserted by the conformance suite yet: the venues are still changing.
-- **Order-request documentation updated** on `c:place_order/3`, `c:replace_order/4` and
-  `c:place_orders/3`: an unknown request key is refused whatever its value, `nil` included
+- **Order-request documentation updated** on `c:DpExchange.Core.Venue.place_order/3`,
+  `c:DpExchange.Core.Venue.replace_order/4` and `c:DpExchange.Core.Venue.place_orders/3`: an unknown request key is refused whatever its value, `nil` included
   (DV1); sizing refusals are tagged tuples (`{:missing_field, :quantity}`,
   `{:unexpected_field, :quote_size}` or the sizing key) (DV4); a 2xx placement with no
   readable id is `:order_unconfirmed` (DV5); a 4xx answered to the first attempt is
@@ -262,7 +265,7 @@ an acceptable changelog line.
 
 ### Fixed
 
-- **`Config.find_override/1` works on OTP before 26.2.** 0.3.77 read one dictionary key with
+- **`DpExchange.Core.Config.find_override/1` works on OTP before 26.2.** 0.3.77 read one dictionary key with
   `Process.info(pid, {:dictionary, key})`, an item OTP added in 26.2; Elixir 1.18 still runs on
   OTP 25 and 26.0-26.1, where it raised `ArgumentError`. On such a runtime the whole
   dictionary is read, as before 0.3.77. CI runs OTP 28 only, so that path is unmeasured.
@@ -275,7 +278,7 @@ an acceptable changelog line.
 
 ### Fixed
 
-- **`Config.find_override/1` reads one key from each `$callers` ancestor, not its whole
+- **`DpExchange.Core.Config.find_override/1` reads one key from each `$callers` ancestor, not its whole
   process dictionary.** `Process.info(pid, :dictionary)` copied every entry on each lookup,
   and `HttpClient` looks up several keys per request, so a call from a Task under a process
   with a large dictionary paid for that copy every time. Same resolution order and result.
@@ -608,7 +611,7 @@ an acceptable changelog line.
   that is not a non-negative integer,** before sending. `"3"` sorts above every integer, so
   it entered the retry branch and died on arithmetic in the calling venue process after the
   request had left.
-- **`Config.find_override/1` skips a `$callers` pid on another node** where
+- **`DpExchange.Core.Config.find_override/1` skips a `$callers` pid on another node** where
   `Process.info/2` raised `ArgumentError`.
 - **`HttpClient.parse_rate_limit_headers/1` and the 429 `Retry-After` read accept atom header
   names** where `String.downcase/1` raised on them.
@@ -1293,7 +1296,7 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   only thing this suite drives, so nothing here could see it.
 
   **The expectation is read from `Core.Venue`'s own `@callback` specs** by the new public
-  `promised_types/0`, using `Code.Typespec.fetch_callbacks/1` — not written as a table, so a
+  `promised_types/0`, using `Code.Typespec.fetch_callbacks` — not written as a table, so a
   callback added later is checked the day it is added and the list cannot drift from the
   contract it restates. 44 of the 88 callbacks promise a `Core.Types` struct. A success of the
   wrong kind fails: a raw map, or a list holding anything but the promised struct. Refusals
@@ -1316,7 +1319,7 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   under a supervisor that restarts straight back into the same death, with a message naming
   `apply_result/3` rather than the option that is wrong. It is the shape this module's
   `init/1` already records for `:on_refusal`, arriving through the one required function the
-  `Config.opt/3` fix could not reach — a required option has no default to fall back to.
+  `DpExchange.Core.Config.opt/3` fix could not reach — a required option has no default to fall back to.
 
   `init/1` now refuses a `:sink` that is not a one-arity function, and a `:fetch` or
   `:fetch_all` that is present but not one, with `{:invalid_option, key, value}` — at start,
@@ -1330,7 +1333,7 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
 - **Assertion 27 — a forwarded nil is an absent option.** `subscribe/2` with `to: nil` must
   deliver to the caller: neither to nobody nor by raising. This family forwards `opts`
   unchanged, so an option a caller's own caller never set arrives as `key: nil`, and
-  `Keyword.get/3` substitutes its default only for an absent key — the trap `Config.opt/3`'s
+  `Keyword.get/3` substitutes its default only for an absent key — the trap `DpExchange.Core.Config.opt/3`'s
   moduledoc says was closed "as a class". It had not closed everywhere.
 
   Found on `:to` in all five venue packages at once, failing in OPPOSITE directions: the real
@@ -1412,8 +1415,8 @@ _No consumer-facing changes. Internal or packaging work only — recorded so eve
   venue.
 
   `c:DpExchange.Core.Venue.subscribe/2`'s own doc does not say which it is, and this assertion
-  does not need it to. The contract settles it by shape: `c:update_symbols/2` exists to
-  "change a live subscription's symbol set" and `c:unsubscribe/2` to stop delivery for named
+  does not need it to. The contract settles it by shape: `c:DpExchange.Core.Venue.update_symbols/2` exists to
+  "change a live subscription's symbol set" and `c:DpExchange.Core.Venue.unsubscribe/2` to stop delivery for named
   symbols, and neither has any purpose if `subscribe/2` already replaces. Two callbacks the
   contract distinguishes, implemented as one function, is the tell.
 
@@ -2897,7 +2900,7 @@ the last block that will ever need a range.
   `elixirc_paths/1` also compiles `test/support` into that same directory — so a check
   named "nothing in `lib/` reaches for the host application" was quietly also checking test
   scaffolding. Surfaced when the reference venue grew an `@derive {Inspect, ...}` and the
-  test failed reporting `Inspect.Any` "in lib/", where no such reference exists. It now
+  test failed reporting the `Inspect` fallback implementation "in lib/", where no such reference exists. It now
   filters by each beam's own `:compile_info` source path. Filtering is the repair rather
   than widening `allowed_prefixes`: the allow-list is what gives this check teeth for code
   that actually ships, and adding an entry to satisfy a module that never ships would blunt
