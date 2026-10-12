@@ -346,7 +346,14 @@ defmodule DpExchange.Core.Telemetry do
     |> String.slice(0, 200)
   end
 
+  # No `@` anywhere means no userinfo, and the rewrite below would hand back the same string
+  # (scheme, authority and rest rejoined unchanged). This runs several times per request, so the
+  # common URL skips the regex.
   defp strip_userinfo(url) do
+    if :binary.match(url, "@") == :nomatch, do: url, else: strip_authority_userinfo(url)
+  end
+
+  defp strip_authority_userinfo(url) do
     case Regex.run(~r{^([a-z][a-z0-9+.-]*://)([^/]*)(.*)$}is, url) do
       [_whole, scheme, authority, rest] ->
         scheme <> (authority |> String.split("@") |> List.last()) <> rest

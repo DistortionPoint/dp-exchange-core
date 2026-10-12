@@ -21,6 +21,29 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Assertion 38 asked with the venue's own `:depth`.** The probe appended `depth: 1` and
+  `limit: 1` to the venue's `endpoint_opts:` for `get_order_book/2`; a keyword's first entry
+  wins on lookup, so a venue declaring its own `depth:` there was asked for that depth, not
+  one. The probe's options now replace the same-named keys.
+- **Docs contradicted each other and the code.** A snapshot book level of size `0` is dropped
+  and a negative size refuses the book (the docs said size `<= 0` was dropped in one place and
+  a negative refused in another); `usage-rules.md` said unrecognised options are ignored without
+  the family-option exception; `adapter.md` said the suite did not assert the market-data
+  conventions (assertions 36 to 39 do, in part); `testing.md` and `assertion-coverage.md` gave
+  stale group counts; `TopOfBook` still described `Quote`'s removed `:timestamp`;
+  `PollingFeed` named a `:not_covered` entry that `coverage/1` never contains. `usage-rules.md`
+  gained a consumer-facing summary of the market-data conventions.
+
+### Changed
+
+- Per-request and per-tick work no longer builds strings nobody reads: `HttpClient`'s request
+  debug line and `PollingFeed`'s per-failure debug line are lazy (`Logger.debug/1` with a
+  function), `HttpClient` parses the URL path only when `rate_limit_per_endpoint` needs it,
+  and `Telemetry.endpoint/1` skips its userinfo regex when the URL has no `@`. No behaviour
+  change.
+
 ## [0.3.83] - 2026-10-12
 
 ### Added

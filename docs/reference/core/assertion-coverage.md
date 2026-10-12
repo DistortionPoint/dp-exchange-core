@@ -2,7 +2,7 @@
 
 **Audited 2026-09-08. Revised 2026-09-11 and 2026-09-12 — see "Second axis", "The sweep
 completed", and the two closures below.**
-`Core.AdapterContract`'s 19 assertion groups (now **24** — see "Gaps closed" below) have
+`Core.AdapterContract`'s 19 assertion groups (now **39** — see the "Gap closed" sections below) have
 each caught real, shipped defects within minutes of existing. Nobody had asked the inverse
 question: which parts of `Core.Venue`, `Core.Capabilities`, `Core.Notice` and
 `Core.PollingFeed` have **no** assertion touching them at all. This is that map, done once
@@ -783,10 +783,10 @@ whose window refuses the probe (Gemini's fixed window and Coinbase's 350-bar lim
 fake clock weeks in the past); the ordering and alignment check on the unranged answer still
 runs. The reference venue's candle and book fakes now honour range and `:depth`.
 
-**Read before run (not executed — no `mix` was run).** Expected: Schwab passes (five aligned
-bars, bounded probe). Coinbase passes (honours `:depth`, refuses `:limit`). Robinhood skips
-everything. Gemini and Webull are expected to FAIL 38: their fakes validate `:depth` but return
-a fixed ladder (three and two levels), so `depth: 1` is not honoured; the real calls send it.
+**Run against the five venues (Core 0.3.83).** All five pass. Schwab: five aligned bars, bounded
+probe. Coinbase: honours `:depth`, refuses `:limit`. Robinhood: skips everything. Gemini and
+Webull were predicted to fail 38 — their fakes validated `:depth` and returned a fixed ladder —
+and both fakes were fixed to take `depth` levels a side before the venues moved to 0.3.83.
 
 **Also changed:** the reference venue no longer sends `:link_up` when `subscribe_notices/1`
 registers a subscriber (family convention 9: a registration is not an event); the teeth test

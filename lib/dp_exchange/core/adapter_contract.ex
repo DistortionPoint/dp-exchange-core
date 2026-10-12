@@ -3426,7 +3426,11 @@ defmodule DpExchange.Core.AdapterContract do
       defp assert_book_options do
         [symbol, opts] = endpoint_args(:get_order_book, 2)
         depth = DpExchange.Core.AdapterContract.book_probe_depth()
-        ask = fn extra -> call_on(@fake, {:get_order_book, 2}, [symbol, opts ++ extra]) end
+        # `extra` replaces a same-named key in the venue's own `endpoint_opts` (a keyword's first
+        # entry wins on lookup, so appending would silently ask with the venue's own value).
+        ask = fn extra ->
+          call_on(@fake, {:get_order_book, 2}, [symbol, Keyword.merge(opts, extra)])
+        end
 
         depth_fault = DpExchange.Core.AdapterContract.book_depth_fault(ask.(depth: depth), depth)
 
@@ -3438,7 +3442,8 @@ defmodule DpExchange.Core.AdapterContract do
 
         assert limit_fault == nil,
                "get_order_book/2 with limit: 1 must succeed, or be refused " <>
-                 "{:unsupported_option, :limit}. Got #{inspect(limit_fault)}"
+                 "{:unsupported_option, :limit} or {:invalid_option, :limit, v}. " <>
+                 "Got #{inspect(limit_fault)}"
       end
     end
   end

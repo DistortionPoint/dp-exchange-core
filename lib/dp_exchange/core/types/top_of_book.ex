@@ -41,9 +41,10 @@ defmodule DpExchange.Core.Types.TopOfBook do
   it is a different, honest fact, and giving it its own field is what keeps it from being
   mistaken for one.
 
-  **`Quote`'s `:timestamp` is the venue's own and nothing else.** That guarantee survives
-  because observation time lives here, in a field that says what it is, rather than being
-  written into a field documented as the venue's.
+  **`:venue_time` is the venue's own and nothing else**, here and on `Quote` and `OrderBook`
+  (which replaced their single `:timestamp` with this pair in 0.2.0). That guarantee survives
+  because observation time lives in `:observed_at`, a field that says what it is, rather than
+  being written into a field documented as the venue's.
 
   ## Sizes are optional, and `nil` is not zero
 

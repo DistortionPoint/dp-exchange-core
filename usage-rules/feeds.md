@@ -48,7 +48,9 @@ silently is the failure the notice avoids.
 ```
 
 `:stream` means pushed without asking each time. `:internal_poll` means arriving, but the
-package is fetching it. `:not_covered` means nothing is arriving by any route.
+package is fetching it. `:not_covered` means nothing is arriving by any route. A symbol
+**absent** from the map means the same thing (`Core.PollingFeed` reports only the symbols it
+is delivering), so read a missing key as `:not_covered`, not as an error.
 
 **It reports what actually arrived, not what was subscribed.** A venue that cannot observe
 delivery answers `:not_covered` rather than claiming a success it cannot see. This is the

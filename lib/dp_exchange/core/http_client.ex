@@ -274,10 +274,12 @@ defmodule DpExchange.Core.HttpClient do
     # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
     # the log on every request. `Telemetry.endpoint/1` is the one place that decides what part
     # of a URL is safe to emit, and the telemetry metadata and the retry warning already use it.
+    # A function, so the message (and `Telemetry.endpoint/1`) is built only when the debug
+    # level is enabled; the node usually runs at info and this is every request.
     if log_requests do
-      Logger.debug(
+      Logger.debug(fn ->
         "HTTP Request: #{method |> to_string() |> String.upcase()} #{Telemetry.endpoint(url)}"
-      )
+      end)
     end
 
     do_request_with_rate_limiting(method, url, headers, body, opts, retry_attempts)
@@ -574,7 +576,12 @@ defmodule DpExchange.Core.HttpClient do
     # `?symbol=ETHUSD` are the same endpoint to the venue's per-endpoint limit.
     # `|| "/"`: `URI.parse("https://host").path` is `nil`, which became the endpoint bucket
     # `"<provider> "` (a trailing space and nothing after it) rather than the root path.
-    opts = Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path || "/" end)
+    # Only parsed when a per-endpoint bucket will use it (`rate_limit_keys/1` reads `:path`
+    # for nothing else), so an ordinary request does not parse its URL a second time.
+    opts =
+      if Config.opt(opts, :rate_limit_per_endpoint, false),
+        do: Keyword.put_new_lazy(opts, :path, fn -> URI.parse(url).path || "/" end),
+        else: opts
 
     # Check rate limits before making the request, and sign only once they have cleared.
     case check_rate_limits(opts) do

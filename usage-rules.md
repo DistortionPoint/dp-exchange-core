@@ -276,7 +276,9 @@ requires a parameter this contract has no word for, the package refuses **locall
 name** rather than sending a request the venue will reject less clearly.
 
 An option a package does not recognise is ignored, not an error — a consumer moving between
-venues carries options only one of them reads.
+venues carries options only one of them reads. The exception is a **family** option the
+venue cannot honour (`limit:`, `depth:`, `since:`, `include_partial:` and the other
+market-data options): that is refused, never ignored. See `usage-rules/adapter.md`.
 
 **`timeout:` bounds a whole response, per attempt.** Every package makes its HTTP calls
 through `DpExchange.Core.HttpClient`, where `:timeout` (default 30 s) now caps the entire
@@ -287,6 +289,26 @@ backoff.
 **`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
 it arrives and the transfer is halted at the limit, so an oversized or endless response is
 never held in memory. It returns `{:error, {:response_too_large, limit}}`, never retried.
+
+## Market data means the same thing on every venue
+
+What a caller can rely on, whichever package answers (the full table is in
+[Implementing a venue package](usage-rules/adapter.md)):
+
+- **Candles are finished bars, oldest first.** The still-forming bar is returned only with
+  `include_partial: true` (default `false`), and then it may still change. `opts[:start]` is
+  inclusive and `opts[:end]` exclusive, both on `opened_at`; `opened_at` is the bucket start.
+  Crypto is on the strict UTC grid. For a session-traded instrument, widths of 30 minutes and
+  under are strict, wider intraday widths are 30-minute aligned (equity sessions open at 09:30
+  ET), and daily and weekly bars sit at 00:00 UTC of the session date.
+- **A traded price is above zero.** A price at or below zero refuses the reply. A bid or ask
+  of `0` is no resting order: `nil`.
+- **An order book is best price first**, each level with a price and a size above zero, at
+  most `depth:` levels a side. `limit:` is not a depth option.
+- **An option the venue cannot honour is refused** (`{:unsupported_option, key}` or
+  `{:invalid_option, key, value}`), never ignored.
+- **`venue_time` is the venue's stated time of the trade or quote, or `nil`.** For a time you
+  can always rely on, use `observed_at`.
 
 ## Money movement is its own subject
 

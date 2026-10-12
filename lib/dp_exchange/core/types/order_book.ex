@@ -28,7 +28,7 @@ defmodule DpExchange.Core.Types.OrderBook do
 
   ## Sizes and prices
 
-  In a snapshot a level whose size is `<= 0` is **dropped**: it is no liquidity and does not
+  In a snapshot a level whose size is `0` is **dropped**: it is no liquidity and does not
   belong in the book. A **negative** size, or a price `<= 0`, refuses the whole book, and so
   does a level that cannot be read, or a side that is present but not a list. An unreadable
   level is never skipped, because a book missing a level is a different book. (A delta,

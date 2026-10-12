@@ -36,7 +36,7 @@ defmodule DpExchange.Core.PollingFeed do
   ## A fetch that fails does not stop the feed
 
   A symbol whose fetch fails is retried on the next tick and reported as
-  `:not_covered` until one succeeds. It is never dropped: this module cannot
+  absent from `coverage/1` until one succeeds. It is never dropped: this module cannot
   tell a delisted symbol from a network blip, and the layer that CAN — the venue
   answering with an explicit refusal — handles that separately.
 
@@ -935,7 +935,9 @@ defmodule DpExchange.Core.PollingFeed do
     failures = state.failures_since_ok + 1
     # Bounded: `reason` is whatever the fetch answered, a decoded venue body included, and the
     # warning below repeats every sweep for as long as an outage lasts.
-    Logger.debug("[#{state.label}] #{what}: #{bounded(reason)}")
+    # A function, so the `inspect/2` of a decoded venue body is built only when the debug level
+    # is enabled: a failing feed does this on every tick and the node runs at info.
+    Logger.debug(fn -> "[#{state.label}] #{what}: #{bounded(reason)}" end)
 
     state =
       if delivering_nothing?(state, failures) do

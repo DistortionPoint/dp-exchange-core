@@ -390,8 +390,9 @@ defmodule DpExchange.Core.Venue do
   **Oldest first, ordered by each candle's own `opened_at`**, never by the order the venue's
   rows arrived in. Venues disagree on the order they send, and several do not document it at
   all. A series read in the wrong order still yields plausible returns and indicators, just
-  wrong ones. A venue that has only one candle, or none, satisfies this trivially, which
-  is why the conformance suite does not check it against a fake that answers with one.
+  wrong ones. A venue that has only one candle, or none, satisfies this trivially: conformance
+  assertion 37 holds a Fake to this (strictly oldest first, on the width's grid) only when it
+  answers with two or more candles.
 
   ## The still-forming bar is not returned (MD1)
 
@@ -918,9 +919,10 @@ defmodule DpExchange.Core.Venue do
 
     * A level that cannot be read refuses the **whole book**, on REST and on a stream. It is
       never skipped, because a book with a level missing is a different book.
-    * In a **snapshot**, a level with size `<= 0` is dropped: it is no liquidity. (A *delta*
+    * In a **snapshot**, a level with size `0` is dropped: it is no liquidity. (A *delta*
       still carries size `0`, which means remove that price; see `Types.OrderBookDelta`.)
-    * A **negative** size, or a price `<= 0`, refuses the book.
+    * A **negative** size, or a price `<= 0`, refuses the book. So a returned book has only
+      levels with a price and a size above zero (conformance assertion 39).
     * A side that is present but is not a list refuses the book.
 
   `OrderBook.venue_time` is the venue's stated time of the book and `nil` when it states
@@ -1449,16 +1451,18 @@ defmodule DpExchange.Core.Venue do
     * `Quote.volume_window` is `:print` only when **every** print is delivered. A conflated
       stream reports cumulative volume as `:running_total`, never the last size as `:print`
       (MD8).
-    * A book level that cannot be read refuses the whole book; a snapshot level of size `<= 0`
+    * A book level that cannot be read refuses the whole book; a snapshot level of size `0`
       is dropped; a negative size or a price `<= 0` refuses the book (MD5, MD6).
     * A delta stream that detects a sequence gap resubscribes the affected symbols for a fresh
       snapshot and emits a notice once; a frame whose sequence is `<=` the last applied is
       dropped, never applied (MD9).
     * A bar delivered while it is still forming is not a finished bar. Unless the caller
       passed `include_partial: true`, only closed bars are pushed (MD1).
-    * An option the stream cannot honour is `{:error, {:unsupported_option, key}}` or
+    * A market-data option (`include_partial:`, `limit:`, `depth:`, `since:`) the stream cannot
+      honour is `{:error, {:unsupported_option, key}}` or
       `{:error, {:invalid_option, key, value}}` from the call that was given it, never
-      ignored (MD4).
+      ignored (MD4). `:to` on `c:update_symbols/2` is the one documented exception: it is
+      ignored by a feed that does not honour it.
   """
   @callback subscribe([symbol()], keyword()) :: :ok | {:error, term()}
 

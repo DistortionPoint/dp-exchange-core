@@ -164,6 +164,7 @@ book streamable for options" — they get the venue-wide answer and learn the pe
 from a refusal. Two packages hit this today. Closing it means an asset-class dimension on a
 published type, for a gap no consumer has reported hitting; see
 `DpExchange.Core.Capabilities`' moduledoc for the two instances.
+
 ## Prefer `Types.*.new/1` over a struct literal in your decoder
 
 Every `Core.Types.*` module exposes a validating `new/1`, built on
@@ -326,7 +327,7 @@ Documented on the `Core.Venue` callbacks and the `Types.*` moduledocs; summarise
 | `opened_at` | Bucket start, aligned to the width (crypto strict on the UTC grid; session-traded instruments: strict up to 30m, 30-minute alignment for wider intraday widths because equity sessions open at 09:30 ET). A bar not provably open-stamped is checked on decode: `{:error, {:unaligned_candle, time}}`. Equity daily and weekly bars map to 00:00 UTC of the **same session date** |
 | `limit:` (candles, trades), `since:` (trades) | Sent to the venue. Above the maximum `{:invalid_option, :limit, v}`; no such parameter `{:unsupported_option, :limit}`. A `since:` read returning exactly `limit` rows is `{:error, :history_truncated}` |
 | `depth:` (order book) | Levels per side on every venue. Coinbase's old `limit:` is `{:unsupported_option, :limit}` |
-| Book levels | Unreadable level, negative size, price `<= 0`, or non-list side refuses the whole book. A snapshot level of size `<= 0` is dropped |
+| Book levels | Unreadable level, negative size, price `<= 0`, or non-list side refuses the whole book. A snapshot level of size `0` is dropped |
 | Prices | A traded price (`Quote`, `Trade`, candle OHLC) `<= 0` refuses. A bid or ask of `0` is no resting order: `nil` price and size. A present, unreadable bid or ask refuses |
 | `venue_time` | `Quote`: the venue's time of the last trade. `TopOfBook`: the venue's time of that quote. `nil` if none stated. Never a `Date` header, an envelope or send time, or another event's time |
 | `volume_window: :print` | Only when every print is delivered. A conflated stream reports cumulative volume as `:running_total` |
@@ -334,8 +335,10 @@ Documented on the `Core.Venue` callbacks and the `Types.*` moduledocs; summarise
 | `Trade.side` | The taker's side. Undocumented venue codes (Webull `B`/`S`) are `nil`, or recorded as unmeasured |
 | Declared numbers | A `capabilities/0` number from vendor docs is labelled documented, not measured (Webull `max_candles_per_request: 1200`) |
 
-The conformance suite does not assert these yet; each venue holds itself to them in its own
-tests.
+The conformance suite asserts part of these on your fake (assertions 36 to 39, below):
+`include_partial:` validation, candle order, grid and range bounds, `depth:` and `limit:` on
+the book, and positive prices and sizes. The rest (`venue_time`, `volume_window`, stream
+gaps, `Trade.side`, declared numbers) each venue holds itself to in its own tests.
 
 ### A forwarded `opts` turns "never configured" into `key: nil`, not into absence
 
@@ -819,8 +822,10 @@ Candles are asked for at `"1h"` if you declare it, else your first fixed-width t
 - **38.** `get_order_book/2` with `depth: 1` returns at most one level per side, so the fake
   must honour `:depth`, not only validate it. `limit: 1` must succeed or be refused
   `{:unsupported_option, :limit}` (Coinbase refuses it because its old `:limit` meant depth);
-  a native `{:invalid_option, :limit, v}` is accepted. A venue that ignores an option it has
-  no use for passes: the suite cannot tell a native `:limit` from an ignored one.
+  a native `{:invalid_option, :limit, v}` is accepted. A fake that simply ignores `:limit`
+  also passes, because the suite cannot tell a native `:limit` from an ignored one; that is
+  a limit of the check, not permission: a book call with no `:limit` parameter of its own
+  should still refuse it, as the family-option rule above says.
 - **39.** Every `Quote`, `Trade` and `Candle` price the fake returns is above zero; a
   `TopOfBook` bid or ask is `nil` or above zero; every `OrderBook` level has a price and a
   size above zero and each side is best first.
