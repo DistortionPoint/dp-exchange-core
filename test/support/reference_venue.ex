@@ -48,7 +48,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @behaviour DpExchange.Core.Venue
 
-  alias DpExchange.Core.{CanonicalPair, Capabilities, Config, Instrument, Notice, Types, Venue}
+  alias DpExchange.Core.{CanonicalPair, Capabilities, Config, Instrument, Types, Venue}
 
   # Longest-first, which is the whole point: reversed, `BTCUSDC` parses as `BTC-USD`.
   # Longest-first, and `BUSD` before `USD` is the ordering that matters: `BTCBUSD` ends
@@ -196,6 +196,14 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_price(symbol, _opts) do
+    # A symbol that is not text is refused locally, before anything else: the family
+    # convention (`Core.Venue.get_price/2`), held by conformance assertion 33.
+    with :ok <- check_symbol(symbol) do
+      priced(symbol)
+    end
+  end
+
+  defp priced(symbol) do
     if symbol in @symbols do
       {:ok,
        %Types.Quote{
@@ -216,9 +224,45 @@ defmodule DpExchange.Core.ReferenceVenue do
     end
   end
 
+  # `nil`, a non-string and a blank string are `{:invalid_symbol, value}`, decided before any
+  # lookup. A well-formed string the venue does not list is a different answer (a refusal).
+  defp check_symbol(symbol) when is_binary(symbol) do
+    if String.trim(symbol) == "", do: {:error, {:invalid_symbol, symbol}}, else: :ok
+  end
+
+  defp check_symbol(other), do: {:error, {:invalid_symbol, other}}
+
+  # An order id, by the same rule: `nil`, a non-string or a blank one is refused locally.
+  defp check_order_id(id) when is_binary(id) do
+    if String.trim(id) == "", do: {:error, {:invalid_order_id, id}}, else: :ok
+  end
+
+  defp check_order_id(other), do: {:error, {:invalid_order_id, other}}
+
+  # A symbol list is a proper list of non-blank strings, else `{:invalid_symbols, value}`.
+  # Returns the list upper-cased, as every real facade does (assertion 29).
+  defp check_symbols(symbols) do
+    if proper_list?(symbols) and Enum.all?(symbols, &match?(:ok, check_symbol(&1))),
+      do: {:ok, Enum.map(symbols, &String.upcase/1)},
+      else: {:error, {:invalid_symbols, symbols}}
+  end
+
+  defp proper_list?([]), do: true
+  defp proper_list?([_head | tail]), do: proper_list?(tail)
+  defp proper_list?(_other), do: false
+
+  # A subscriber is a pid or an atom other than `nil`, `true` and `false`; `nil` has already
+  # been resolved to the caller by `Config.opt/3`.
+  defp check_subscriber(to) when is_pid(to), do: {:ok, to}
+  defp check_subscriber(to) when is_atom(to) and to not in [nil, true, false], do: {:ok, to}
+  defp check_subscriber(to), do: {:error, {:invalid_subscriber, to}}
+
   @impl true
   def get_historical_prices(symbol, timeframe, _range, _opts) do
     cond do
+      match?({:error, _reason}, check_symbol(symbol)) ->
+        check_symbol(symbol)
+
       symbol not in @symbols ->
         {:refused, :symbol_not_listed}
 
@@ -258,6 +302,12 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_order_book(symbol, _opts) do
+    with :ok <- check_symbol(symbol) do
+      booked(symbol)
+    end
+  end
+
+  defp booked(symbol) do
     if symbol in @symbols do
       {:ok,
        %Types.OrderBook{
@@ -281,6 +331,12 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_top_of_book(symbol, _opts) do
+    with :ok <- check_symbol(symbol) do
+      top_of(symbol)
+    end
+  end
+
+  defp top_of(symbol) do
     if symbol in @symbols do
       {:ok,
        %Types.TopOfBook{
@@ -452,19 +508,124 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def place_order(_credentials, request, _opts) do
-    {:ok,
-     %Types.Order{
-       id: "order-1",
-       symbol: Map.get(request, :symbol, "BTC-USD"),
-       side: Map.get(request, :side, :buy),
-       order_type: Map.get(request, :order_type, :limit),
-       quantity: Map.get(request, :quantity, Decimal.new("1")),
-       price: Map.get(request, :price),
-       status: :open,
-       created_at: ~U[2026-08-27 12:00:00Z],
-       provider: runtime_id()
-     }}
+    # The refusals of `Core.Venue.place_order/3`, in its order, before anything is built. The
+    # order that comes back is the one asked for: a side atom (never the caller's string),
+    # `Decimal` amounts, and no price on a market order (which is refused above, not dropped).
+    with {:ok, plan} <- plan_order(request) do
+      {:ok,
+       %Types.Order{
+         id: "order-1",
+         symbol: plan.symbol,
+         side: plan.side,
+         order_type: plan.order_type,
+         quantity: plan.quantity,
+         price: plan.price,
+         status: :open,
+         created_at: ~U[2026-08-27 12:00:00Z],
+         provider: runtime_id()
+       }}
+    end
   end
+
+  @order_keys [
+    :symbol,
+    :side,
+    :order_type,
+    :time_in_force,
+    :quantity,
+    :price,
+    :stop_price,
+    :client_order_id
+  ]
+
+  defp plan_order(request) when is_map(request) do
+    with :ok <- known_order_keys(request),
+         :ok <- check_symbol(Map.get(request, :symbol)),
+         {:ok, side} <- order_side(Map.get(request, :side)),
+         {:ok, type} <- order_type(Map.get(request, :order_type)),
+         :ok <- order_duration(type, Map.get(request, :time_in_force)),
+         {:ok, quantity} <- order_amount(request, :quantity, true),
+         :ok <- unused_price_fields(type, request),
+         {:ok, price} <- order_amount(request, :price, type != :market),
+         :ok <- order_client_id(Map.get(request, :client_order_id)) do
+      {:ok,
+       %{symbol: request.symbol, side: side, order_type: type, quantity: quantity, price: price}}
+    end
+  end
+
+  defp plan_order(request), do: {:error, {:invalid_order_request, request}}
+
+  defp known_order_keys(request) do
+    case Enum.find(Map.keys(request), &(&1 not in @order_keys)) do
+      nil -> :ok
+      key -> {:error, {:unsupported_order_field, key}}
+    end
+  end
+
+  defp order_side(side) when side in [:buy, :sell], do: {:ok, side}
+
+  defp order_side(side) when is_binary(side) do
+    case String.downcase(side) do
+      "buy" -> {:ok, :buy}
+      "sell" -> {:ok, :sell}
+      _other -> {:error, {:invalid_side, side}}
+    end
+  end
+
+  defp order_side(nil), do: {:error, {:missing_field, :side}}
+  defp order_side(side), do: {:error, {:invalid_side, side}}
+
+  defp order_type(nil), do: {:error, {:missing_field, :order_type}}
+  defp order_type(type) when type in [:market, :limit, :post_only], do: {:ok, type}
+  defp order_type(type), do: {:error, {:unsupported_order_type, type}}
+
+  # Optional here (the reference sends no duration of its own), but one it is given must be
+  # one its `capabilities/0` serves.
+  defp order_duration(_type, nil), do: :ok
+  defp order_duration(_type, tif) when tif in [:gtc, :ioc], do: :ok
+  defp order_duration(type, tif), do: {:error, {:unsupported_order_combination, type, tif}}
+
+  # A field the order type does not use is refused, never dropped.
+  defp unused_price_fields(type, request) do
+    cond do
+      Map.get(request, :stop_price) != nil -> {:error, {:unexpected_field, :stop_price}}
+      type == :market and Map.get(request, :price) != nil -> {:error, {:unexpected_field, :price}}
+      true -> :ok
+    end
+  end
+
+  # A `Decimal`, an integer or a numeric string above zero. A float has already lost digits.
+  defp order_amount(request, key, required?) do
+    case Map.get(request, key) do
+      nil when required? -> {:error, {:missing_field, key}}
+      nil -> {:ok, nil}
+      value -> positive_amount(value, key)
+    end
+  end
+
+  defp positive_amount(value, key) do
+    with {:ok, decimal} <- cast_amount(value),
+         true <- not Decimal.nan?(decimal) and not Decimal.inf?(decimal),
+         true <- Decimal.gt?(decimal, 0) do
+      {:ok, decimal}
+    else
+      _invalid -> {:error, {invalid_tag(key), value}}
+    end
+  end
+
+  defp cast_amount(%Decimal{} = decimal), do: {:ok, decimal}
+  defp cast_amount(value) when is_integer(value) or is_binary(value), do: Decimal.cast(value)
+  defp cast_amount(_other), do: :error
+
+  defp invalid_tag(:quantity), do: :invalid_quantity
+  defp invalid_tag(:price), do: :invalid_price
+
+  defp order_client_id(nil), do: :ok
+
+  defp order_client_id(id) when is_binary(id),
+    do: if(String.trim(id) == "", do: {:error, {:invalid_client_order_id, id}}, else: :ok)
+
+  defp order_client_id(id), do: {:error, {:invalid_client_order_id, id}}
 
   @impl true
   def cancel_order(credentials, id, opts) do
@@ -734,16 +895,20 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_order(_credentials, id, _opts) do
-    {:ok,
-     %Types.Order{
-       id: id,
-       symbol: "BTC-USD",
-       side: :buy,
-       order_type: :limit,
-       quantity: Decimal.new("1"),
-       status: :open,
-       provider: runtime_id()
-     }}
+    # The id first: `nil`, a non-string or a blank one is `{:invalid_order_id, id}`, before
+    # anything else is looked at. `cancel_order/3` and `replace_order/4` read through here.
+    with :ok <- check_order_id(id) do
+      {:ok,
+       %Types.Order{
+         id: id,
+         symbol: "BTC-USD",
+         side: :buy,
+         order_type: :limit,
+         quantity: Decimal.new("1"),
+         status: :open,
+         provider: runtime_id()
+       }}
+    end
   end
 
   @impl true
@@ -756,10 +921,15 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def subscribe(symbols, opts) do
-    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
-    symbols = Enum.map(symbols, &String.upcase/1)
-    target = Config.opt(opts, :to, self())
+    # Arguments first, symbols before subscriber (assertion 32); upper-cased on the way in,
+    # as every real facade does (assertion 29).
+    with {:ok, symbols} <- check_symbols(symbols),
+         {:ok, target} <- check_subscriber(Config.opt(opts, :to, self())) do
+      deliver_subscription(symbols, target)
+    end
+  end
 
+  defp deliver_subscription(symbols, target) do
     # Pushed immediately, which is what a REST-only venue's internal poll would do on its
     # first tick. A caller cannot tell the difference, and that is the point.
     #
@@ -786,18 +956,24 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def unsubscribe(symbols, _opts) do
-    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
-    symbols = Enum.map(symbols, &String.upcase/1)
-    # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
-    Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
+    # A malformed list is refused, never `:ok` (assertion 32); upper-cased on the way in, as
+    # every real facade does (assertion 29).
+    with {:ok, symbols} <- check_symbols(symbols) do
+      # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
+      Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
 
-    :ok
+      :ok
+    end
   end
 
   @impl true
   def update_symbols(symbols, opts) do
-    # Upper-cased on the way in, as every real facade does. See contract assertion 29.
-    symbols = Enum.map(symbols, &String.upcase/1)
+    with {:ok, symbols} <- check_symbols(symbols) do
+      replace_symbols(symbols, opts)
+    end
+  end
+
+  defp replace_symbols(symbols, opts) do
     # **It used to be `:ok` and nothing else**, which made it indistinguishable from a
     # venue that had simply ignored the call — and left this reference implementing two of
     # the contract's three subscription operations. `c:DpExchange.Core.Venue.update_symbols/2`
@@ -838,9 +1014,11 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def subscribe_notices(opts) do
-    target = Config.opt(opts, :to, self())
-    send(target, {:dp_exchange, runtime_id(), Notice.new(:link_up, runtime_id())})
-    :ok
+    # Registers and sends nothing: this reference has no feed, so it raises no notice, and a
+    # `:link_up` on registration is one the real feeds do not send (family convention 9).
+    with {:ok, _target} <- check_subscriber(Config.opt(opts, :to, self())) do
+      :ok
+    end
   end
 
   # --- health ------------------------------------------------------------

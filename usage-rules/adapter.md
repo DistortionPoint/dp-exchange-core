@@ -733,6 +733,52 @@ fails it.
   key raises at compile time. Assertion 5 uses the same arguments.
 - **What it does not reach:** the real venue. It proves the fake is consistent with itself.
 
+## Assertions 32 to 35 — the family conventions on bad input
+
+Every venue refuses the same malformed arguments with the same tag, **locally, before
+credentials and before anything is sent**, so a consumer's error handling does not branch on
+venue. The rules are documented on the `Core.Venue` callbacks; the suite holds your **fake**
+to them (and, for 32, your real facade on the no-feed path). A callback you declare
+`:unsupported` is skipped.
+
+| Call | Bad input | Answer |
+|---|---|---|
+| `subscribe/2`, `unsubscribe/2`, `update_symbols/2` | not a list, improper list, non-string or blank element | `{:error, {:invalid_symbols, value}}`, never `:ok` |
+| `subscribe/2`, `subscribe_notices/1` | `:to` that is not a pid or an atom other than `nil`/`true`/`false` | `{:error, {:invalid_subscriber, value}}` |
+| `get_price/2`, `get_top_of_book/2` (and every single-symbol read) | `nil`, a number, a blank string | `{:error, {:invalid_symbol, value}}` |
+| `place_order/3` | non-map | `{:error, {:invalid_order_request, request}}` |
+| `place_order/3` | no `:order_type` | `{:error, {:missing_field, :order_type}}` |
+| `place_order/3` | a key the builder does not read | `{:error, {:unsupported_order_field, key}}` |
+| `place_order/3` | `:price` on a `:market` order | `{:error, {:unexpected_field, :price}}` |
+| `get_order/3`, `cancel_order/3` | `nil` or blank id | `{:error, {:invalid_order_id, value}}` |
+
+- **Order of checks.** Streaming: symbols, then subscriber, then `{:error, :feed_not_started}`.
+  Orders: request is a map, unknown keys, symbol, side, type, duration and combination,
+  quantity, price fields, `client_order_id`, the account option (`{:missing_option, key}`),
+  then credentials. An order id is judged before the account option and credentials.
+- **Assertion 32 drives your real facade too**, with `absent_feed_opts:` (default
+  `feed: :dp_exchange_contract_absent_feed`), down the same no-feed path as assertion 28.
+  Nothing starts and nothing reaches the network. A facade that answers
+  `{:error, :feed_not_started}` for a malformed list fails it: bad input must not depend on
+  whether a feed happens to be up.
+- **Assertion 34's market check tries several durations.** The duration a venue takes on a
+  market order is its own, and durations are checked before price fields, so the request is
+  sent with none and with each of `supported_time_in_force`. Every answer must be the price
+  refusal or a refusal of the duration, and at least one must be the price refusal. A
+  success means the price was dropped and a different order placed than the one asked for.
+  It is skipped when `:market` is not in `supported_order_types`.
+- **Per-venue options.** The order is the suite's `order_args: %{order_request: ...}` (a
+  request your fake accepts, which assertion 31 already needs). Account options for the id
+  checks come from `endpoint_opts:`; the id is also tried with none, since it must be
+  refused first.
+- **A write that may have reached the venue is not an ordinary error.** `place_order/3` and
+  `replace_order/4` answer `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`;
+  every other state-changing write answers `{:error, {:write_unconfirmed, key_or_nil,
+  reason}}`. Neither is a bare `{:error, _}` (a caller retries those) or a `{:refused, _}`.
+  A write is retried internally only under an idempotency key the venue honours; a cancel
+  is sent once. These are documented on the callbacks (rules W1 to W7 for non-order
+  writes) and are not yet asserted by the suite; hold your venue to them in its own tests.
+
 ## Asset classes are a statement about today
 
 `asset_classes` says what the package serves **now** — `:crypto`, `:equity`, `:option`,

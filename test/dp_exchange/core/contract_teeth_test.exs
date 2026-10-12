@@ -396,6 +396,49 @@ defmodule Broken.HistoricalPrices.Substitutes do
   end
 end
 
+defmodule Broken.Convention.Lax do
+  @moduledoc false
+  # Breaks every family convention at once: accepts a malformed list and a bad subscriber,
+  # answers a blank symbol with data, places any request including a price on a market order,
+  # and answers a blank order id by raising or exiting instead of refusing it.
+  @spec capabilities() :: DpExchange.Core.Capabilities.t()
+  def capabilities do
+    DpExchange.Core.Capabilities.new(
+      endpoints: %{},
+      supported_quotes: ~w(USD),
+      supported_order_types: [:market, :limit],
+      supported_time_in_force: [:gtc]
+    )
+  end
+
+  @spec subscribe(term(), keyword()) :: :ok
+  def subscribe(_symbols, _opts), do: :ok
+
+  @spec unsubscribe(term(), keyword()) :: :ok
+  def unsubscribe(_symbols, _opts), do: :ok
+
+  @spec update_symbols(term(), keyword()) :: :ok
+  def update_symbols(_symbols, _opts), do: :ok
+
+  @spec subscribe_notices(keyword()) :: {:error, :feed_not_started}
+  def subscribe_notices(_opts), do: {:error, :feed_not_started}
+
+  @spec get_price(term(), keyword()) :: {:ok, :price}
+  def get_price(_symbol, _opts), do: {:ok, :price}
+
+  @spec get_top_of_book(term(), keyword()) :: {:refused, :not_listed}
+  def get_top_of_book(_symbol, _opts), do: {:refused, :not_listed}
+
+  @spec place_order(map(), term(), keyword()) :: {:ok, :placed}
+  def place_order(_credentials, _request, _opts), do: {:ok, :placed}
+
+  @spec get_order(map(), term(), keyword()) :: no_return()
+  def get_order(_credentials, _id, _opts), do: raise(ArgumentError, "blank id")
+
+  @spec cancel_order(map(), term(), keyword()) :: no_return()
+  def cancel_order(_credentials, _id, _opts), do: exit(:no_process)
+end
+
 defmodule DpExchange.Core.ContractTeethTest do
   use ExUnit.Case, async: true
 
@@ -579,11 +622,14 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Types.Quote{}}, 5_000
     end
 
-    test "it emits notices on its own channel" do
+    test "registering for notices sends none, and a bad subscriber is refused" do
+      # Family convention 9: a registration is not an event. A `:link_up` here would be one
+      # the real feeds never send, and a consumer's tier-1 test would certify it.
       assert :ok = ReferenceVenue.subscribe_notices(to: self())
+      refute_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{}}, 100
 
-      assert_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{kind: :link_up}},
-                     5_000
+      assert {:error, {:invalid_subscriber, 42}} =
+               ReferenceVenue.subscribe_notices(to: 42)
     end
   end
 
@@ -947,6 +993,177 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert AdapterContract.timeframe_fault({:ok, []}) == :substituted
       assert AdapterContract.timeframe_fault({:error, :unsupported_timeframe}) == nil
       assert AdapterContract.timeframe_fault({:refused, :unsupported_timeframe}) == nil
+    end
+  end
+
+  describe "assertions 32 to 35 catch a venue that ignores the family conventions" do
+    @base_request %{
+      symbol: "BTC-USD",
+      side: :buy,
+      order_type: :limit,
+      time_in_force: :gtc,
+      quantity: Decimal.new("0.001"),
+      price: Decimal.new("1")
+    }
+
+    defp all_cases do
+      streaming = AdapterContract.streaming_refusal_cases("BTC-USD", [])
+
+      symbols =
+        AdapterContract.single_symbol_refusal_cases(fn _name -> [credentials: %{}] end)
+
+      orders =
+        for {request, reason} <- AdapterContract.order_request_cases(@base_request),
+            do: {:place_order, [%{}, request, []], reason}
+
+      ids = AdapterContract.order_id_refusal_cases(fn _name -> [[], [credentials: %{}]] end)
+
+      streaming ++ symbols ++ orders ++ ids
+    end
+
+    test "the lax module is faulted on every single case, whatever way it is lax" do
+      module = Broken.Convention.Lax
+      cases = all_cases()
+      eligible = AdapterContract.eligible_cases(module, module.capabilities(), cases)
+
+      assert length(eligible) == length(cases)
+
+      faults = AdapterContract.case_faults(module, eligible)
+
+      assert length(faults) == length(cases)
+      kinds = faults |> Enum.map(&elem(&1, 3)) |> Enum.map(&(&1 == :raised)) |> Enum.uniq()
+      assert Enum.sort(kinds) == [false, true], "both an answer and a raise are faulted"
+    end
+
+    test "the reference venue is refused nothing it should accept: no case is faulted" do
+      module = ReferenceVenue
+      cases = all_cases()
+      eligible = AdapterContract.eligible_cases(module, module.capabilities(), cases)
+
+      assert AdapterContract.case_faults(module, eligible) == []
+      assert length(eligible) == length(cases)
+    end
+
+    test "refusal_fault names exactly what went wrong" do
+      want = {:invalid_symbols, nil}
+
+      assert AdapterContract.refusal_fault({:error, want}, want) == nil
+      assert AdapterContract.refusal_fault(:ok, want) == {:answered, :ok}
+
+      other = {:error, {:invalid_symbols, 1}}
+      assert AdapterContract.refusal_fault(other, want) == {:answered, other}
+
+      not_started = {:error, :feed_not_started}
+      assert AdapterContract.refusal_fault(not_started, want) == {:answered, not_started}
+
+      assert AdapterContract.refusal_fault({:raised, %ArgumentError{}}, :x) == :raised
+      assert AdapterContract.refusal_fault({:exit, :noproc}, :x) == :raised
+      assert AdapterContract.refusal_fault({:throw, :x}, :x) == :raised
+    end
+
+    test "a callback declared unsupported, or not exported, is not asked" do
+      caps =
+        Capabilities.new(
+          endpoints: %{{:get_order, 3} => :unsupported},
+          supported_quotes: ~w(USD)
+        )
+
+      eligible =
+        AdapterContract.eligible_cases(Broken.Convention.Lax, caps, all_cases())
+
+      refute Enum.any?(eligible, fn {name, _args, _expected} -> name == :get_order end)
+      assert Enum.any?(eligible, fn {name, _args, _expected} -> name == :cancel_order end)
+
+      assert AdapterContract.eligible_cases(Broken.OverDeclares, caps, all_cases()) == []
+    end
+
+    test "a failure message prints the call and the expectation, never its arguments" do
+      secret = %{api_secret: "never-print-this"}
+      cases = [{:get_order, [secret, nil, []], {:invalid_order_id, nil}}]
+      faults = AdapterContract.case_faults(Broken.Convention.Lax, cases)
+      message = AdapterContract.format_case_faults(faults)
+
+      assert message =~ "get_order/3"
+      assert message =~ "invalid_order_id"
+      refute message =~ "never-print-this"
+    end
+
+    test "the cases cover every bad value the conventions name" do
+      cases = AdapterContract.streaming_refusal_cases("BTC-USD", [])
+      reasons = Enum.map(cases, &elem(&1, 2))
+
+      assert {:invalid_symbols, nil} in reasons
+      assert {:invalid_symbols, ["  "]} in reasons
+      assert {:invalid_symbols, "BTC-USD"} in reasons
+      assert {:invalid_subscriber, true} in reasons
+      assert {:invalid_subscriber, false} in reasons
+      refute Enum.any?(reasons, &(&1 == {:invalid_subscriber, nil}))
+
+      # Symbols are judged before the subscriber: this call is wrong in both ways.
+      assert {:subscribe, [nil, [to: 42]], {:invalid_symbols, nil}} in cases
+
+      assert AdapterContract.invalid_single_symbols() == [nil, 42, "  "]
+      assert AdapterContract.invalid_order_ids() == [nil, "  "]
+      assert Enum.any?(AdapterContract.invalid_symbol_lists("A"), &(not is_list(&1)))
+    end
+
+    test "a price on a market order must be refused, not dropped" do
+      price = {:error, {:unexpected_field, :price}}
+      duration = {:error, {:unsupported_order_combination, :market, :gtc}}
+
+      assert AdapterContract.market_price_fault([duration, price]) == nil
+      assert AdapterContract.market_price_fault([price]) == nil
+
+      # Dropped: the order placed is not the order asked for.
+      assert AdapterContract.market_price_fault([duration, {:ok, :placed}]) ==
+               {:answered, {:ok, :placed}}
+
+      # Only ever refused for the duration: nothing showed what the price does.
+      assert AdapterContract.market_price_fault([duration]) == :price_never_refused
+      assert AdapterContract.market_price_fault([]) == :price_never_refused
+
+      assert AdapterContract.market_price_fault([{:raised, %ArgumentError{}}, price]) ==
+               {:answered, {:raised, %ArgumentError{}}}
+    end
+
+    test "market requests carry a price, and are not built for a venue with no market type" do
+      caps = ReferenceVenue.capabilities()
+      requests = AdapterContract.market_price_requests(@base_request, caps)
+
+      assert length(requests) == 3
+      assert Enum.all?(requests, &(&1.order_type == :market and &1.price != nil))
+      assert Enum.any?(requests, &(not Map.has_key?(&1, :time_in_force)))
+
+      no_market = Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+      assert AdapterContract.market_price_requests(@base_request, no_market) == []
+    end
+
+    test "the reference venue refuses a market price, and a lax one drops it" do
+      caps = ReferenceVenue.capabilities()
+      requests = AdapterContract.market_price_requests(@base_request, caps)
+
+      answers = for r <- requests, do: ReferenceVenue.place_order(%{}, r, [])
+      assert AdapterContract.market_price_fault(answers) == nil
+
+      lax = for r <- requests, do: Broken.Convention.Lax.place_order(%{}, r, [])
+      assert {:answered, {:ok, :placed}} = AdapterContract.market_price_fault(lax)
+    end
+
+    test "the reference venue's order checks follow the family order and tags" do
+      place = fn request -> ReferenceVenue.place_order(%{}, request, []) end
+
+      assert {:error, {:invalid_symbol, "  "}} = place.(%{@base_request | symbol: "  "})
+      assert {:error, {:invalid_side, :short}} = place.(%{@base_request | side: :short})
+      assert {:error, {:invalid_quantity, 0.5}} = place.(%{@base_request | quantity: 0.5})
+      assert {:error, {:invalid_price, "-1"}} = place.(%{@base_request | price: "-1"})
+
+      assert {:error, {:invalid_quantity, %Decimal{coef: :NaN}}} =
+               place.(%{@base_request | quantity: Decimal.new("NaN")})
+
+      assert {:error, {:unexpected_field, :stop_price}} =
+               place.(Map.put(@base_request, :stop_price, Decimal.new("1")))
+
+      assert {:ok, %{side: :sell}} = place.(%{@base_request | side: "SELL"})
     end
   end
 end

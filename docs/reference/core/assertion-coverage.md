@@ -97,7 +97,9 @@ endpoint where the answer is cheapest to get for free (a fake push, not a fetch)
 ("both endpoints answer") requires `subscribe/2` always active — no flag, no exception —
 and checks `coverage/1`'s values are one of the three observed-route atoms. Assertion 1
 covers presence for all four. Nothing previously checked the SHAPE of what `subscribe/2`
-actually delivers — see "Gaps closed".
+actually delivers — see "Gaps closed". **Assertion 32** (2026-10-11) covers their arguments:
+a malformed symbol list and a bad `:to` are refused with a tag, on the fake and on the real
+facade with no feed running — see "Gap closed 2026-10-11 — assertions 32 to 35".
 
 ### `coverage_by_kind/1`
 
@@ -109,7 +111,8 @@ actually declares.
 ### `subscribe_notices/1`
 
 **partial**, and the gap is **declined** — see "Gaps considered and declined" below for
-why nothing was added.
+why nothing was added. Its `:to` argument is covered by assertion 32 (a bad subscriber is
+`{:invalid_subscriber, value}`); what it pushes is still not asserted.
 
 ### Health — `test_connection/2`, `get_rate_limit_status/2`, `market_status/1`
 
@@ -726,3 +729,40 @@ not read by this change.
 
 **What it does not reach:** the real venue. It also does not require the answered order to
 carry the placed id, because a venue may take a client id in and return its own.
+
+## Gap closed 2026-10-11 — assertions 32 to 35
+
+The family conventions (bad subscriber, bad symbol list, non-text symbol, malformed order
+request, bad order id) were prose in two decision documents and in each venue's own tests.
+Nothing in the suite held a Fake to them, so a venue could drift without a red run. Each is
+now a group; each decision is a public function in `Core.AdapterContract` and each is shown
+to fail in `contract_teeth_test.exs` against `Broken.Convention.Lax`, a module that breaks
+every convention at once (an accepted malformed list, data for a blank symbol, a placed
+market price, a raise and an exit for a blank id), and to pass against the reference venue.
+
+| group | claim | driven against | skipped when |
+|---|---|---|---|
+| 32 | malformed symbol list is `{:invalid_symbols, v}`; bad `:to` is `{:invalid_subscriber, v}`; symbols judged first | the fake, and the real facade with `absent_feed_opts` (no-feed path of 28: nothing starts, no network) | callback declared `:unsupported` |
+| 33 | `nil`, a number, a blank string on `get_price/2` and `get_top_of_book/2` is `{:invalid_symbol, v}`, with credentials stripped | the fake | both declared `:unsupported` |
+| 34 | non-map `{:invalid_order_request, r}`; no `:order_type` `{:missing_field, :order_type}`; unread key `{:unsupported_order_field, k}`; `:price` on `:market` `{:unexpected_field, :price}` | the fake | `place_order/3` `:unsupported`; the market check also when `:market` is not a supported order type |
+| 35 | `nil` or blank id on `get_order/3`, `cancel_order/3` is `{:invalid_order_id, v}`, with and without the venue's `endpoint_opts:`, credentials stripped | the fake | both declared `:unsupported` |
+
+Judgement calls, stated so they are not mistaken for measurements: the duration a venue takes
+on a market order is its own, so 34 sends the market request with none and with each of
+`supported_time_in_force` and accepts a refusal of the duration, as long as at least one
+answer is the price refusal; a group that finds nothing eligible fails for 32 and 34 and is
+silent for 33 and 35. 32 drives the real facade (not only the fake) on purpose, because
+"whether or not a feed runs" cannot be shown against a fake that has no feed.
+
+**Not asserted yet:** the non-order write rules W1 to W7 (`:write_unconfirmed`, retries only
+under an idempotency key, amounts, return types, list-read truncation) and the unconfirmed
+order write `:order_unconfirmed` are documented on the `Core.Venue` callbacks and held by each
+venue's own tests; the suite cannot provoke a transport failure after send against a fake.
+
+**Read before run (not executed — no `mix` was run for this change).** Robinhood and Schwab are
+expected to pass; Coinbase, Gemini and Webull depend on their `Feed` subscriber validation
+reaching the facade and fake as well.
+
+**Also changed:** the reference venue no longer sends `:link_up` when `subscribe_notices/1`
+registers a subscriber (family convention 9: a registration is not an event); the teeth test
+that asserted it now asserts that no notice arrives and that a bad subscriber is refused.

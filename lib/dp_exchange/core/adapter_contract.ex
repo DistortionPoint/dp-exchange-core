@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Thirty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Thirty-five groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -134,7 +134,21 @@ defmodule DpExchange.Core.AdapterContract do
        "fake order round trip — the ids the fake's place_order/3, place_orders/3, " <>
          "replace_order/4 and close_position/3 return (each when declared active) are " <>
          "accepted by the same fake's get_order/3 and cancel_order/3, unless those are " <>
-         "declared unsupported"}
+         "declared unsupported"},
+      {32,
+       "streaming arguments are validated first — a malformed symbol list is " <>
+         "{:invalid_symbols, v} and a bad :to is {:invalid_subscriber, v}, on the fake and " <>
+         "on the real facade with no feed running, never :ok and never :feed_not_started"},
+      {33,
+       "a symbol that is not text is refused before credentials — nil, a number or a " <>
+         "blank string on get_price/2 and get_top_of_book/2 is {:invalid_symbol, v}"},
+      {34,
+       "place_order request discipline — a non-map is {:invalid_order_request, r}, a " <>
+         "missing order_type {:missing_field, :order_type}, an unread key " <>
+         "{:unsupported_order_field, k}, a price on a market order {:unexpected_field, :price}"},
+      {35,
+       "order ids are checked first — nil or a blank id on get_order/3 and cancel_order/3 " <>
+         "is {:invalid_order_id, v}, before the account option and before credentials"}
     ]
   end
 
@@ -413,6 +427,265 @@ defmodule DpExchange.Core.AdapterContract do
   def timeframe_fault({:ok, _candles}), do: :substituted
   def timeframe_fault(_answer), do: nil
 
+  # --- the family conventions (assertions 32-35) ---------------------------------------
+  #
+  # Every decision below is a public function the macro calls, so each can be shown to fail
+  # in `contract_teeth_test.exs` against a module that breaks the convention, instead of
+  # being a line inside a quote that only a venue's CI ever runs.
+
+  @doc """
+  What is wrong with a call's answer to an argument the family refuses locally, or `nil`.
+  Assertions 32 to 35.
+
+  `expected` is the whole error term, for example `{:invalid_symbols, nil}`; the answer must
+  be exactly `{:error, expected}`.
+
+    * `:raised` — the call raised, exited or threw (`{:raised, error}`, `{:exit, reason}` or
+      `{:throw, value}` from the suite's `call_on/3`). A raise is not a refusal.
+    * `{:answered, answer}` — any other answer: `:ok` for a malformed list, `{:ok, _}`,
+      `{:error, :feed_not_started}` where a symbol was wrong, a refusal after credentials.
+  """
+  @spec refusal_fault(term(), term()) :: nil | :raised | {:answered, term()}
+  def refusal_fault({:error, expected}, expected), do: nil
+  def refusal_fault({:raised, _error}, _expected), do: :raised
+  def refusal_fault({kind, _reason}, _expected) when kind in [:exit, :throw], do: :raised
+  def refusal_fault(answer, _expected), do: {:answered, answer}
+
+  @doc """
+  The calls of `cases` that `module` can be asked, as `{name, args, expected}` triples:
+  exported at that arity and not declared `:unsupported` in `caps`.
+
+  A callback a venue legitimately declares `:unsupported` is skipped the way the suite's
+  other assertions skip it. It is not a pass: assertion 12 holds the declaration to the
+  behaviour.
+  """
+  @spec eligible_cases(module(), DpExchange.Core.Capabilities.t(), [{atom(), list(), term()}]) ::
+          [{atom(), list(), term()}]
+  def eligible_cases(module, %DpExchange.Core.Capabilities{} = caps, cases) do
+    # Loaded first: `function_exported?/3` is false for a module not yet loaded.
+    Code.ensure_loaded(module)
+
+    Enum.filter(cases, fn {name, args, _expected} ->
+      arity = length(args)
+
+      function_exported?(module, name, arity) and
+        DpExchange.Core.Capabilities.active?(caps, {name, arity})
+    end)
+  end
+
+  @doc """
+  Runs each `{name, args, expected}` of `cases` against `module` and returns the ones whose
+  answer is not `{:error, expected}`, as `{name, arity, expected, fault}` with `fault` as
+  `refusal_fault/2` names it. Empty means every case was refused as the convention says.
+
+  The arguments are not kept in the result: they carry the suite's credentials, and a failure
+  message prints what it is given.
+  """
+  @spec case_faults(module(), [{atom(), list(), term()}]) ::
+          [{atom(), arity(), term(), :raised | {:answered, term()}}]
+  def case_faults(module, cases) do
+    for {name, args, expected} <- cases,
+        fault = refusal_fault(apply_safely(module, name, args), expected),
+        do: {name, length(args), expected, fault}
+  end
+
+  defp apply_safely(module, name, args) do
+    apply(module, name, args)
+  rescue
+    error -> {:raised, error}
+  catch
+    kind, reason -> {kind, reason}
+  end
+
+  @doc """
+  A failure message for `case_faults/2`'s result, one line per call that was not refused.
+  """
+  @spec format_case_faults([{atom(), arity(), term(), term()}]) :: String.t()
+  def format_case_faults(faults) do
+    Enum.map_join(faults, "\n", fn {name, arity, expected, fault} ->
+      "  #{name}/#{arity}: expected {:error, #{inspect(expected)}}, got " <>
+        inspect(fault, limit: 8)
+    end)
+  end
+
+  @doc """
+  Symbol lists the streaming calls must refuse as `{:invalid_symbols, value}`: not a list, a
+  list holding a non-string or a blank string (whitespace-only is blank), and an improper
+  list. `sample` is a symbol the venue serves, so the bad lists are bad for exactly one reason.
+  """
+  @spec invalid_symbol_lists(String.t()) :: [term()]
+  def invalid_symbol_lists(sample) do
+    [
+      nil,
+      sample,
+      42,
+      [nil],
+      [42],
+      [:atom],
+      [""],
+      ["  "],
+      [sample, "  "],
+      [sample | improper_tail()]
+    ]
+  end
+
+  # The improper list is the point of the case. Built from a value dialyzer cannot narrow, so
+  # the deliberate cons onto a non-list is not reported as a mistake.
+  defp improper_tail, do: Application.get_env(:dp_exchange_core, :__improper_list_tail__, "tail")
+
+  @doc """
+  `:to` values a streaming call must refuse as `{:invalid_subscriber, value}`: neither a pid
+  nor an atom other than `nil`, `true` and `false`. `nil` is not here: it means the caller.
+  """
+  @spec invalid_subscribers() :: [term()]
+  def invalid_subscribers, do: [42, "subscriber", true, false, {:not, :a_pid}]
+
+  @doc """
+  The `{name, args, expected}` cases of assertion 32, for the streaming calls given `opts`.
+
+  Every malformed symbol list on `subscribe/2`, `unsubscribe/2` and `update_symbols/2`; every
+  bad `:to` on `subscribe/2` and `subscribe_notices/1`; and one call wrong in both ways, which
+  must answer for the symbols, because the symbols are checked first. `opts` decides whether
+  this drives a fake or the real facade with no feed running.
+  """
+  @spec streaming_refusal_cases(String.t(), keyword()) :: [{atom(), list(), term()}]
+  def streaming_refusal_cases(sample, opts) do
+    lists =
+      for name <- [:subscribe, :unsubscribe, :update_symbols],
+          bad <- invalid_symbol_lists(sample),
+          do: {name, [bad, opts], {:invalid_symbols, bad}}
+
+    subscribers =
+      for bad <- invalid_subscribers(),
+          {name, args} <- [
+            {:subscribe, [[sample], Keyword.put(opts, :to, bad)]},
+            {:subscribe_notices, [Keyword.put(opts, :to, bad)]}
+          ],
+          do: {name, args, {:invalid_subscriber, bad}}
+
+    both = {:subscribe, [nil, Keyword.put(opts, :to, 42)], {:invalid_symbols, nil}}
+
+    lists ++ subscribers ++ [both]
+  end
+
+  @doc """
+  Single-symbol values `get_price/2` and `get_top_of_book/2` must refuse as
+  `{:invalid_symbol, value}`: `nil`, a number, and a whitespace-only string.
+  """
+  @spec invalid_single_symbols() :: [term()]
+  def invalid_single_symbols, do: [nil, 42, "  "]
+
+  @doc """
+  The `{name, args, expected}` cases of assertion 33. `opts_for` gives the options for a
+  callback name; the suite passes options with credentials stripped, because the refusal is
+  decided before credentials are read.
+  """
+  @spec single_symbol_refusal_cases((atom() -> keyword())) :: [{atom(), list(), term()}]
+  def single_symbol_refusal_cases(opts_for) when is_function(opts_for, 1) do
+    for name <- [:get_price, :get_top_of_book],
+        bad <- invalid_single_symbols(),
+        do: {name, [bad, opts_for.(name)], {:invalid_symbol, bad}}
+  end
+
+  @doc """
+  The malformed `place_order/3` requests of assertion 34, as `{request, expected}`, built
+  from `base`, a request the venue accepts: a non-map (`{:invalid_order_request, request}`),
+  a request with no `:order_type` (`{:missing_field, :order_type}`) and one with a key the
+  builder does not read (`{:unsupported_order_field, key}`).
+  """
+  @spec order_request_cases(map()) :: [{term(), term()}]
+  def order_request_cases(base) when is_map(base) do
+    [
+      {"not-an-order-request", {:invalid_order_request, "not-an-order-request"}},
+      {nil, {:invalid_order_request, nil}},
+      {[], {:invalid_order_request, []}},
+      {Map.delete(base, :order_type), {:missing_field, :order_type}},
+      {Map.put(base, :contract_unknown_field, 1),
+       {:unsupported_order_field, :contract_unknown_field}}
+    ]
+  end
+
+  @doc """
+  The requests that put a `:price` on a market order, one for each time in force the venue
+  might want for it, or `[]` when `caps` does not support `:market`.
+
+  The time in force a venue takes on a market order is the venue's own (one wants `:ioc`, one
+  none at all), and the check order is time in force before price fields. So the request is
+  sent with no duration and with each duration `caps` names, and `market_price_fault/1`
+  judges the set.
+  """
+  @spec market_price_requests(map(), DpExchange.Core.Capabilities.t()) :: [map()]
+  def market_price_requests(base, %DpExchange.Core.Capabilities{} = caps) when is_map(base) do
+    if :market in caps.supported_order_types do
+      durations = Enum.uniq([nil, Map.get(base, :time_in_force) | caps.supported_time_in_force])
+      Enum.map(durations, &market_with_price(base, &1))
+    else
+      []
+    end
+  end
+
+  defp market_with_price(base, nil) do
+    base
+    |> Map.put(:order_type, :market)
+    |> Map.delete(:time_in_force)
+    |> Map.put(:price, Decimal.new("1"))
+  end
+
+  defp market_with_price(base, duration),
+    do: base |> market_with_price(nil) |> Map.put(:time_in_force, duration)
+
+  @doc """
+  What is wrong with the answers to `market_price_requests/2`, or `nil`. Assertion 34.
+
+  Every answer must be `{:error, {:unexpected_field, :price}}` or a refusal of the *duration*
+  that was tried (`{:unsupported_order_combination, type, tif}`,
+  `{:missing_field, :time_in_force}`, `{:unexpected_field, :time_in_force}`), and at least one
+  must be the price refusal.
+
+    * `{:answered, answer}` — an answer that is neither: a success (the price was dropped
+      and a different order placed than the one asked for), a raise, any other error.
+    * `:price_never_refused` — every duration was refused for being the wrong duration, so
+      nothing showed what the venue does with the price.
+  """
+  @spec market_price_fault([term()]) :: nil | :price_never_refused | {:answered, term()}
+  def market_price_fault(answers) when is_list(answers) do
+    case Enum.find(answers, &(not market_price_answer?(&1))) do
+      nil ->
+        if {:error, {:unexpected_field, :price}} in answers, do: nil, else: :price_never_refused
+
+      offender ->
+        {:answered, offender}
+    end
+  end
+
+  defp market_price_answer?({:error, {:unexpected_field, field}}),
+    do: field in [:price, :time_in_force]
+
+  defp market_price_answer?({:error, {:unsupported_order_combination, _type, _tif}}), do: true
+  defp market_price_answer?({:error, {:missing_field, :time_in_force}}), do: true
+  defp market_price_answer?(_answer), do: false
+
+  @doc """
+  Order ids `get_order/3` and `cancel_order/3` must refuse as `{:invalid_order_id, value}`:
+  `nil` and a whitespace-only string.
+  """
+  @spec invalid_order_ids() :: [term()]
+  def invalid_order_ids, do: [nil, "  "]
+
+  @doc """
+  The `{name, args, expected}` cases of assertion 35. `opts_for` gives, for a callback name,
+  the option lists to try; the suite passes the venue's own options with credentials stripped
+  and an empty list, because the id is checked before the account option and before
+  credentials.
+  """
+  @spec order_id_refusal_cases((atom() -> [keyword()])) :: [{atom(), list(), term()}]
+  def order_id_refusal_cases(opts_for) when is_function(opts_for, 1) do
+    for name <- [:get_order, :cancel_order],
+        bad <- invalid_order_ids(),
+        opts <- opts_for.(name),
+        do: {name, [%{}, bad, opts], {:invalid_order_id, bad}}
+  end
+
   # `test_connection/2` and `get_rate_limit_status/2` are the only two name-based exemptions
   # from assertion 17, and both for the same reason: their own callback doc types the
   # credential `credentials() | nil`. The contract, not a venue's choice, says a missing
@@ -564,6 +837,11 @@ defmodule DpExchange.Core.AdapterContract do
       feed_absent(),
       lower_case_subscription(),
       fake_round_trip(),
+      streaming_arguments(),
+      single_symbol_refusals(),
+      order_request_refusals(),
+      order_id_refusals(),
+      convention_helpers(),
       return_types(),
       return_type_helpers(),
       helpers(),
@@ -2647,6 +2925,140 @@ defmodule DpExchange.Core.AdapterContract do
             else: placed_opts
 
         [arg_value(:credentials, endpoint), id, opts]
+      end
+    end
+  end
+
+  # --- 32-35. the family conventions, from the architect's tick O and P decisions. Each
+  # decision is a public function above (`streaming_refusal_cases/2`, `order_request_cases/1`,
+  # `market_price_fault/1`, ...) so that it can be shown to fail; these only build the calls.
+  # Fake-driven like every group that calls an active endpoint, except the second half of 32,
+  # which drives the real facade down the no-feed path assertion 28 already treats as safe:
+  # nothing starts and nothing reaches the network.
+  defp streaming_arguments do
+    quote location: :keep do
+      describe "32. streaming arguments are validated first" do
+        # Found 2026-10-11 reading the five packages against each other. `unsubscribe(nil)`
+        # answered `:ok` on some and raised on others, a bad `:to` was `{:invalid_subscriber,
+        # _}` on three venues and a delivery to nobody on two, and a bad symbol list answered
+        # `:feed_not_started` whenever no feed ran. Bad input must not depend on whether a
+        # feed happens to be up, so the arguments are judged first, symbols before subscriber.
+        test "the fake refuses a malformed symbol list and a bad subscriber" do
+          if @fake do
+            opts = arg_value(:opts, {:subscribe, 2})
+            assert_conventions(@fake, streaming_cases(opts), "the fake's streaming calls", true)
+          end
+        end
+
+        test "the real facade refuses the same with no feed running" do
+          assert_conventions(
+            @venue,
+            streaming_cases(@absent_feed_opts),
+            "the facade's streaming calls with no feed",
+            true
+          )
+        end
+      end
+
+      defp streaming_cases(opts),
+        do: DpExchange.Core.AdapterContract.streaming_refusal_cases(sample_symbol(), opts)
+    end
+  end
+
+  defp single_symbol_refusals do
+    quote location: :keep do
+      describe "33. a symbol that is not text is refused before credentials" do
+        # Called with credentials stripped: the refusal is decided locally, so it must not
+        # matter that there are none. A venue that read credentials first answered
+        # `{:missing_credentials, _}` for `nil`, and one that built the request first sent an
+        # empty path segment, which the venue reads as a different endpoint.
+        test "get_price/2 and get_top_of_book/2 answer {:invalid_symbol, value}" do
+          if @fake do
+            cases =
+              DpExchange.Core.AdapterContract.single_symbol_refusal_cases(
+                &stripped_arg_value(:opts, {&1, 2})
+              )
+
+            assert_conventions(@fake, cases, "the fake's single-symbol reads", false)
+          end
+        end
+      end
+    end
+  end
+
+  defp order_request_refusals do
+    quote location: :keep do
+      describe "34. place_order request discipline" do
+        # Every rule exists so a caller cannot retry its way into a duplicate order or get a
+        # different order than it asked for: a field the type does not use is refused and
+        # never dropped, a missing type is never defaulted, a non-map never raises.
+        test "a malformed request is refused with its tag, and a market price is not dropped" do
+          if @fake, do: assert_order_request_refusals(@fake, @venue.capabilities())
+        end
+      end
+
+      defp assert_order_request_refusals(fake, caps) do
+        if Capabilities.active?(caps, {:place_order, 3}) do
+          [credentials, base, opts] = endpoint_args(:place_order, 3)
+
+          cases =
+            for {request, reason} <- DpExchange.Core.AdapterContract.order_request_cases(base),
+                do: {:place_order, [credentials, request, opts], reason}
+
+          assert_conventions(fake, cases, "the fake's place_order/3", true)
+          assert_market_price_refused(fake, caps, [credentials, base, opts])
+        end
+      end
+
+      defp assert_market_price_refused(fake, caps, [credentials, base, opts]) do
+        requests = DpExchange.Core.AdapterContract.market_price_requests(base, caps)
+        answers = for r <- requests, do: call_on(fake, {:place_order, 3}, [credentials, r, opts])
+
+        assert DpExchange.Core.AdapterContract.market_price_fault(answers) == nil,
+               "a `:price` on a `:market` order must be `{:error, {:unexpected_field, :price}}`, " <>
+                 "never dropped. Answers, one per time in force tried: " <>
+                 inspect(answers, limit: 8)
+      end
+    end
+  end
+
+  defp order_id_refusals do
+    quote location: :keep do
+      describe "35. order ids are checked first" do
+        # With the venue's own options and with none, both with credentials stripped: the id
+        # is judged before the account option and before credentials, so neither a missing
+        # account nor a missing credential may be the answer for a blank id.
+        test "get_order/3 and cancel_order/3 answer {:invalid_order_id, value}" do
+          if @fake do
+            cases =
+              DpExchange.Core.AdapterContract.order_id_refusal_cases(fn name ->
+                Enum.uniq([stripped_arg_value(:opts, {name, 3}), [credentials: %{}]])
+              end)
+
+            assert_conventions(@fake, cases, "the fake's order id reads", false)
+          end
+        end
+      end
+    end
+  end
+
+  defp convention_helpers do
+    quote location: :keep do
+      # Runs `cases` against `module`, skipping a callback `capabilities/0` declares
+      # `:unsupported`. `required?` refuses a run that examined nothing: a loop over no calls
+      # reports green having checked none, which is the failure this suite exists against.
+      defp assert_conventions(module, cases, what, required?) do
+        eligible =
+          DpExchange.Core.AdapterContract.eligible_cases(module, @venue.capabilities(), cases)
+
+        assert not required? or eligible != [],
+               "#{what}: no call was eligible, so nothing was checked"
+
+        faults = DpExchange.Core.AdapterContract.case_faults(module, eligible)
+
+        assert faults == [],
+               "#{what} did not refuse as the family convention says:\n" <>
+                 DpExchange.Core.AdapterContract.format_case_faults(faults)
       end
     end
   end

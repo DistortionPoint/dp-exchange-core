@@ -21,6 +21,79 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **The family conventions are part of the contract, and four new conformance assertions hold
+  a venue's Fake (and, for 32, its facade) to them.** Every venue already follows them; until
+  now only prose said so.
+  - **32. Streaming arguments are validated first.** On `subscribe/2`, `unsubscribe/2` and
+    `update_symbols/2` a malformed symbol list (not a list, improper, a non-string or blank
+    element) is `{:error, {:invalid_symbols, value}}`, never `:ok`. On `subscribe/2` and
+    `subscribe_notices/1` a `:to` that is not a pid or a non-boolean atom is
+    `{:error, {:invalid_subscriber, value}}`; symbols are judged before the subscriber. Run
+    against the Fake and against the real facade with `absent_feed_opts` (the no-feed path of
+    assertion 28: nothing starts, nothing reaches the network), so bad input answers the
+    same whether or not a feed runs.
+  - **33. A symbol that is not text is refused before credentials.** `nil`, a number or a
+    blank string on `get_price/2` and `get_top_of_book/2` is `{:error, {:invalid_symbol,
+    value}}`, asked with credentials stripped.
+  - **34. `place_order/3` request discipline.** A non-map is `{:invalid_order_request, r}`, a
+    request with no `:order_type` is `{:missing_field, :order_type}`, an unread key is
+    `{:unsupported_order_field, key}`, and a `:price` on a `:market` order is
+    `{:unexpected_field, :price}` (tried with no duration and with each duration the venue's
+    `capabilities/0` names, because the duration a venue takes on a market order is its own).
+    Skipped when `place_order/3` is `:unsupported`; the market check is skipped when `:market`
+    is not a supported order type.
+  - **35. Order ids are checked first.** `nil` or a blank id on `get_order/3` and
+    `cancel_order/3` is `{:error, {:invalid_order_id, value}}`, with credentials stripped
+    and with and without the venue's `endpoint_opts:`, so neither the account option nor
+    credentials may be the answer.
+  - A callback a venue declares `:unsupported` is skipped, as elsewhere. Each decision is a
+    public function with a teeth test (`refusal_fault/2`, `eligible_cases/3`, `case_faults/2`,
+    `streaming_refusal_cases/2`, `single_symbol_refusal_cases/1`, `order_request_cases/1`,
+    `market_price_requests/2`, `market_price_fault/1`, `order_id_refusal_cases/1`), run against
+    a module that breaks every convention at once.
+  - **Expect a venue's CI to go red if its Fake or facade drifts.** A venue whose
+    `order_args: %{order_request: ...}` is not a request its Fake accepts must declare one.
+
+- **`Core.Venue` documents the conventions where a venue author reads them.** The callback
+  `@doc`s of `get_price/2`, `get_top_of_book/2`, `subscribe/2`, `unsubscribe/2`,
+  `update_symbols/2`, `subscribe_notices/1`, `coverage/1`, `place_order/3`, `preview_order/3`,
+  `replace_order/4`, `cancel_order/3`, `get_order/3` now state the error shapes, the check
+  order (arguments, then feed; request, then account option, then credentials), that
+  `subscribe([])` opens nothing, that a cancel is sent once, and that a preview the venue
+  rejects is `{:refused, {:preview_rejected, rejects}}`. New types: `invalid_argument/0`,
+  `order_request_error/0`, `order_unconfirmed/0`, `write_unconfirmed/0` and
+  `order_write_result/1` (the specs of `place_order/3` and `replace_order/4` now use it; the
+  accepted answers are unchanged).
+  - **Unconfirmed order writes.** An outcome of `place_order/3` or `replace_order/4` that may
+    have reached the venue and is not proven is `{:error, {:order_unconfirmed,
+    client_order_id_or_nil, reason}}`, never a bare error and never a refusal; a replace that
+    was accepted but could not be read back is `{:error, {:replace_accepted_unread,
+    order_id, reason}}`.
+  - **Non-order writes (documentation only this release; no assertion yet).** `withdraw/5`,
+    `transfer_internal/4`, `convert/4`, `commit_conversion/2`, `stake/3`, `unstake/3`,
+    `cancel_all_orders/2` and the other state-changing writes document rules W1 to W7:
+    `{:error, {:write_unconfirmed, key_or_nil, reason}}` for an outcome that may have reached
+    the venue, retries only under an idempotency key the venue honours, a confirming body
+    with missing optional fields is `{:ok, struct}`, amounts as Decimal/integer/numeric string
+    with `{:invalid_amount, v}` and `{:invalid_transfer, :same_account}`, `Types.*` returns in
+    the real path and the Fake, and list reads that refuse an unreadable row or a possibly
+    truncated reply (`{:error, :history_truncated}`).
+
+### Changed
+
+- **The reference venue (Core's own Fake) follows the conventions.** `get_price/2`,
+  `get_top_of_book/2`, `get_order_book/2` and `get_historical_prices/4` answer
+  `{:error, {:invalid_symbol, v}}` for a `nil`, non-string or blank symbol (was a
+  `{:refused, :symbol_not_listed}`); `subscribe/2`, `unsubscribe/2`, `update_symbols/2` and
+  `subscribe_notices/1` refuse a malformed list or `:to`; `get_order/3`, `cancel_order/3` and
+  `replace_order/4` refuse a blank id; `place_order/3` validates its request in the family
+  order and returns the order asked for (a side atom, Decimal amounts), where it accepted
+  anything and defaulted a missing type and side. `subscribe_notices/1` no longer sends a
+  `:link_up` on registration (convention 9), and refuses a bad `:to`. Test support only; not
+  shipped.
+
 ## [0.3.78] - 2026-10-11
 
 ### Fixed

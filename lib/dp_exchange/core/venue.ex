@@ -152,8 +152,139 @@ defmodule DpExchange.Core.Venue do
   `{:refused, reason}` is the venue stating it does not carry this symbol at all — a
   permanent answer. `{:error, reason}` may be transient and is worth retrying. Collapsing
   the two makes a delisted symbol look like a network blip forever.
+
+  **A write that may have reached the venue is neither.** It is
+  `{:error, {:order_unconfirmed, id, reason}}` (`t:order_unconfirmed/0`, order writes) or
+  `{:error, {:write_unconfirmed, key, reason}}` (`t:write_unconfirmed/0`, every other
+  state-changing write). A bare `{:error, _}` invites a retry that doubles the write, and a
+  `{:refused, _}` claims it never happened.
   """
   @type result(value) :: {:ok, value} | {:error, term()} | {:refused, term()}
+
+  @typedoc """
+  The refusals the family agrees on for a malformed argument, decided locally: before
+  credentials are read and before anything is sent. The `value` is the argument as given.
+
+    * `{:invalid_symbols, value}` — a symbol **list** that is not a proper list of non-blank
+      strings (`c:subscribe/2`, `c:unsubscribe/2`, `c:update_symbols/2`).
+    * `{:invalid_subscriber, value}` — a `:to` option that is not a pid or a non-boolean
+      atom (`c:subscribe/2`, `c:subscribe_notices/1`).
+    * `{:invalid_symbol, value}` — a single symbol that is `nil`, not a string, or blank
+      after trimming (every single-symbol read, and an order request's `:symbol`).
+    * `{:invalid_order_id, value}` — an order id that is `nil`, not a string, or blank after
+      trimming (`c:get_order/3`, `c:cancel_order/3`, `c:replace_order/4`).
+
+  A caller matches these tags and never a venue's own wording. They are `{:error, _}` and not
+  `{:refused, _}`: the caller can fix the argument and retry.
+  """
+  @type invalid_argument ::
+          {:invalid_symbols, term()}
+          | {:invalid_subscriber, term()}
+          | {:invalid_symbol, term()}
+          | {:invalid_order_id, term()}
+
+  @typedoc """
+  The refusals `c:place_order/3` and `c:replace_order/4` give for a request decided wrong
+  **before anything is sent**, in the order they are checked: request is a map
+  (`:invalid_order_request`), no key the builder does not read (`:unsupported_order_field`),
+  the symbol, the side, `:order_type` (`{:missing_field, :order_type}`), the time in force
+  and the combination, the quantity, the price fields, `client_order_id`, the account
+  option (`{:missing_option, key}`), and only then credentials.
+
+  A field the order type does not use is `{:unexpected_field, key}` — never silently dropped.
+  See `c:place_order/3`.
+  """
+  @type order_request_error ::
+          {:invalid_order_request, term()}
+          | {:unsupported_order_field, term()}
+          | {:invalid_symbol, term()}
+          | {:invalid_side, term()}
+          | {:missing_field, atom()}
+          | {:unexpected_field, atom()}
+          | {:unsupported_order_type, term()}
+          | {:unsupported_order_combination, term(), term()}
+          | {:invalid_quantity, term()}
+          | {:invalid_price, term()}
+          | {:invalid_stop_price, term()}
+          | {:invalid_client_order_id, term()}
+          | {:missing_option, atom()}
+
+  @typedoc """
+  A write that **may have reached the venue** and whose success is not proven:
+  `{:order_unconfirmed, client_order_id_or_nil, reason}`. Never a bare `{:error, _}`, and never
+  `{:refused, _}`, for these outcomes. See `c:place_order/3`.
+  """
+  @type order_unconfirmed :: {:order_unconfirmed, String.t() | nil, term()}
+
+  @typedoc """
+  A **non-order write** that may have reached the venue and whose success is not proven:
+  `{:error, {:write_unconfirmed, key_or_nil, reason}}`. The non-order twin of
+  `t:order_unconfirmed/0`, for `withdraw/5`, `transfer_internal/4`, `convert/4`,
+  `commit_conversion/2`, `stake/3`, `unstake/3`, approved-address changes,
+  `add_payment_method/2`, watchlist and account writes, and `cancel_all_orders/2`.
+
+  ## W1. What is unconfirmed
+
+  A transport error or timeout after the request was sent, a 5xx, or a 2xx the venue accepted
+  whose body cannot be read (undecodable, not an object, missing the id the result needs).
+  `key` is the idempotency or correlation key **actually sent**, a generated one included, so
+  the caller can retry safely with it or reconcile; `nil` when the venue has none. `reason`
+  is bounded. It is never a bare `{:error, _}` (a caller retries those, and a retried
+  withdrawal pays twice) and never `{:refused, _}`. A failure decided before sending
+  (validation, credentials, our own rate limiter refusing, a signing failure) stays plain.
+
+  ## W2. Retries
+
+  A write is retried internally **only** when it carries an idempotency key the venue honours;
+  otherwise it is sent once (`retry_attempts: 1`). A 4xx answered to an internal *retry* of a
+  keyed write (a duplicate client transfer id) is `:write_unconfirmed`, not a refusal: the
+  first attempt may have succeeded. `cancel_all_orders/2` is always sent once.
+
+  ## W3. A confirming body that lacks optional fields
+
+  `{:ok, struct}` with those fields `nil`. Only a body that cannot establish that the write
+  happened is `:write_unconfirmed`.
+
+  ## W4. Amounts and destinations
+
+  A money amount is a `Decimal`, an integer or a numeric string. A float is
+  `{:error, {:invalid_amount, value}}`; so are zero, a negative, NaN, infinity and an
+  exponent beyond the bound the package states. Asset, currency and destination are validated
+  before sending. A transfer whose source equals its destination is
+  `{:error, {:invalid_transfer, :same_account}}`.
+
+  ## W5. Return types
+
+  A callback whose spec names a `Types.*` struct returns that struct, from the real path and
+  from the Fake (`stake/3` and `unstake/3` return `Types.StakingTransaction`).
+
+  ## W6. Fakes
+
+  A Fake refuses exactly what the real path refuses, in the same order, through the same
+  validators; issues a unique generated id per write; echoes only fields the real path
+  returns; and answers an unknown id as the real path does (`{:refused, :not_found}`).
+
+  ## W7. Reads
+
+  An unreadable row refuses the whole reply: it is never silently dropped. A reply that may be
+  truncated (a documented maximum reached with pages unwalked) is
+  `{:error, :history_truncated}` or is walked to completion, never returned as complete. An
+  option the read cannot honour (a portfolio scope, say) is honoured or refused, never
+  ignored.
+
+  Assertions for W1 to W7 are not part of the conformance suite yet; these rules are
+  documented first and held by each venue's own tests.
+  """
+  @type write_unconfirmed :: {:write_unconfirmed, String.t() | nil, term()}
+
+  @typedoc """
+  `result/1` for the two order writes, `c:place_order/3` and `c:replace_order/4`: the same
+  three answers, with the `{:error, _}` shapes this contract names written down.
+  """
+  @type order_write_result(value) ::
+          {:ok, value}
+          | {:error, order_request_error() | invalid_argument() | order_unconfirmed() | term()}
+          | {:refused, term()}
 
   # --- Lifecycle ---------------------------------------------------------
 
@@ -205,7 +336,24 @@ defmodule DpExchange.Core.Venue do
   # mechanism and does not cross this boundary — the caller passes credentials or does
   # not, and reads the consequence from `c:capabilities/0`.
 
-  @doc "The current price for `symbol`."
+  @doc """
+  The current price for `symbol`.
+
+  ## A symbol that is not text is refused locally
+
+  A `symbol` that is `nil`, not a string, or blank after `String.trim/1` answers
+  `{:error, {:invalid_symbol, symbol}}`, decided **before credentials are read and before any
+  request is built**. It never raises, and it never becomes a request with an empty path
+  segment or parameter, which the venue would read as a different endpoint. The same holds
+  for every single-symbol read: `get_top_of_book/2`, `get_order_book/2`,
+  `get_historical_prices/4`, `get_trades/2`, `quantization/1` and the elements of a batch
+  price call. A venue's refusal of a *well-formed* string it cannot serve (`{:refused,
+  :not_listed}`, or an equity-only venue's `{:not_an_equity_symbol, symbol}`) is a different
+  answer and stays.
+
+  Conformance assertion 33 holds a venue's Fake to this for `get_price/2` and
+  `get_top_of_book/2`.
+  """
   @callback get_price(symbol(), keyword()) :: result(Types.Quote.t())
 
   @doc """
@@ -238,6 +386,9 @@ defmodule DpExchange.Core.Venue do
   Most venues publish a dedicated BBO endpoint that is cheaper than a full book, which is
   why this is not `get_order_book/2` with a depth of one. Several publish no timestamp with
   it and several publish no sizes; the type makes both optional rather than inventing them.
+
+  A `nil`, non-string or blank `symbol` is `{:error, {:invalid_symbol, symbol}}`, before
+  credentials: see `c:get_price/2`.
   """
   @callback get_top_of_book(symbol(), keyword()) :: result(Types.TopOfBook.t())
 
@@ -266,6 +417,10 @@ defmodule DpExchange.Core.Venue do
 
   Returns the resulting transaction. **This moves funds**: a consumer calling it has decided
   to, and D2 puts that decision with the host rather than with this package.
+
+  Returns a `Types.StakingTransaction` from the real path and the Fake (W5). An amount that
+  is a float, zero, negative or NaN/infinite is `{:error, {:invalid_amount, value}}` before
+  sending (W4); an outcome that may have reached the venue is `t:write_unconfirmed/0` (W1).
   """
   @callback stake(String.t(), Decimal.t(), keyword()) :: result(Types.StakingTransaction.t())
 
@@ -276,6 +431,9 @@ defmodule DpExchange.Core.Venue do
   transaction carries `:amount_remaining`, which is non-zero for as long as the asset is
   unbonding. A caller that treats the return value as settled will spend an asset it does
   not have yet — see `Types.StakingTransaction`.
+
+  The write rules of `stake/3` apply: the struct return (W5), `{:invalid_amount, value}` (W4)
+  and `t:write_unconfirmed/0` (W1).
   """
   @callback unstake(String.t(), Decimal.t(), keyword()) :: result(Types.StakingTransaction.t())
 
@@ -320,6 +478,10 @@ defmodule DpExchange.Core.Venue do
   A quote past its window may be refused, or filled at the current rate rather than the
   quoted one — which is the outcome to guard against, because it looks like success. D2 puts
   the decision to call this with the host.
+
+  A commit whose request may have reached the venue and whose result is unproven is
+  `{:error, {:write_unconfirmed, key_or_nil, reason}}`, with the quote id or idempotency key
+  sent as `key` (W1). A caller reconciles with `get_conversion/2`; it does not commit again.
   """
   @callback commit_conversion(String.t(), keyword()) :: result(Types.Conversion.t())
 
@@ -343,6 +505,11 @@ defmodule DpExchange.Core.Venue do
   `quote_conversion/4` or does without.
 
   Returns a `Conversion` already `:settled` — it has happened.
+
+  Amount rules are W4 (`{:invalid_amount, value}`; a float is refused). An outcome that may
+  have reached the venue is `{:error, {:write_unconfirmed, key_or_nil, reason}}` (W1), with
+  the idempotency key actually sent. It is retried internally only under a key the venue
+  honours (W2).
   """
   @callback convert(String.t(), String.t(), Decimal.t(), keyword()) ::
               result(Types.Conversion.t())
@@ -428,6 +595,16 @@ defmodule DpExchange.Core.Venue do
       not credited to anyone
 
   A memo is passed as `memo:` in `opts`. A package must not synthesise one.
+
+  ## Because it cannot be undone
+
+  `amount` is a `Decimal`, an integer or a numeric string; a float, zero, a negative, NaN or
+  infinity is `{:error, {:invalid_amount, value}}`, and asset, network and address are
+  validated, all before anything is sent (W4). An outcome that may have reached the venue (a
+  timeout after sending, a 5xx, a 2xx whose body does not carry the withdrawal id) is
+  `{:error, {:write_unconfirmed, key_or_nil, reason}}`, where `key` is the client transfer id
+  actually sent (W1). A withdrawal is retried internally only under such a key, and a 4xx to
+  that retry is also unconfirmed (W2), because the first attempt may have left.
   """
   @callback withdraw(String.t(), String.t(), Decimal.t(), String.t(), keyword()) ::
               result(Types.Withdrawal.t())
@@ -517,6 +694,11 @@ defmodule DpExchange.Core.Venue do
 
   Which accounts a venue exposes and how they are named is the venue's own; `opts` carries
   its source and destination identifiers.
+
+  A transfer whose source equals its destination is `{:error, {:invalid_transfer,
+  :same_account}}`; amounts follow W4; an outcome that may have reached the venue is
+  `{:error, {:write_unconfirmed, key_or_nil, reason}}` (W1), sent once unless it carries an
+  idempotency key the venue honours (W2).
   """
   @callback transfer_internal(String.t(), Decimal.t(), keyword(), keyword()) :: result(map())
 
@@ -731,10 +913,19 @@ defmodule DpExchange.Core.Venue do
   # Credentials arrive as arguments. A package never reads them from a vault, an
   # environment variable or a consumer's config — it is handed what it needs, per call.
 
-  @doc "Balances for the credentialed account."
+  @doc """
+  Balances for the credentialed account.
+
+  Account reads (this, `get_accounts/2`, `get_transfers/2`, `get_orders/2` and the other
+  list reads) follow W7: a row that cannot be read refuses the whole reply rather than being
+  dropped; a reply that may be truncated is `{:error, :history_truncated}` or walked to
+  completion; an option the read cannot honour is honoured or refused, never ignored.
+  """
   @callback get_balances(credentials(), keyword()) :: result([Types.Balance.t()])
 
-  @doc "Accounts visible to the credential."
+  @doc """
+  Accounts visible to the credential. A list read: see `c:get_balances/2` for W7.
+  """
   @callback get_accounts(credentials(), keyword()) :: result([map()])
 
   @doc """
@@ -750,11 +941,77 @@ defmodule DpExchange.Core.Venue do
   """
   @callback get_fees(credentials(), keyword()) :: result(map())
 
-  @doc "Deposit and withdrawal history — needed to compute cost basis for transferred-in assets."
+  @doc """
+  Deposit and withdrawal history — needed to compute cost basis for transferred-in assets.
+
+  A history that may be incomplete is never returned as complete (W7): when the venue's
+  documented maximum is reached with pages unwalked, the answer is
+  `{:error, :history_truncated}`.
+  """
   @callback get_transfers(credentials(), keyword()) :: result([map()])
 
-  @doc "Places an order. Irreplaceable by definition: this is the act."
-  @callback place_order(credentials(), map(), keyword()) :: result(Types.Order.t())
+  @doc """
+  Places an order. Irreplaceable by definition: this is the act.
+
+  Every rule below exists so that a caller can never retry its way into a duplicate order,
+  or receive a different order from the one it asked for. `{:refused, _}` is permanent and
+  `{:error, _}` may be retried, so which of the two a failure is decides whether a second
+  order gets placed.
+
+  ## Checked locally, in this order, before anything is sent
+
+  1. the request is a map: `{:error, {:invalid_order_request, request}}`. A non-map never
+     raises `BadMapError`;
+  2. no key the venue's builder does not read: `{:error, {:unsupported_order_field, key}}`.
+     That includes `:client_order_id` on a venue with no idempotency key;
+  3. `:symbol`: `{:error, {:invalid_symbol, value}}` for `nil`, a non-string or a blank one;
+  4. `:side`: `{:error, {:invalid_side, value}}`. `:buy`/`:sell` and `"buy"`/`"sell"` in any
+     case are accepted; anything `capabilities/0` says the venue does not support (a short
+     sale where `supports_short_selling` is `false`) is refused here too;
+  5. `:order_type`: `{:error, {:missing_field, :order_type}}` when absent. **It is never
+     defaulted, and a missing price does not make an order a market order.** A type the
+     venue does not serve is `{:error, {:unsupported_order_type, type}}`;
+  6. `:time_in_force`: `{:error, {:missing_field, :time_in_force}}` for a type whose venue
+     request carries a duration, `{:error, {:unexpected_field, :time_in_force}}` for a type
+     whose request carries none, `{:error, {:unsupported_order_combination, type, tif}}` for
+     a pair `capabilities/0` does not serve. A good-till-date order without its expiry key is
+     `{:error, {:missing_field, key}}`;
+  7. `:quantity`: `{:error, {:invalid_quantity, value}}`;
+  8. the price fields: `{:error, {:invalid_price, value}}` and
+     `{:error, {:invalid_stop_price, value}}`. A field the order type does not use is
+     `{:error, {:unexpected_field, key}}` (`:price` on a market order, `:stop_price` on a
+     non-stop one): **it is never silently dropped**, because the order placed would not be
+     the order asked for;
+  9. `:client_order_id` against the venue's own format rule: `{:error,
+     {:invalid_client_order_id, value}}`;
+  10. the account option the venue needs: `{:error, {:missing_option, key}}`, never a bare
+      atom;
+  11. credentials: `{:error, {:missing_credentials, venue}}`.
+
+  Quantities and prices accept a `Decimal`, an integer or a numeric string, and refuse a
+  float (it has already lost digits), zero and negative values, and NaN and infinity.
+  Nothing here raises, whatever it is handed.
+
+  ## An outcome that may have reached the venue is `:order_unconfirmed`
+
+  A transport error or timeout after the request was sent, a 5xx, a 2xx whose body cannot be
+  read, a 2xx without the order id, or a duplicate-client-order-id answer after an internal
+  retry is
+
+      {:error, {:order_unconfirmed, client_order_id_or_nil, reason}}
+
+  with `reason` bounded in size. The id is the `client_order_id` actually sent, including a
+  package-generated one, so the caller can look the order up. It is never a bare `{:error, _}`
+  (a caller retries those) and never `{:refused, _}` (a caller treats those as "no order
+  exists"). A failure decided before sending (everything above, our own rate limiter
+  refusing, a signing failure) stays a plain `{:error, reason}` and is **not** wrapped.
+
+  A 2xx body that confirms the order but lacks fields is still `{:ok, %Order{}}`.
+
+  Conformance assertion 34 holds a venue's Fake to items 1, 2, 5 and 8 above.
+  """
+  @callback place_order(credentials(), map(), keyword()) ::
+              order_write_result(Types.Order.t())
 
   @doc """
   Places several orders in **one** request. **This moves funds.**
@@ -786,6 +1043,20 @@ defmodule DpExchange.Core.Venue do
   data. This type said `Order.t()` only, which three of five venues never returned. A
   caller wanting the order after a `:cancelled` asks `get_order/3`; a package does not
   fabricate one from the request.
+
+  ## Refusals and shapes
+
+  The order id is checked first, locally: `nil`, a non-string or a blank one is
+  `{:error, {:invalid_order_id, value}}`, **before the account option and before
+  credentials** (a venue's format rule for a well-formed string keeps the same tag). A
+  missing account option is then `{:error, {:missing_option, key}}`, before credentials.
+
+  An order the venue has no record of is `{:refused, :not_found}`: a 404 is a permanent
+  answer, not an `:exchange_error`. A transport failure keeps Core's
+  `{:error, {:exchange_error, venue, message}}` tag.
+
+  **A cancel is sent once.** No venue retries it internally: a second cancel of an order
+  that the first already cancelled would come back as a refusal that hides the success.
   """
   @callback cancel_order(credentials(), String.t(), keyword()) ::
               result(Types.Order.t() | :cancelled)
@@ -809,6 +1080,10 @@ defmodule DpExchange.Core.Venue do
   Returns `%{cancelled: [id], rejected: [id]}`. **A non-empty `rejected` is not a failed
   call** — the venue answered and some orders were already gone. Returning an error there
   would tell a caller nothing was cancelled when most of it was.
+
+  **Sent once** (W2): never retried internally. An outcome that may have reached the venue is
+  `{:error, {:write_unconfirmed, nil, reason}}` (W1); the caller reconciles with
+  `get_orders/2` and does not simply call again.
   """
   @callback cancel_all_orders(credentials(), keyword()) ::
               result(%{cancelled: [String.t()], rejected: [String.t()]})
@@ -823,6 +1098,11 @@ defmodule DpExchange.Core.Venue do
 
   Declared through `supports_order_preview`, so a caller can tell "this venue has no
   preview" from "this package has not implemented one".
+
+  The request is checked exactly as `c:place_order/3` checks it, in the same order. **A
+  preview the venue rejects** (Schwab's non-empty `orderValidationResult.rejects`) is
+  `{:refused, {:preview_rejected, rejects}}`: the venue answered, and the answer is that this
+  order will not be accepted as written. A Fake models it.
   """
   @callback preview_order(credentials(), map(), keyword()) :: result(map())
 
@@ -835,8 +1115,24 @@ defmodule DpExchange.Core.Venue do
 
   So this is a claim about risk rather than convenience, and it is declared through
   `supports_order_replace` rather than being inferred from the callback existing.
+
+  The order id is checked as `c:cancel_order/3` checks it
+  (`{:error, {:invalid_order_id, value}}`), then the request as `c:place_order/3` checks it.
+
+  ## An outcome that may have reached the venue
+
+  As for `c:place_order/3`: a transport error after sending, a 5xx, or a 2xx with an
+  unreadable body or no new order id is
+  `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`. Never a bare error and
+  never a refusal.
+
+  **A replace the venue accepted whose read-back then failed** is
+  `{:error, {:replace_accepted_unread, order_id, reason}}`. The amendment is in force; only
+  the order's new state is unknown, and the caller reads it with `c:get_order/3`. A package
+  does not fabricate an `Order` from the request to fill the gap.
   """
-  @callback replace_order(credentials(), String.t(), map(), keyword()) :: result(Types.Order.t())
+  @callback replace_order(credentials(), String.t(), map(), keyword()) ::
+              order_write_result(Types.Order.t())
 
   @doc """
   Validates a *change* to an open order without making it, returning the venue's estimate
@@ -874,7 +1170,14 @@ defmodule DpExchange.Core.Venue do
   """
   @callback close_position(credentials(), symbol(), keyword()) :: result(Types.Order.t())
 
-  @doc "One order's current state."
+  @doc """
+  One order's current state.
+
+  The order id is checked first, locally: `nil`, a non-string or a blank one is
+  `{:error, {:invalid_order_id, value}}`, before the account option and before credentials.
+  A missing account option is `{:error, {:missing_option, key}}`, before credentials. An
+  order the venue does not know is `{:refused, :not_found}`. See `c:cancel_order/3`.
+  """
   @callback get_order(credentials(), String.t(), keyword()) :: result(Types.Order.t())
 
   @doc "Orders visible to the credential."
@@ -942,6 +1245,32 @@ defmodule DpExchange.Core.Venue do
   back-pressure was handled and declared when neither was true. An unimplementable sentence
   in a contract does not stay a wording problem; it becomes the reason a real guarantee is
   missing.
+
+  ## Arguments are validated first, in this order, whether or not a feed runs
+
+  Every streaming call (`subscribe/2`, `unsubscribe/2`, `update_symbols/2`, and
+  `c:subscribe_notices/1` for its subscriber) checks its arguments **before** it looks for a
+  feed, so bad input gets the same answer on a venue whose feed is up and on one whose feed
+  is not:
+
+  1. the symbol list. Anything but a proper list of strings that are non-blank after
+     `String.trim/1` (not a list, an improper list, a `nil` or number element, a
+     whitespace-only element) is `{:error, {:invalid_symbols, value}}`. A malformed argument
+     is **never** `:ok`: `unsubscribe(nil)` refuses.
+  2. the subscriber. A `:to` that is neither a pid nor an atom other than `nil`, `true` and
+     `false` is `{:error, {:invalid_subscriber, value}}`. `to: nil` is not refused: it means
+     "the caller", exactly as if the key were absent (see `DpExchange.Core.Config.opt/3`).
+  3. only then `{:error, :feed_not_started}` when no feed is running.
+
+  A `:to` atom that names no registered process is accepted and then skipped on delivery, as
+  `DpExchange.Core.Fanout` skips it.
+
+  **`subscribe([])` registers the subscriber and opens nothing**: no socket, route or
+  connection is made for an empty set. A consumer that has not asked for a symbol must not
+  find a connection open.
+
+  Conformance assertion 32 holds a venue's Fake to 1 and 2, and its facade to 1 and 2 with no
+  feed running.
   """
   @callback subscribe([symbol()], keyword()) :: :ok | {:error, term()}
 
@@ -960,10 +1289,21 @@ defmodule DpExchange.Core.Venue do
   unsubscribing a symbol stops it for every process subscribed to it on this venue. Two
   consumers sharing one venue's feed must agree on its symbol set, or each run their own
   feed.
+
+  Its `symbols` are validated as `c:subscribe/2` validates them: a malformed list is
+  `{:error, {:invalid_symbols, value}}` and never `:ok`, and that answer does not depend on
+  whether a feed is running.
   """
   @callback unsubscribe([symbol()], keyword()) :: :ok | {:error, term()}
 
-  @doc "Changes a live subscription's symbol set without tearing the venue's connections down."
+  @doc """
+  Changes a live subscription's symbol set without tearing the venue's connections down.
+
+  The set is **replaced**, where `c:subscribe/2` adds. `symbols` are validated as
+  `c:subscribe/2` validates them (`{:error, {:invalid_symbols, value}}`, whether or not a feed
+  runs), and a venue honours `:to` here only if its feed really does; one that does not
+  ignores it rather than refusing.
+  """
   @callback update_symbols([symbol()], keyword()) :: :ok | {:error, term()}
 
   @doc """
@@ -1011,6 +1351,12 @@ defmodule DpExchange.Core.Venue do
   state, not a fault. A window there would report `:not_covered` for a healthy quiet market,
   which is a false alarm and its own harm. So on a stream, coverage means *observed at least
   once since this connection came up* — never "recently", and never "how stale".
+
+  ## It answers a map in every state
+
+  With no feed running, or with a `:feed` option naming a pid on **another node**, the answer
+  is `%{}` and never an exit or a `Process.alive?/1` raise on a remote pid. A Fake reports
+  only the symbols it actually delivered data for, as the real feed reports only what arrived.
   """
   @callback coverage(keyword()) :: %{symbol() => route()}
 
@@ -1067,6 +1413,11 @@ defmodule DpExchange.Core.Venue do
 
   **A notice is a prompt to re-read, never the record.** Delivery is not guaranteed — see
   `DpExchange.Core.Notice`.
+
+  A `:to` that is not a pid or a non-boolean atom is `{:error, {:invalid_subscriber, value}}`
+  (`to: nil` means the caller), checked before `{:error, :feed_not_started}`. Registering for
+  notices sends nothing unless the real feed sends something on registration: in particular a
+  Fake sends no `:link_up` the real feed would not. See `c:subscribe/2`.
   """
   @callback subscribe_notices(keyword()) :: :ok | {:error, term()}
 
