@@ -763,6 +763,31 @@ venue's own tests; the suite cannot provoke a transport failure after send again
 expected to pass; Coinbase, Gemini and Webull depend on their `Feed` subscriber validation
 reaching the facade and fake as well.
 
+## Gap closed 2026-10-12 — assertions 36 to 39
+
+Tick R's market-data conventions (MD1, MD2, MD3, MD5, MD6) were documented on the callbacks and
+held only by each venue's own tests. Each is now a group, driven against the fake, with its
+decision a public function in `Core.AdapterContract` shown to fail in `contract_teeth_test.exs`.
+
+| group | claim | skipped when |
+|---|---|---|
+| 36 | a non-boolean `include_partial` is `{:invalid_option, :include_partial, v}` | `get_historical_prices/4` `:unsupported`, or no timeframe declared |
+| 37 | candles strictly oldest first and aligned (strict UTC grid for crypto-only venues, and widths of 30m and under or a day and over; 30-minute grid for wider intraday widths elsewhere); `[start, end)` re-asked from the fake's own bars | `:unsupported`; an empty answer; a refused range (not evidence) |
+| 38 | `depth: 1` returns at most one level a side; `limit: 1` succeeds, is `{:unsupported_option, :limit}` or `{:invalid_option, :limit, v}`, never raises or another error | `get_order_book/2` `:unsupported`; no judgement when the baseline book is not a success |
+| 39 | Quote/Trade/Candle prices > 0; TopOfBook bid/ask nil or > 0; book level price and size > 0, sides best first | each endpoint `:unsupported`; an answer that is not `{:ok, _}` |
+
+Judgement calls: 38 does **not** require `:limit` to be refused. Core lets a venue ignore an
+option it has no use for, and the suite cannot tell a natively honoured `:limit` from an ignored
+one, so requiring refusal would fail correct venues. 37's range probes are vacuous for a fake
+whose window refuses the probe (Gemini's fixed window and Coinbase's 350-bar limit against a
+fake clock weeks in the past); the ordering and alignment check on the unranged answer still
+runs. The reference venue's candle and book fakes now honour range and `:depth`.
+
+**Read before run (not executed — no `mix` was run).** Expected: Schwab passes (five aligned
+bars, bounded probe). Coinbase passes (honours `:depth`, refuses `:limit`). Robinhood skips
+everything. Gemini and Webull are expected to FAIL 38: their fakes validate `:depth` but return
+a fixed ladder (three and two levels), so `depth: 1` is not honoured; the real calls send it.
+
 **Also changed:** the reference venue no longer sends `:link_up` when `subscribe_notices/1`
 registers a subscriber (family convention 9: a registration is not an event); the teeth test
 that asserted it now asserts that no notice arrives and that a bad subscriber is refused.

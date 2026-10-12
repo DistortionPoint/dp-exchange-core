@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Thirty-five groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Thirty-nine groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -148,7 +148,20 @@ defmodule DpExchange.Core.AdapterContract do
          "{:unsupported_order_field, k}, a price on a market order {:unexpected_field, :price}"},
       {35,
        "order ids are checked first — nil or a blank id on get_order/3 and cancel_order/3 " <>
-         "is {:invalid_order_id, v}, before the account option and before credentials"}
+         "is {:invalid_order_id, v}, before the account option and before credentials"},
+      {36,
+       "include_partial must be a boolean — a non-boolean on get_historical_prices/4 is " <>
+         "{:invalid_option, :include_partial, v}"},
+      {37,
+       "candles are oldest first, aligned to their width (30-minute grid for a wider " <>
+         "intraday width on a session-traded venue), and a range is :start inclusive, " <>
+         ":end exclusive"},
+      {38,
+       "order book options — :depth caps the levels per side; :limit is refused " <>
+         "{:unsupported_option, :limit}, honoured natively or tolerated, never a stray error"},
+      {39,
+       "prices and sizes are positive — every Quote, Trade and Candle price, every book " <>
+         "level's price and size, with books best first"}
     ]
   end
 
@@ -718,6 +731,249 @@ defmodule DpExchange.Core.AdapterContract do
         do: {name, [%{}, bad, opts], {:invalid_order_id, bad}}
   end
 
+  # --- the market-data conventions (assertions 36-39) ----------------------------------
+  #
+  # As above: each decision is a public function the macro calls, so `contract_teeth_test.exs`
+  # can show it fail. They judge what a venue's FAKE returned; they never name transport.
+
+  @invalid_include_partial ["true", "false", 0, 1, :yes]
+
+  @doc """
+  The width assertions 36 and 37 ask `get_historical_prices/4` for: `"1h"` when `caps` declares
+  it, else the first declared width the shared vocabulary gives a fixed length, else the first
+  declared width, or `nil` when none is declared.
+
+  A venue is asked for a width it serves: asking for one it does not would be refused for the
+  width before the option under test was ever read.
+  """
+  @spec probe_timeframe(DpExchange.Core.Capabilities.t()) :: String.t() | nil
+  def probe_timeframe(%DpExchange.Core.Capabilities{historical_timeframes: widths}) do
+    cond do
+      "1h" in widths ->
+        "1h"
+
+      fixed = Enum.find(widths, &match?({:ok, _width}, DpExchange.Core.Timeframe.seconds(&1))) ->
+        fixed
+
+      true ->
+        List.first(widths)
+    end
+  end
+
+  @doc """
+  The `{name, args, expected}` cases of assertion 36: `get_historical_prices/4` with an
+  `:include_partial` that is not a boolean must answer `{:error, {:invalid_option,
+  :include_partial, value}}`. `nil` is not tried: several venues read it as an absent option.
+  """
+  @spec include_partial_refusal_cases(String.t(), String.t(), keyword()) ::
+          [{atom(), list(), term()}]
+  def include_partial_refusal_cases(symbol, timeframe, opts) do
+    for bad <- @invalid_include_partial do
+      {:get_historical_prices, [symbol, timeframe, [], Keyword.put(opts, :include_partial, bad)],
+       {:invalid_option, :include_partial, bad}}
+    end
+  end
+
+  @session_grid_seconds 1_800
+
+  @doc """
+  What is wrong with the candles a fake returned for `timeframe`, or `nil`. Assertion 37.
+
+    * `{:unordered, opened_at}` — a bar that is not later than the one before it. Oldest
+      first, strictly.
+    * `{:unaligned, opened_at}` — a bar not on its width's grid. The grid is
+      `Timeframe.aligned?/2` (strict, UTC), except that for a venue that is not crypto-only
+      (`asset_classes`) a width wider than 30 minutes and shorter than a day is
+      session-anchored (US equity sessions open at 09:30 ET) and only needs 30-minute
+      alignment. Daily and longer bars are mapped to 00:00 UTC of the session date and stay
+      strict. Widths the vocabulary does not model are not judged.
+  """
+  @spec candle_series_fault([struct()], String.t(), [atom()]) ::
+          nil | {:unordered | :unaligned, term()}
+  def candle_series_fault(candles, timeframe, asset_classes) do
+    times = Enum.map(candles, & &1.opened_at)
+
+    Enum.find_value(times, fn at ->
+      if not on_grid?(at, timeframe, asset_classes), do: {:unaligned, at}
+    end) || ascending_fault(times)
+  end
+
+  defp on_grid?(at, timeframe, asset_classes) do
+    case DpExchange.Core.Timeframe.seconds(timeframe) do
+      {:ok, width} when width > @session_grid_seconds and width < 86_400 ->
+        if asset_classes == [:crypto],
+          do: DpExchange.Core.Timeframe.aligned?(at, timeframe),
+          else: DpExchange.Core.Timeframe.aligned?(at, "30m")
+
+      _strict_or_unmodelled ->
+        DpExchange.Core.Timeframe.aligned?(at, timeframe)
+    end
+  end
+
+  defp ascending_fault(times) do
+    times
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.find_value(fn [earlier, later] ->
+      if DateTime.compare(earlier, later) != :lt, do: {:unordered, later}
+    end)
+  end
+
+  @doc """
+  The ranges assertion 37 re-asks with, as `{range, must_include}`, chosen from the fake's own
+  bars (oldest first). Two or more bars: `start` the first bar's `opened_at` and `end` the last
+  one's, which must keep the first and drop the last. One bar: `start` alone (keeps it) and
+  `end` alone (drops it). None: nothing to ask.
+  """
+  @spec candle_range_probes([struct()]) :: [{keyword(), [DateTime.t()]}]
+  def candle_range_probes([]), do: []
+
+  def candle_range_probes([only]),
+    do: [{[start: only.opened_at], [only.opened_at]}, {[end: only.opened_at], []}]
+
+  def candle_range_probes([first | rest]) do
+    [{[start: first.opened_at, end: List.last(rest).opened_at], [first.opened_at]}]
+  end
+
+  @doc """
+  What is wrong with a ranged answer, or `nil`. `:start` is inclusive and `:end` exclusive, on
+  `opened_at`: `{:outside_range, opened_at}` for a bar outside `range`, `{:missing,
+  opened_at}` for one of `must_include` that was dropped.
+
+  An answer that is not `{:ok, candles}` is `nil`: a venue may refuse a range its window cannot
+  reach, and a refusal is not evidence about the bounds.
+  """
+  @spec range_fault(keyword(), term(), [DateTime.t()]) ::
+          nil | {:outside_range | :missing, DateTime.t()}
+  def range_fault(range, {:ok, candles}, must_include) when is_list(candles) do
+    times = Enum.map(candles, & &1.opened_at)
+
+    case Enum.find(times, &outside_range?(&1, range)) do
+      nil -> missing_fault(times, must_include)
+      outside -> {:outside_range, outside}
+    end
+  end
+
+  def range_fault(_range, _answer, _must_include), do: nil
+
+  defp missing_fault(times, must_include) do
+    Enum.find_value(must_include, fn wanted ->
+      if not Enum.any?(times, &(DateTime.compare(&1, wanted) == :eq)), do: {:missing, wanted}
+    end)
+  end
+
+  defp outside_range?(at, range) do
+    start = Keyword.get(range, :start)
+    finish = Keyword.get(range, :end)
+
+    (start != nil and DateTime.compare(at, start) == :lt) or
+      (finish != nil and DateTime.compare(at, finish) != :lt)
+  end
+
+  @doc "The `:depth` assertion 38 asks for: one level per side."
+  @spec book_probe_depth() :: pos_integer()
+  def book_probe_depth, do: 1
+
+  @doc """
+  What is wrong with the answer to a `depth` request, or `nil`: `{:too_many_levels, side, n}`
+  when a side carries more than `depth` levels. A refusal is `nil`; a venue may have a minimum.
+  """
+  @spec book_depth_fault(term(), pos_integer()) ::
+          nil | {:too_many_levels, :bids | :asks, non_neg_integer()}
+  def book_depth_fault({:ok, %DpExchange.Core.Types.OrderBook{bids: bids, asks: asks}}, depth) do
+    cond do
+      length(bids) > depth -> {:too_many_levels, :bids, length(bids)}
+      length(asks) > depth -> {:too_many_levels, :asks, length(asks)}
+      true -> nil
+    end
+  end
+
+  def book_depth_fault(_answer, _depth), do: nil
+
+  @doc """
+  What is wrong with the answer to a request carrying `limit:`, given the answer `baseline`
+  without it, or `nil`. Only what the convention requires: Coinbase refuses `:limit`
+  (`{:unsupported_option, :limit}`) because its old option meant depth, while a venue whose
+  book has no `:limit` ignores it as Core's usage rules let it, and one with a native `:limit`
+  may refuse a value (`{:invalid_option, :limit, v}`). So a success and those two refusals are
+  fine; a raise (`:raised`) or any other answer (`{:answered, answer}`) is not. Nothing is
+  judged when the baseline itself was not a success.
+  """
+  @spec book_limit_fault(term(), term()) :: nil | :raised | {:answered, term()}
+  def book_limit_fault({:ok, _baseline}, answer) do
+    case answer do
+      {:ok, _book} -> nil
+      {:error, {:unsupported_option, :limit}} -> nil
+      {:error, {:invalid_option, :limit, _value}} -> nil
+      {kind, _reason} when kind in [:raised, :exit, :throw] -> :raised
+      other -> {:answered, other}
+    end
+  end
+
+  def book_limit_fault(_baseline, _answer), do: nil
+
+  @positive_fields %{
+    DpExchange.Core.Types.Quote => [:price],
+    DpExchange.Core.Types.Trade => [:price],
+    DpExchange.Core.Types.Candle => [:open, :high, :low, :close]
+  }
+
+  @doc """
+  What is wrong with a value (or list of values) a fake returned, or `nil`. Assertion 39.
+
+  A traded price (`Quote.price`, `Trade.price`, a candle's open, high, low and close) is above
+  zero: `{:non_positive, field, value}`. A `TopOfBook` bid or ask is `nil` or above zero. An
+  `OrderBook` level has a price and a size above zero and each side is best first
+  (`{:non_positive, {side, :price | :size}, value}`, `{:unreadable_level, side, level}`,
+  `{:unsorted, side}`). Any other value is not judged.
+  """
+  @spec market_value_fault(term()) :: nil | tuple()
+  def market_value_fault(values) when is_list(values),
+    do: Enum.find_value(values, &market_value_fault/1)
+
+  def market_value_fault(%DpExchange.Core.Types.OrderBook{bids: bids, asks: asks}),
+    do: side_fault(:bids, bids, :desc) || side_fault(:asks, asks, :asc)
+
+  def market_value_fault(%DpExchange.Core.Types.TopOfBook{bid: bid, ask: ask}) do
+    Enum.find_value([bid: bid, ask: ask], fn {field, value} ->
+      if not (is_nil(value) or positive?(value)), do: {:non_positive, field, value}
+    end)
+  end
+
+  def market_value_fault(%module{} = value) do
+    fields = Map.get(@positive_fields, module, [])
+
+    Enum.find_value(fields, fn field ->
+      price = Map.get(value, field)
+      if not positive?(price), do: {:non_positive, field, price}
+    end)
+  end
+
+  def market_value_fault(_other), do: nil
+
+  defp side_fault(side, levels, direction) when is_list(levels) do
+    Enum.find_value(levels, &level_fault(side, &1)) || order_fault(side, levels, direction)
+  end
+
+  defp side_fault(side, other, _direction), do: {:unreadable_level, side, other}
+
+  defp level_fault(side, {price, size}) do
+    cond do
+      not positive?(price) -> {:non_positive, {side, :price}, price}
+      not positive?(size) -> {:non_positive, {side, :size}, size}
+      true -> nil
+    end
+  end
+
+  defp level_fault(side, other), do: {:unreadable_level, side, other}
+
+  defp order_fault(side, levels, direction) do
+    prices = Enum.map(levels, &elem(&1, 0))
+    if prices != Enum.sort_by(prices, & &1, {direction, Decimal}), do: {:unsorted, side}
+  end
+
+  defp positive?(%Decimal{} = value), do: Decimal.positive?(value)
+  defp positive?(_other), do: false
+
   # `test_connection/2` and `get_rate_limit_status/2` are the only two name-based exemptions
   # from assertion 17, and both for the same reason: their own callback doc types the
   # credential `credentials() | nil`. The contract, not a venue's choice, says a missing
@@ -873,6 +1129,10 @@ defmodule DpExchange.Core.AdapterContract do
       single_symbol_refusals(),
       order_request_refusals(),
       order_id_refusals(),
+      include_partial_refusals(),
+      candle_conventions(),
+      book_option_conventions(),
+      positive_values(),
       convention_helpers(),
       return_types(),
       return_type_helpers(),
@@ -3069,6 +3329,158 @@ defmodule DpExchange.Core.AdapterContract do
 
             assert_conventions(@fake, cases, "the fake's order id reads", false)
           end
+        end
+      end
+    end
+  end
+
+  # --- 36-39. the market-data conventions of tick R (MD1, MD2, MD3, MD5, MD6), fake-driven.
+  defp include_partial_refusals do
+    quote location: :keep do
+      describe "36. include_partial must be a boolean" do
+        # The still-forming bar is opt-in (MD1), so the option is a flag, and a flag that is
+        # not a boolean is refused rather than read as truthy: `"false"` is truthy.
+        test "get_historical_prices/4 answers {:invalid_option, :include_partial, v}" do
+          endpoint = {:get_historical_prices, 4}
+          timeframe = DpExchange.Core.AdapterContract.probe_timeframe(@venue.capabilities())
+
+          if @fake && timeframe do
+            cases =
+              DpExchange.Core.AdapterContract.include_partial_refusal_cases(
+                arg_value(:symbol, endpoint),
+                timeframe,
+                arg_value(:opts, endpoint)
+              )
+
+            assert_conventions(@fake, cases, "the fake's candle options", true)
+          end
+        end
+      end
+    end
+  end
+
+  defp candle_conventions do
+    quote location: :keep do
+      describe "37. candles are oldest first, on their grid, and a range is [start, end)" do
+        # MD2 and MD3. The range is chosen from the fake's own bars, so a venue is never asked
+        # for a window it has no data in; a refused range is not evidence and is skipped.
+        test "the fake's candles and the ranges re-asked from them" do
+          caps = @venue.capabilities()
+          timeframe = DpExchange.Core.AdapterContract.probe_timeframe(caps)
+
+          if @fake && timeframe && Capabilities.active?(caps, {:get_historical_prices, 4}) do
+            assert_candle_conventions(timeframe)
+          end
+        end
+      end
+
+      defp ask_candles(timeframe, range) do
+        endpoint = {:get_historical_prices, 4}
+        args = [arg_value(:symbol, endpoint), timeframe, range, arg_value(:opts, endpoint)]
+        call_on(@fake, endpoint, args)
+      end
+
+      defp assert_candle_conventions(timeframe) do
+        with {:ok, [_first | _rest] = candles} <- ask_candles(timeframe, []) do
+          fault =
+            DpExchange.Core.AdapterContract.candle_series_fault(
+              candles,
+              timeframe,
+              @venue.asset_classes()
+            )
+
+          assert fault == nil,
+                 "get_historical_prices/4 candles must be oldest first and aligned to " <>
+                   "#{timeframe} (Core.Timeframe.aligned?/2; a session-traded venue needs " <>
+                   "30-minute alignment for a wider intraday width). Got #{inspect(fault)}"
+
+          probes = DpExchange.Core.AdapterContract.candle_range_probes(candles)
+          for {range, must} <- probes, do: assert_range_kept(timeframe, range, must)
+        end
+      end
+
+      defp assert_range_kept(timeframe, range, must_include) do
+        answer = ask_candles(timeframe, range)
+        fault = DpExchange.Core.AdapterContract.range_fault(range, answer, must_include)
+
+        assert fault == nil,
+               "a range is `:start` inclusive and `:end` exclusive on opened_at. Asked " <>
+                 "#{inspect(range)}, got #{inspect(fault)}"
+      end
+    end
+  end
+
+  defp book_option_conventions do
+    quote location: :keep do
+      describe "38. order book options: :depth is honoured, :limit is not misread" do
+        # MD5. `:depth` is levels per side. `:limit` is Coinbase's refused spelling; a venue
+        # without one may ignore it (Core's usage rules), so only a raise or an unrelated
+        # error is a fault. Skipped where `get_order_book/2` is declared `:unsupported`.
+        test "depth: 1 returns at most one level a side; limit: 1 is refused or tolerated" do
+          if @fake && Capabilities.active?(@venue.capabilities(), {:get_order_book, 2}) do
+            assert_book_options()
+          end
+        end
+      end
+
+      defp assert_book_options do
+        [symbol, opts] = endpoint_args(:get_order_book, 2)
+        depth = DpExchange.Core.AdapterContract.book_probe_depth()
+        ask = fn extra -> call_on(@fake, {:get_order_book, 2}, [symbol, opts ++ extra]) end
+
+        depth_fault = DpExchange.Core.AdapterContract.book_depth_fault(ask.(depth: depth), depth)
+
+        assert depth_fault == nil,
+               "get_order_book/2 with depth: #{depth} must carry at most #{depth} level(s) a " <>
+                 "side. Got #{inspect(depth_fault)}"
+
+        limit_fault = DpExchange.Core.AdapterContract.book_limit_fault(ask.([]), ask.(limit: 1))
+
+        assert limit_fault == nil,
+               "get_order_book/2 with limit: 1 must succeed, or be refused " <>
+                 "{:unsupported_option, :limit}. Got #{inspect(limit_fault)}"
+      end
+    end
+  end
+
+  defp positive_values do
+    quote location: :keep do
+      describe "39. prices and sizes are positive, books are best first" do
+        # MD6 and MD5. A traded price at or below zero is a refused item, never a value; a
+        # book level with no size is no liquidity and is dropped. Checked on the fake's own
+        # answers; an answer that is not a success is skipped.
+        test "every price, size and level the fake returns" do
+          if @fake do
+            for endpoint <- positive_endpoints(), do: assert_positive(endpoint)
+          end
+        end
+      end
+
+      defp positive_endpoints do
+        for endpoint <- [
+              {:get_price, 2},
+              {:get_top_of_book, 2},
+              {:get_historical_prices, 4},
+              {:get_trades, 2},
+              {:get_order_book, 2}
+            ],
+            Capabilities.active?(@venue.capabilities(), endpoint),
+            do: endpoint
+      end
+
+      defp positive_args({:get_historical_prices, 4} = endpoint) do
+        timeframe = DpExchange.Core.AdapterContract.probe_timeframe(@venue.capabilities())
+        [arg_value(:symbol, endpoint), timeframe || "1h", [], arg_value(:opts, endpoint)]
+      end
+
+      defp positive_args({name, arity}), do: endpoint_args(name, arity)
+
+      defp assert_positive({name, _arity} = endpoint) do
+        with {:ok, value} <- call_on(@fake, endpoint, positive_args(endpoint)) do
+          fault = DpExchange.Core.AdapterContract.market_value_fault(value)
+
+          assert fault == nil,
+                 "#{name} returned a value that breaks the price conventions: #{inspect(fault)}"
         end
       end
     end

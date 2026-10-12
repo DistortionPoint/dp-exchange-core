@@ -1212,4 +1212,262 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert {:ok, %{side: :sell}} = place.(%{@base_request | side: "SELL"})
     end
   end
+
+  describe "assertions 36 to 39 catch a venue that ignores the market-data conventions" do
+    alias DpExchange.Core.Types.{Candle, OrderBook, TopOfBook, Trade}
+
+    defp bar(opened_at, price \\ "1") do
+      p = Decimal.new(price)
+
+      %Candle{
+        symbol: "BTC-USD",
+        timeframe: "1h",
+        opened_at: opened_at,
+        open: p,
+        high: p,
+        low: p,
+        close: p,
+        volume: nil,
+        provider: :teeth
+      }
+    end
+
+    defp book(bids, asks) do
+      level = fn {price, size} -> {Decimal.new(price), Decimal.new(size)} end
+
+      %OrderBook{
+        symbol: "BTC-USD",
+        bids: Enum.map(bids, level),
+        asks: Enum.map(asks, level),
+        observed_at: ~U[2026-08-27 12:00:00Z],
+        provider: :teeth
+      }
+    end
+
+    test "probe_timeframe prefers 1h, then a fixed width, then the first declared" do
+      new = fn widths ->
+        Capabilities.new(
+          endpoints: %{},
+          supported_quotes: ~w(USD),
+          historical_timeframes: widths
+        )
+      end
+
+      assert AdapterContract.probe_timeframe(new.(~w(1m 1h 1d))) == "1h"
+      assert AdapterContract.probe_timeframe(new.(~w(1M 5m))) == "5m"
+      assert AdapterContract.probe_timeframe(new.(~w(1M 1w))) == "1M"
+      assert AdapterContract.probe_timeframe(new.([])) == nil
+    end
+
+    test "include_partial cases name each bad value; a lax venue is faulted on all" do
+      cases = AdapterContract.include_partial_refusal_cases("BTC-USD", "1h", credentials: %{})
+
+      assert {:get_historical_prices, ["BTC-USD", "1h", [], opts], expected} = hd(cases)
+      assert expected == {:invalid_option, :include_partial, opts[:include_partial]}
+      refute Enum.any?(cases, fn {_n, [_s, _t, _r, o], _e} -> o[:include_partial] == nil end)
+
+      # The reference venue, which checks the option, is refused nothing; one that accepts
+      # any value answers `{:ok, _}` and is faulted.
+      assert AdapterContract.case_faults(ReferenceVenue, cases) == []
+
+      {_name, _args, want} = hd(cases)
+      assert AdapterContract.refusal_fault({:ok, []}, want) == {:answered, {:ok, []}}
+    end
+
+    test "candles out of order or off their grid are faulted" do
+      a = ~U[2026-08-27 10:00:00Z]
+      b = ~U[2026-08-27 11:00:00Z]
+
+      assert AdapterContract.candle_series_fault([bar(a), bar(b)], "1h", [:crypto]) == nil
+
+      assert AdapterContract.candle_series_fault([bar(b), bar(a)], "1h", [:crypto]) ==
+               {:unordered, a}
+
+      assert AdapterContract.candle_series_fault([bar(a), bar(a)], "1h", [:crypto]) ==
+               {:unordered, a}
+
+      off = ~U[2026-08-27 10:30:00Z]
+
+      assert AdapterContract.candle_series_fault([bar(off)], "1h", [:crypto]) ==
+               {:unaligned, off}
+    end
+
+    test "a session-traded venue gets a 30-minute grid for a wider intraday width only" do
+      open = ~U[2026-08-27 13:30:00Z]
+
+      assert AdapterContract.candle_series_fault([bar(open)], "1h", [:equity]) == nil
+
+      assert AdapterContract.candle_series_fault([bar(open)], "1h", [:crypto]) ==
+               {:unaligned, open}
+
+      assert AdapterContract.candle_series_fault([bar(open)], "1h", [:crypto, :equity]) == nil
+
+      # 30 minutes and under stay strict, and so do days.
+      quarter = ~U[2026-08-27 13:20:00Z]
+
+      assert AdapterContract.candle_series_fault([bar(quarter)], "15m", [:equity]) ==
+               {:unaligned, quarter}
+
+      assert AdapterContract.candle_series_fault([bar(open)], "1d", [:equity]) ==
+               {:unaligned, open}
+
+      off = ~U[2026-08-27 13:45:00Z]
+
+      assert AdapterContract.candle_series_fault([bar(off)], "1h", [:equity]) ==
+               {:unaligned, off}
+    end
+
+    test "range probes keep the first bar and drop the last" do
+      a = ~U[2026-08-27 10:00:00Z]
+      b = ~U[2026-08-27 11:00:00Z]
+      c = ~U[2026-08-27 12:00:00Z]
+
+      assert AdapterContract.candle_range_probes([]) == []
+
+      assert AdapterContract.candle_range_probes([bar(a), bar(b), bar(c)]) ==
+               [{[start: a, end: c], [a]}]
+
+      assert AdapterContract.candle_range_probes([bar(a)]) ==
+               [{[start: a], [a]}, {[end: a], []}]
+    end
+
+    test "an end that is inclusive, a start that is exclusive, or a stray bar is faulted" do
+      a = ~U[2026-08-27 10:00:00Z]
+      c = ~U[2026-08-27 12:00:00Z]
+      range = [start: a, end: c]
+
+      assert AdapterContract.range_fault(range, {:ok, [bar(a)]}, [a]) == nil
+      both = {:ok, [bar(a), bar(c)]}
+      assert AdapterContract.range_fault(range, both, [a]) == {:outside_range, c}
+      assert AdapterContract.range_fault(range, {:ok, []}, [a]) == {:missing, a}
+      assert AdapterContract.range_fault([start: c], {:ok, [bar(a)]}, [c]) == {:outside_range, a}
+      assert AdapterContract.range_fault([end: a], {:ok, [bar(a)]}, []) == {:outside_range, a}
+
+      # A refusal says nothing about the bounds.
+      assert AdapterContract.range_fault(range, {:error, :range_too_wide}, [a]) == nil
+    end
+
+    test "the reference venue keeps [start, end) and a lax venue that ignores it is faulted" do
+      a = ~U[2026-08-27 12:00:00Z]
+      ask = fn range -> ReferenceVenue.get_historical_prices("BTC-USDC", "1h", range, []) end
+
+      for {range, must} <- AdapterContract.candle_range_probes(elem(ask.([]), 1)) do
+        assert AdapterContract.range_fault(range, ask.(range), must) == nil
+      end
+
+      # Ignoring `:end`, as a venue that has the bar whatever the range says.
+      ignores_end = {:ok, [bar(a)]}
+      assert AdapterContract.range_fault([end: a], ignores_end, []) == {:outside_range, a}
+    end
+
+    test "a book deeper than the depth asked for is faulted" do
+      deep = {:ok, book([{"2", "1"}, {"1", "1"}], [{"3", "1"}])}
+      shallow = {:ok, book([{"2", "1"}], [{"3", "1"}])}
+
+      assert AdapterContract.book_probe_depth() == 1
+      assert AdapterContract.book_depth_fault(shallow, 1) == nil
+      assert AdapterContract.book_depth_fault(deep, 1) == {:too_many_levels, :bids, 2}
+
+      asks = {:ok, book([{"2", "1"}], [{"3", "1"}, {"4", "1"}])}
+      assert AdapterContract.book_depth_fault(asks, 1) == {:too_many_levels, :asks, 2}
+      assert AdapterContract.book_depth_fault({:error, :nope}, 1) == nil
+    end
+
+    test "the reference venue honours :depth" do
+      {:ok, one} = ReferenceVenue.get_order_book("BTC-USDC", depth: 1)
+      assert length(one.bids) == 1 and length(one.asks) == 1
+    end
+
+    test "a limit is refused as unsupported, tolerated, or faulted for anything else" do
+      ok = {:ok, book([{"2", "1"}], [{"3", "1"}])}
+
+      assert AdapterContract.book_limit_fault(ok, ok) == nil
+      assert AdapterContract.book_limit_fault(ok, {:error, {:unsupported_option, :limit}}) == nil
+      assert AdapterContract.book_limit_fault(ok, {:error, {:invalid_option, :limit, 1}}) == nil
+      assert AdapterContract.book_limit_fault(ok, {:raised, %ArgumentError{}}) == :raised
+      assert AdapterContract.book_limit_fault(ok, {:exit, :boom}) == :raised
+
+      assert AdapterContract.book_limit_fault(ok, {:error, {:unsupported_option, :depth}}) ==
+               {:answered, {:error, {:unsupported_option, :depth}}}
+
+      assert AdapterContract.book_limit_fault(ok, {:refused, :x}) == {:answered, {:refused, :x}}
+      # No baseline success, nothing to compare with.
+      assert AdapterContract.book_limit_fault({:error, :x}, {:refused, :x}) == nil
+    end
+
+    test "a price at or below zero is faulted on a quote, trade and candle" do
+      zero = Decimal.new("0")
+
+      quote_ = %DpExchange.Core.Types.Quote{
+        symbol: "X",
+        price: zero,
+        observed_at: ~U[2026-08-27 12:00:00Z],
+        provider: :teeth
+      }
+
+      assert AdapterContract.market_value_fault(quote_) == {:non_positive, :price, zero}
+
+      trade = %Trade{
+        id: nil,
+        symbol: "X",
+        side: nil,
+        price: Decimal.new("-1"),
+        quantity: Decimal.new("1"),
+        timestamp: ~U[2026-08-27 12:00:00Z],
+        provider: :teeth
+      }
+
+      assert AdapterContract.market_value_fault([trade]) ==
+               {:non_positive, :price, Decimal.new("-1")}
+
+      assert AdapterContract.market_value_fault(%{bar(~U[2026-08-27 10:00:00Z]) | low: zero}) ==
+               {:non_positive, :low, zero}
+
+      assert AdapterContract.market_value_fault(bar(~U[2026-08-27 10:00:00Z])) == nil
+      assert AdapterContract.market_value_fault(:not_a_struct) == nil
+    end
+
+    test "a top of book bid or ask is nil or above zero" do
+      top = fn bid, ask ->
+        %TopOfBook{
+          symbol: "X",
+          bid: bid,
+          ask: ask,
+          bid_size: nil,
+          ask_size: nil,
+          observed_at: ~U[2026-08-27 12:00:00Z],
+          provider: :teeth
+        }
+      end
+
+      assert AdapterContract.market_value_fault(top.(nil, Decimal.new("1"))) == nil
+      zero = Decimal.new("0")
+
+      assert AdapterContract.market_value_fault(top.(Decimal.new("1"), zero)) ==
+               {:non_positive, :ask, zero}
+    end
+
+    test "a book level with no size or no price, or a side out of order, is faulted" do
+      assert AdapterContract.market_value_fault(book([{"2", "1"}, {"1", "3"}], [{"3", "1"}])) ==
+               nil
+
+      assert AdapterContract.market_value_fault(book([{"2", "0"}], [{"3", "1"}])) ==
+               {:non_positive, {:bids, :size}, Decimal.new("0")}
+
+      assert AdapterContract.market_value_fault(book([{"2", "1"}], [{"0", "1"}])) ==
+               {:non_positive, {:asks, :price}, Decimal.new("0")}
+
+      assert AdapterContract.market_value_fault(book([{"1", "1"}, {"2", "1"}], [{"3", "1"}])) ==
+               {:unsorted, :bids}
+
+      assert AdapterContract.market_value_fault(book([{"2", "1"}], [{"4", "1"}, {"3", "1"}])) ==
+               {:unsorted, :asks}
+
+      assert AdapterContract.market_value_fault(%{book([], []) | bids: :nope}) ==
+               {:unreadable_level, :bids, :nope}
+
+      assert AdapterContract.market_value_fault(%{book([], []) | asks: [:level]}) ==
+               {:unreadable_level, :asks, :level}
+    end
+  end
 end

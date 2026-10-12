@@ -21,6 +21,25 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance assertions 36 to 39** lock the tick R market-data conventions into
+  `AdapterContract`, run against the venue's fake: 36 a non-boolean `include_partial` is
+  `{:invalid_option, :include_partial, v}`; 37 candles are strictly oldest first and aligned,
+  and a range keeps `:start` and drops `:end` (re-asked from the fake's own bars; a refused
+  range is skipped); 38 `get_order_book/2` honours `depth: 1`, and `limit: 1` is accepted or
+  refused `{:unsupported_option, :limit}` (an ignored `:limit` is tolerated, as Core's usage
+  rules let a venue ignore options it has no use for); 39 every Quote, Trade and Candle price
+  and every book level's price and size is above zero, books best first. A venue whose fake
+  validates `:depth` but returns a fixed ladder now fails 38 (expected: Gemini, Webull).
+  Decisions are public functions (`probe_timeframe/1`, `candle_series_fault/3`,
+  `range_fault/3`, `book_depth_fault/2`, `book_limit_fault/2`, `market_value_fault/1`, ...).
+- **MD3 is narrowed for session-traded instruments** (documented on `c:get_historical_prices/4`
+  and `Candle`): crypto stays strict on the UTC grid; for equities, options, futures and events
+  widths of 30 minutes and under stay strict, wider intraday widths need only 30-minute
+  alignment (sessions open 09:30 ET), daily and longer map to 00:00 UTC of the session date.
+- The reference venue's fake honours `:start`/`:end`, `:depth` and a boolean `include_partial`.
+
 ## [0.3.82] - 2026-10-12
 
 ### Changed (documentation of the family contract; no behaviour in Core changes)

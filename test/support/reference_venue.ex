@@ -258,10 +258,13 @@ defmodule DpExchange.Core.ReferenceVenue do
   defp check_subscriber(to), do: {:error, {:invalid_subscriber, to}}
 
   @impl true
-  def get_historical_prices(symbol, timeframe, _range, _opts) do
+  def get_historical_prices(symbol, timeframe, range, opts) do
     cond do
       match?({:error, _reason}, check_symbol(symbol)) ->
         check_symbol(symbol)
+
+      not is_boolean(Keyword.get(opts, :include_partial, false)) ->
+        {:error, {:invalid_option, :include_partial, Keyword.get(opts, :include_partial)}}
 
       symbol not in @symbols ->
         {:refused, :symbol_not_listed}
@@ -280,46 +283,49 @@ defmodule DpExchange.Core.ReferenceVenue do
         # by assertion 5 on its first run, once 5 had a check of its own.
         {:ok, %Types.Quote{price: price, venue_time: at}} = get_price(symbol, [])
 
-        {:ok,
-         [
-           %Types.Candle{
-             symbol: symbol,
-             timeframe: timeframe,
-             opened_at: at,
-             open: price,
-             high: price,
-             low: price,
-             close: price,
-             volume: nil,
-             provider: runtime_id()
-           }
-         ]}
+        bar = %Types.Candle{
+          symbol: symbol,
+          timeframe: timeframe,
+          opened_at: at,
+          open: price,
+          high: price,
+          low: price,
+          close: price,
+          volume: nil,
+          provider: runtime_id()
+        }
+
+        {:ok, Enum.filter([bar], &in_range?(&1.opened_at, range))}
     end
+  end
+
+  # `:start` inclusive, `:end` exclusive, on `opened_at` (MD2).
+  defp in_range?(at, range) do
+    start = Keyword.get(range, :start)
+    finish = Keyword.get(range, :end)
+
+    (is_nil(start) or DateTime.compare(at, start) != :lt) and
+      (is_nil(finish) or DateTime.compare(at, finish) == :lt)
   end
 
   @impl true
   def get_symbols(_opts), do: {:ok, @symbols}
 
   @impl true
-  def get_order_book(symbol, _opts) do
+  def get_order_book(symbol, opts) do
     with :ok <- check_symbol(symbol) do
-      booked(symbol)
+      booked(symbol, Keyword.get(opts, :depth))
     end
   end
 
-  defp booked(symbol) do
+  # `:depth` is levels per side (MD5); `:limit`, which this venue has no use for, is ignored.
+  defp booked(symbol, depth) do
     if symbol in @symbols do
       {:ok,
        %Types.OrderBook{
          symbol: symbol,
-         bids: [
-           {Decimal.new("42000"), Decimal.new("1.5")},
-           {Decimal.new("41999"), Decimal.new("2")}
-         ],
-         asks: [
-           {Decimal.new("42001"), Decimal.new("1.0")},
-           {Decimal.new("42002"), Decimal.new("3")}
-         ],
+         bids: Enum.take(levels(["42000", "1.5"], ["41999", "2"]), depth || 2),
+         asks: Enum.take(levels(["42001", "1.0"], ["42002", "3"]), depth || 2),
          venue_time: ~U[2026-08-27 12:00:00Z],
          observed_at: ~U[2026-08-27 12:00:00Z],
          provider: runtime_id()
@@ -327,6 +333,10 @@ defmodule DpExchange.Core.ReferenceVenue do
     else
       {:refused, :symbol_not_listed}
     end
+  end
+
+  defp levels(first, second) do
+    for [price, size] <- [first, second], do: {Decimal.new(price), Decimal.new(size)}
   end
 
   @impl true

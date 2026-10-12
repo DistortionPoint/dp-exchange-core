@@ -33,6 +33,13 @@ defmodule DpExchange.Core.Types.Candle do
   time checks that on decode and refuses a reply holding a bar that is not aligned,
   `{:error, {:unaligned_candle, time}}`, rather than rounding it into place.
 
+  **The grid depends on the instrument.** Crypto is strict: every width is aligned on the UTC
+  grid. For a session-traded instrument (equities, options, futures, events) widths of 30
+  minutes and under stay on the strict UTC grid, while a wider intraday width is
+  session-anchored and only needs **30-minute** alignment, because US equity sessions open at
+  09:30 ET (so a `1h` bar opens at 13:30 or 14:30 UTC). Daily and longer bars are not
+  intraday: see below.
+
   **Equity daily and weekly bars** are stamped by the venue at exchange-local midnight (or
   another local instant). They are mapped to `00:00:00` UTC **of the same session date**.
   The date is the fact; the instant is an artefact of the zone it was written in, and

@@ -428,6 +428,11 @@ defmodule DpExchange.Core.Venue do
   the open is recorded as **unmeasured** in that venue's documentation until it has been
   checked against the live endpoint.
 
+  The grid depends on the instrument. Crypto is strict on the UTC grid at every width. For a
+  session-traded instrument (equities, options, futures, events) widths of 30 minutes and
+  under stay strict, and a wider intraday width is session-anchored: it only needs 30-minute
+  alignment, because US equity sessions open at 09:30 ET.
+
   Equity **daily and weekly** bars are stamped by the venue at exchange-local midnight (or
   another exchange-local instant). They are mapped to `00:00:00` UTC **of the same session
   date**: the session *date* is the fact the venue states, and the instant is an artefact of

@@ -323,7 +323,7 @@ Documented on the `Core.Venue` callbacks and the `Types.*` moduledocs; summarise
 |---|---|
 | `include_partial:` (candles, default `false`) | The still-forming bar (`opened_at + width > now`, venue clock if stated) is returned only with `true`. `Candle` has no partial flag: that last bar may still change. Webull stock's `real_time:` is now `include_partial:` |
 | `:start` / `:end` | `:start` inclusive, `:end` exclusive, on `opened_at`. Absent `:end` is *now*, never a venue default that ends earlier. A range one response cannot hold is walked, or `{:error, {:range_too_wide, _}}`, never returned short |
-| `opened_at` | Bucket start, aligned to the width. A bar not provably open-stamped is checked on decode: `{:error, {:unaligned_candle, time}}`. Equity daily and weekly bars map to 00:00 UTC of the **same session date** |
+| `opened_at` | Bucket start, aligned to the width (crypto strict on the UTC grid; session-traded instruments: strict up to 30m, 30-minute alignment for wider intraday widths because equity sessions open at 09:30 ET). A bar not provably open-stamped is checked on decode: `{:error, {:unaligned_candle, time}}`. Equity daily and weekly bars map to 00:00 UTC of the **same session date** |
 | `limit:` (candles, trades), `since:` (trades) | Sent to the venue. Above the maximum `{:invalid_option, :limit, v}`; no such parameter `{:unsupported_option, :limit}`. A `since:` read returning exactly `limit` rows is `{:error, :history_truncated}` |
 | `depth:` (order book) | Levels per side on every venue. Coinbase's old `limit:` is `{:unsupported_option, :limit}` |
 | Book levels | Unreadable level, negative size, price `<= 0`, or non-list side refuses the whole book. A snapshot level of size `<= 0` is dropped |
@@ -798,6 +798,32 @@ to them (and, for 32, your real facade on the no-feed path). A callback you decl
   request your fake accepts, which assertion 31 already needs). Account options for the id
   checks come from `endpoint_opts:`; the id is also tried with none, since it must be
   refused first.
+
+## Assertions 36 to 39 — the market-data conventions, on your fake
+
+Driven against the **fake** only, each skipped for a callback you declare `:unsupported`.
+Candles are asked for at `"1h"` if you declare it, else your first fixed-width timeframe
+(`AdapterContract.probe_timeframe/1`).
+
+- **36.** `get_historical_prices/4` with `include_partial:` set to `"true"`, `"false"`, `0`,
+  `1` or `:yes` answers `{:error, {:invalid_option, :include_partial, value}}`. (`nil` is not
+  tried: it is an absent option on several venues.) Check it before credentials.
+- **37.** The candles the fake returns are strictly oldest first and aligned: crypto-only
+  venues on the strict UTC grid (`Timeframe.aligned?/2`); other venues strict for widths of
+  30 minutes and under and for daily and longer, and on a 30-minute grid for the widths in
+  between (US equity sessions open at 09:30 ET). Then the suite re-asks from the fake's own
+  bars: with two or more, `start:` the first bar's `opened_at` and `end:` the last's must
+  keep the first and drop the last; with one bar, `start:` alone must keep it and `end:` alone
+  must drop it. **A refused range is skipped, not failed** (a venue window may not reach the
+  fake's fixed clock), so give the fake a few bars if you want both bounds exercised.
+- **38.** `get_order_book/2` with `depth: 1` returns at most one level per side, so the fake
+  must honour `:depth`, not only validate it. `limit: 1` must succeed or be refused
+  `{:unsupported_option, :limit}` (Coinbase refuses it because its old `:limit` meant depth);
+  a native `{:invalid_option, :limit, v}` is accepted. A venue that ignores an option it has
+  no use for passes: the suite cannot tell a native `:limit` from an ignored one.
+- **39.** Every `Quote`, `Trade` and `Candle` price the fake returns is above zero; a
+  `TopOfBook` bid or ask is `nil` or above zero; every `OrderBook` level has a price and a
+  size above zero and each side is best first.
 - **A write that may have reached the venue is not an ordinary error.** `place_order/3` and
   `replace_order/4` answer `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`
   (the id is a **list of ids** for a batch placement, Webull's);
