@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.81] - 2026-10-12
+
 ### Fixed
 
 - Conformance assertion 32 and the other convention checks no longer fail a venue that
