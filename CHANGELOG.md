@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.80] - 2026-10-12
+
 ### Fixed
 
 - **Assertion 34 failed every venue that declares no `:market` order type.** With no market
