@@ -21,6 +21,11 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **Docs:** `usage-rules.md` states that `venue_does_not_serve/0` is optional and not a `Venue`
+  callback (check it with `function_exported?/3`), documents the unconfirmed-write shapes a caller
+  must not blindly retry (`order_unconfirmed`, `write_unconfirmed`) and the locally decided
+  `invalid_*` refusals, and lists every notice kind.
+
 ## [0.3.87] - 2026-10-12
 
 - **`PollingFeed`: a fetch task killed from outside took the feed down with it.** Each fetch

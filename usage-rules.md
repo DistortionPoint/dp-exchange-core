@@ -68,6 +68,14 @@ nothing to branch on.
 Collapsing `:refused` into `:error` makes a delisted symbol look like a network blip
 forever. Collapsing it into `:ok` is worse.
 
+**Two `{:error, _}` shapes are not retryable.** A write that may have reached the venue is
+`{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}` (order writes) or
+`{:error, {:write_unconfirmed, key_or_nil, reason}}` (every other state-changing write).
+Retrying either can double the write: look the order up first. A malformed argument is
+refused locally, before credentials are read, as `{:error, {:invalid_symbol, v}}`,
+`{:invalid_symbols, v}`, `{:invalid_subscriber, v}` or `{:invalid_order_id, v}` — match the
+tag, never a venue's wording, and fix the argument rather than retry.
+
 ### `{:error, :not_supported}` is the atom
 
 Never the string. Match the atom.
@@ -202,8 +210,13 @@ it is the same observed-arrival fact, split by `data_kind()`.
 
 ## Notices: a prompt to re-read, never the record
 
-`subscribe_notices/1` carries what the *package* says about *itself* — link state,
-credentials rejected, sustained rate limiting, coverage change, catalogue change.
+`subscribe_notices/1` carries what the *package* says about *itself* — link state
+(`:link_up`, `:link_down`, `:link_reconnecting`, `:link_recovered`), credentials
+(`:credentials_rejected`, `:credentials_expiring`, `:session_refresh_failed`), sustained
+`:rate_limited`, `:coverage_change`, `:catalog_change`, a `:refusal`, a `:data_quality`
+payload that did not decode, and a `:degraded` slower path (including a subscriber whose
+mailbox is over its bound and is being skipped). A consumer's handler should ignore a kind
+it does not know.
 
 **Delivery is not guaranteed, and your correctness must not depend on it.** A
 `:catalog_change` notice is a reason to call `list_instruments/1`; it is not the authority
@@ -255,7 +268,8 @@ Two things a consumer should read rather than infer:
 
 - **`venue_does_not_serve/0`** splits the `:unsupported` list in two: what the venue does not
   serve, and what this package has not ported. Both answer identically; only the second can
-  ever change. A host planning around a gap needs to know which it is looking at.
+  ever change. A host planning around a gap needs to know which it is looking at. It is not
+  a `Venue` callback and a package may omit it — check `function_exported?/3` first.
 - **`Venue.peripheral_endpoints/0`** names the endpoints a consumer can live without, with the
   reason for each. It is the difference between a gap that costs you a feature and one that
   costs you the migration.
