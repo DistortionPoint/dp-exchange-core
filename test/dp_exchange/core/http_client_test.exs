@@ -1423,6 +1423,127 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe "credentials never travel over plain http" do
+    # The adapter is NOT the `plug:` seam, so a request that got past the check would reach it.
+    defp answering(test_pid) do
+      fn request ->
+        send(test_pid, :sent)
+        {request, Req.Response.new(status: 200, body: "{}")}
+      end
+    end
+
+    test "a request carrying a credential header to a remote http:// host is refused unsent" do
+      use_stub()
+
+      assert {:error, "refused: credentials are not sent over plain http"} =
+               HttpClient.request(
+                 :get,
+                 "http://venue.test/x",
+                 [{"X-API-Key", "test-key-not-real"}],
+                 nil,
+                 adapter: answering(self()),
+                 retry_attempts: 0
+               )
+
+      refute_received :sent
+    end
+
+    test "a per-attempt signer counts as credentials" do
+      use_stub()
+
+      assert {:error, "refused: credentials are not sent over plain http"} =
+               HttpClient.request(
+                 :get,
+                 "http://venue.test/x",
+                 fn -> [{"x-signature", "test-sig-not-real"}] end,
+                 nil,
+                 adapter: answering(self()),
+                 retry_attempts: 0
+               )
+
+      refute_received :sent
+    end
+
+    test "https, a loopback http host and an unauthenticated http request still go out" do
+      use_stub()
+      creds = [{"authorization", "Bearer test-secret-not-real"}]
+
+      for {url, headers} <- [
+            {"https://venue.test/x", creds},
+            {"http://127.0.0.1:1/x", creds},
+            {"http://venue.test/x", [{"accept", "application/json"}]}
+          ] do
+        assert {:ok, _response} =
+                 HttpClient.request(:get, url, headers, nil,
+                   adapter: answering(self()),
+                   retry_attempts: 0
+                 )
+
+        assert_received :sent
+      end
+    end
+  end
+
+  describe "a transport error never echoes the request it failed on" do
+    test "Mint's invalid_header_value keeps the header name and drops the value" do
+      use_stub()
+      provider = "hdr-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-hdr-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:stop_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      # What Mint answers for a header it refuses to send: the VALUE is in the reason.
+      refusal = %Mint.HTTPError{
+        module: Mint.HTTP1,
+        reason: {:invalid_header_value, "authorization", "Bearer test-secret-not-real"}
+      }
+
+      assert {:error, {:exchange_error, ^provider, message}} =
+               HttpClient.request(
+                 :get,
+                 "https://venue.test/x",
+                 [{"authorization", "Bearer test-secret-not-real"}],
+                 nil,
+                 provider: provider,
+                 adapter: fn request -> {request, refusal} end,
+                 retry_attempts: 1
+               )
+
+      assert message =~ "authorization"
+      refute message =~ "test-secret-not-real"
+
+      assert_receive {:stop_event, metadata}, 5_000
+      refute inspect(metadata) =~ "test-secret-not-real"
+    end
+
+    test "a KeyError's term, which can be a plain-map credential, is not printed" do
+      use_stub()
+      provider = "key-#{System.unique_integer([:positive])}"
+
+      assert {:error, {:exchange_error, ^provider, message}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 provider: provider,
+                 plug: fn _conn ->
+                   Map.fetch!(%{api_secret: "test-secret-not-real"}, :api_key)
+                 end,
+                 retry_attempts: 1
+               )
+
+      assert message =~ "Request exception"
+      refute message =~ "test-secret-not-real"
+    end
+  end
+
   describe "a params map is sent in key order" do
     test "more than 32 keys, where a map has no iteration order of its own" do
       params = Map.new(1..40, fn n -> {"k#{String.pad_leading("#{n}", 2, "0")}", n} end)

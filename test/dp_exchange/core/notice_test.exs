@@ -123,6 +123,19 @@ defmodule DpExchange.Core.NoticeTest do
       end
     end
 
+    test "the header spellings the generic HMAC scheme sends are refused as keys" do
+      # `HttpClient.build_hmac_headers/4` sends CB-ACCESS-KEY and CB-ACCESS-SIGN. A notice whose
+      # details held the request headers under those names passed the vocabulary.
+      names = ~w(CB-ACCESS-KEY CB-ACCESS-SIGN cb-access-passphrase X-Signature
+                 Proxy-Authorization Set-Cookie)
+
+      for name <- names do
+        assert_raise ArgumentError, ~r/credential-shaped keys/, fn ->
+          Notice.new(:link_down, :v, details: %{headers: %{name => "test-secret-not-real"}})
+        end
+      end
+    end
+
     test "a credential-shaped key nested in maps, lists or keyword pairs is refused" do
       for details <- [
             %{request: %{headers: %{"Authorization" => "Bearer x"}}},

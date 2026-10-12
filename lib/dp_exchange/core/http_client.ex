@@ -282,7 +282,47 @@ defmodule DpExchange.Core.HttpClient do
       end)
     end
 
-    do_request_with_rate_limiting(method, url, headers, body, opts, retry_attempts)
+    if cleartext_credentials?(url, headers, opts) do
+      {:error, cleartext_refusal()}
+    else
+      do_request_with_rate_limiting(method, url, headers, body, opts, retry_attempts)
+    end
+  end
+
+  # **Credentials never travel over plain http.** Every venue's base URL can be overridden
+  # (config or an option, for a sandbox or a test stub), and nothing stopped an `http://`
+  # one: a signed request then put the key, the signature or the bearer token on the wire
+  # in the clear. Each venue now checks its own URLs; this is the backstop for any it
+  # missed. A request counts as carrying credentials when it is signed per attempt (a
+  # function) or names a credential-shaped header. Loopback hosts stay allowed (a local
+  # stub), and so does `plug:`, which never leaves the process.
+  defp cleartext_refusal, do: "refused: credentials are not sent over plain http"
+  @credential_header_fragments ~w(authorization key sign token passphrase secret)
+
+  defp cleartext_credentials?(url, headers, opts) do
+    not Keyword.has_key?(opts, :plug) and credentials_in?(headers) and cleartext_remote?(url)
+  end
+
+  defp credentials_in?(headers) when is_function(headers, 0), do: true
+
+  defp credentials_in?(headers) when is_list(headers) do
+    Enum.any?(headers, fn
+      {name, _value} ->
+        name = name |> to_string() |> String.downcase()
+        Enum.any?(@credential_header_fragments, &String.contains?(name, &1))
+
+      _other ->
+        false
+    end)
+  end
+
+  defp credentials_in?(_headers), do: false
+
+  defp cleartext_remote?(url) do
+    case URI.parse(url) do
+      %URI{scheme: "http", host: host} -> host not in ["localhost", "127.0.0.1", "::1"]
+      _https_or_other -> false
+    end
   end
 
   @doc """
@@ -905,7 +945,35 @@ defmodule DpExchange.Core.HttpClient do
 
   # Bounded text for a reason that reaches an error message and telemetry. Byte-identical to
   # `inspect/1` for anything inside the limits, so a message a caller matches is unchanged.
-  defp describe(term), do: inspect(term, limit: 50, printable_limit: @body_excerpt_bytes)
+  defp describe(term),
+    do: term |> redact_reason() |> inspect(limit: 50, printable_limit: @body_excerpt_bytes)
+
+  # **An exception struct can carry the request it failed on, and `describe/1` prints it.**
+  # Mint refuses a header it cannot send with `{:invalid_header_value, name, VALUE}`: the
+  # value is the `Authorization` or signature header itself (a stray newline in a key read
+  # from an env file is the ordinary way to get one), and it was interpolated into the error
+  # tuple returned to the caller and into `[:dp_exchange, :request, :exception]` telemetry.
+  # `{:invalid_request_target, TARGET}` carries the path and query. The `term`/`value` of a
+  # `KeyError`, `MatchError` or `Protocol.UndefinedError` is whatever the failing code was
+  # holding, and a plain-map credential is exactly that. The kind of failure and the header
+  # NAME stay; the content goes.
+  defp redact_reason(
+         %{__struct__: Mint.HTTPError, reason: {:invalid_header_value, name, _value}} = e
+       ),
+       do: %{e | reason: {:invalid_header_value, name, "[redacted]"}}
+
+  defp redact_reason(
+         %{__struct__: Mint.HTTPError, reason: {:invalid_request_target, _target}} = e
+       ),
+       do: %{e | reason: {:invalid_request_target, "[redacted]"}}
+
+  defp redact_reason(%{__struct__: _module} = exception) do
+    Enum.reduce([:term, :value], exception, fn field, acc ->
+      if Map.has_key?(acc, field), do: Map.put(acc, field, "[redacted]"), else: acc
+    end)
+  end
+
+  defp redact_reason(other), do: other
 
   # Counts the body as it arrives and halts the transfer once it passes `limit`. The body is
   # kept as one binary appended to in place (the BEAM extends such a binary in amortised

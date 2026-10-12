@@ -550,7 +550,7 @@ defmodule DpExchange.Core.PollingFeed do
     result =
       case Task.shutdown(task, :brutal_kill) do
         {:ok, late_result} -> late_result
-        {:exit, reason} -> {:error, {:fetch_crashed, reason}}
+        {:exit, reason} -> {:error, {:fetch_crashed, opaque_reason(reason)}}
         nil -> {:error, :fetch_timeout}
       end
 
@@ -566,7 +566,7 @@ defmodule DpExchange.Core.PollingFeed do
         %{in_flight: %{ref: ref, job: job, timer: timer}} = state
       ) do
     Process.cancel_timer(timer)
-    {:noreply, finish(state, job, {:error, {:fetch_crashed, reason}})}
+    {:noreply, finish(state, job, {:error, {:fetch_crashed, opaque_reason(reason)}})}
   end
 
   # The fetch answered. This is the path that used to be a blocking `Task.yield/2` inside
@@ -882,12 +882,48 @@ defmodule DpExchange.Core.PollingFeed do
 
     # BOUNDARY: one symbol's exception must not kill the whole feed.
   rescue
-    exception -> {:error, exception |> Exception.message() |> String.slice(0, 2_048)}
+    exception -> {:error, exception_text(exception)}
   catch
-    :exit, reason -> {:error, {:exit, reason}}
+    :exit, reason -> {:error, {:exit, opaque_reason(reason)}}
     # A `throw` escaped: it killed the task, and through its link the feed itself.
-    :throw, value -> {:error, {:throw, value}}
+    :throw, value -> {:error, {:throw, opaque_reason(value)}}
   end
+
+  # **A thrown value or exit reason travels only as far as its shape is safe.** Both are
+  # whatever the failing code held: an exit from `GenServer.call/3` carries the call's own
+  # message, `{reason, {GenServer, :call, [server, request, timeout]}}`, and a fetch that
+  # calls with its credentials put them there. The reason became `last_error` and reached
+  # `status/1`, the "delivered NOTHING" warning and a notice, the same channels
+  # `exception_text/1` closes for raises. An atom, a number or a tuple of those (`:boom`,
+  # `{:shutdown, :killed}`) says what happened and holds nothing; text is bounded; anything
+  # else keeps its leading atom, if it has one, and withholds the rest.
+  defp opaque_reason(reason) when is_atom(reason) or is_number(reason), do: reason
+  defp opaque_reason(reason) when is_binary(reason), do: String.slice(reason, 0, 2_048)
+
+  defp opaque_reason(reason) when is_tuple(reason) do
+    elements = Tuple.to_list(reason)
+
+    cond do
+      Enum.all?(elements, &(is_atom(&1) or is_number(&1))) -> reason
+      is_atom(hd(elements)) -> {hd(elements), :withheld}
+      true -> :withheld
+    end
+  end
+
+  defp opaque_reason(_reason), do: :withheld
+
+  # **Only a hand-written message travels; any other exception travels as its module.**
+  # `Exception.message/1` of a `KeyError`, `FunctionClauseError`, `MatchError` or
+  # `Protocol.UndefinedError` inspects the term the failing code held, and a fetch holds its
+  # credentials: `Map.fetch!(credentials, :api_key)` on a plain-map credential printed the whole
+  # map, secret included. The text became `last_error` (returned by `status/1`), the "delivered
+  # NOTHING" warning and a notice's `details.last_error`, all of which reach logs and public
+  # issues. The callback path in `guarded/3` already withholds the message for the same reason.
+  defp exception_text(%RuntimeError{message: message}) when is_binary(message),
+    do: String.slice(message, 0, 2_048)
+
+  defp exception_text(exception),
+    do: "#{inspect(exception.__struct__)} raised (message withheld: it can quote arguments)"
 
   defp fresh_symbols(state) do
     now = System.monotonic_time(:millisecond)

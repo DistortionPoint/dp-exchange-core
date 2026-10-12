@@ -21,6 +21,30 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **Security: `HttpClient` no longer quotes a refused request into its error.** Mint's
+  `{:invalid_header_value, name, value}` carries the header's value (an `Authorization` or
+  signature header, typically after a stray newline in a key), and it was printed into the error
+  returned to the caller and into `[:dp_exchange, :request, :exception]` telemetry; so were the
+  request target of `{:invalid_request_target, _}` and the `term`/`value` of an exception the
+  pipeline raised. The header name and the kind of failure remain; the content is redacted.
+- **Security: `HttpClient` refuses to send credentials over plain http.** A request that is
+  signed per attempt or names a credential-shaped header (authorization, key, sign, token,
+  passphrase, secret) to an `http://` URL on a non-loopback host answers
+  `{:error, "refused: credentials are not sent over plain http"}` before anything is sent. A
+  backstop for every venue whose base URL can be overridden; loopback hosts and `plug:` stay
+  allowed.
+- **Security: `PollingFeed` no longer carries what a failing fetch held into `status/1`, its
+  logs or its notices.** An exception other than `RuntimeError` travels as its module name
+  (`KeyError` and friends quote their arguments, which can be a credential map); a thrown value
+  or exit reason keeps an atom, a number or a tuple of those, keeps the leading atom of anything
+  else and withholds the rest (an exit from `GenServer.call/3` quotes the call's request).
+- **Security: `Notice.new/3` refuses more credential-shaped `details` keys** (`cb_access_key`,
+  `cb_access_sign`, `cb_access_passphrase`, `x_signature`, `x_auth_token`,
+  `proxy_authorization`, `set_cookie`, `access_key`, `secret_access_key`, `api_secret_key`),
+  and a default message quotes `details.reason` bounded.
+- **Tests:** an assertion-1 decision test borrowed a module another test file defines, and failed
+  with `:nofile` whenever that file had not loaded yet; it has its own module now.
+
 ## [0.3.88] - 2026-10-12
 
 - **Docs:** `usage-rules.md` states that `venue_does_not_serve/0` is optional and not a `Venue`

@@ -162,11 +162,17 @@ defmodule DpExchange.Core.Notice do
 
   @severities ~w(info warning error)a
 
+  # A default message quotes `details.reason`, which can be a venue's body or an inspected
+  # term of any size. Bounded so a message stays a line, not a payload.
+  @max_reason_chars 1_024
+
   @credential_keys ~w(api_key api_secret secret password passphrase token access_token
                       refresh_token private_key signature authorization bearer client_secret
                       x_api_key app_secret signing_key cookie session_token id_token jwt
                       secret_key api_passphrase api_token auth_token bearer_token
-                      private_key_pem)a
+                      private_key_pem cb_access_key cb_access_sign cb_access_passphrase
+                      x_signature x_auth_token proxy_authorization set_cookie access_key
+                      secret_access_key api_secret_key)a
 
   # Derived once, at compile time, so the runtime check below never has to turn an
   # incoming key into an atom to compare it. `@credential_keys` stays the single
@@ -290,8 +296,8 @@ defmodule DpExchange.Core.Notice do
 
     case Map.get(details, :reason) do
       nil -> base
-      reason when is_binary(reason) -> "#{base}: #{reason}"
-      reason -> "#{base}: #{inspect(reason)}"
+      reason when is_binary(reason) -> "#{base}: #{String.slice(reason, 0, @max_reason_chars)}"
+      reason -> "#{base}: #{inspect(reason, limit: 50, printable_limit: @max_reason_chars)}"
     end
   end
 

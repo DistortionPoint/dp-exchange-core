@@ -456,6 +456,43 @@ defmodule DpExchange.Core.PollingFeedTest do
     end
   end
 
+  describe "an exception from a fetch does not carry the arguments it quotes" do
+    test "a KeyError over a plain-map credential reaches neither status nor the notice" do
+      test = self()
+
+      pid =
+        start_feed(
+          fetch: fn _symbol ->
+            Map.fetch!(%{api_secret: "test-secret-not-real"}, :api_key)
+          end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, notice}, 5_000
+      refute inspect(notice) =~ "test-secret-not-real"
+      refute inspect(PollingFeed.status(pid)) =~ "test-secret-not-real"
+      assert PollingFeed.status(pid).last_error =~ "KeyError"
+    end
+
+    test "an exit that quotes a call's credentials keeps its leading atom and withholds the rest" do
+      # The shape `GenServer.call/3` exits with: the call's own request rides in the reason.
+      test = self()
+      request = {:fetch, %{api_secret: "test-secret-not-real"}}
+
+      pid =
+        start_feed(
+          fetch: fn _symbol -> exit({:timeout, {GenServer, :call, [:venue, request, 5_000]}}) end,
+          symbols: ~w(BTC-USD),
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:notice, notice}, 5_000
+      refute inspect(notice) =~ "test-secret-not-real"
+      assert PollingFeed.status(pid).last_error == {:exit, {:timeout, :withheld}}
+    end
+  end
+
   describe "status/1 makes 'delivering nothing' visible" do
     test "a feed that has never succeeded reports it" do
       test = self()

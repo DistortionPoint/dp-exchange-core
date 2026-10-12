@@ -17,6 +17,15 @@ defmodule Broken.Teeth.WholeOptional do
   def list_instruments(_opts), do: {:ok, []}
 end
 
+defmodule Broken.Teeth.NoOptionals do
+  @moduledoc false
+  # Implements none of the optional callbacks. Defined here rather than borrowing a module from
+  # `contract_teeth_test.exs`: test files load in parallel, so a module another file defines may
+  # not exist yet when this one runs, and the test failed with `:nofile` depending on timing.
+  @spec provider_name() :: String.t()
+  def provider_name, do: "no-optionals"
+end
+
 defmodule Broken.Teeth.SetFake do
   @moduledoc false
   # A fake whose subscription set misbehaves in the way `opts[:mode]` names. The set lives in
@@ -127,7 +136,7 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
 
     test "a whole implementation and an absent one are not faulted" do
       assert AdapterContract.half_implemented_optionals(Broken.Teeth.WholeOptional) == []
-      assert AdapterContract.half_implemented_optionals(Broken.OverDeclares) == []
+      assert AdapterContract.half_implemented_optionals(Broken.Teeth.NoOptionals) == []
     end
   end
 
