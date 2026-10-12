@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.88] - 2026-10-12
+
 - **Docs:** `usage-rules.md` states that `venue_does_not_serve/0` is optional and not a `Venue`
   callback (check it with `function_exported?/3`), documents the unconfirmed-write shapes a caller
   must not blindly retry (`order_unconfirmed`, `write_unconfirmed`) and the locally decided
