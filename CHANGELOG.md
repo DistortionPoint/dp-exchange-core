@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.86] - 2026-10-12
+
 - Docs: docs build is warning-free (18 references fixed).
 
 ## [0.3.85] - 2026-10-12
