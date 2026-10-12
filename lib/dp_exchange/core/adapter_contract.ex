@@ -474,6 +474,28 @@ defmodule DpExchange.Core.AdapterContract do
   end
 
   @doc """
+  Whether a run of `cases` against `module` examined nothing it should have: no case is
+  eligible (`eligible_cases/3`) although `caps` declares at least one of the cases' calls
+  active, which means that call is not exported at its arity.
+
+  A venue that declares every call of `cases` `:unsupported` has nothing to hold and is
+  `false`; the declaration itself is held by assertion 12.
+  """
+  @spec nothing_checked?(
+          module(),
+          DpExchange.Core.Capabilities.t(),
+          [{atom(), list(), term()}]
+        ) :: boolean()
+  def nothing_checked?(module, %DpExchange.Core.Capabilities{} = caps, cases) do
+    declared? =
+      Enum.any?(cases, fn {name, args, _expected} ->
+        DpExchange.Core.Capabilities.active?(caps, {name, length(args)})
+      end)
+
+    declared? and eligible_cases(module, caps, cases) == []
+  end
+
+  @doc """
   Runs each `{name, args, expected}` of `cases` against `module` and returns the ones whose
   answer is not `{:error, expected}`, as `{name, arity, expected, fault}` with `fault` as
   `refusal_fault/2` names it. Empty means every case was refused as the convention says.
@@ -628,6 +650,9 @@ defmodule DpExchange.Core.AdapterContract do
     base
     |> Map.put(:order_type, :market)
     |> Map.delete(:time_in_force)
+    # A stop price on the base would be refused alongside the price, and which comes first is
+    # the venue's choice; the request must carry the one extra field under test.
+    |> Map.delete(:stop_price)
     |> Map.put(:price, Decimal.new("1"))
   end
 
@@ -667,7 +692,9 @@ defmodule DpExchange.Core.AdapterContract do
     do: field in [:price, :time_in_force]
 
   defp market_price_answer?({:error, {:unsupported_order_combination, _type, _tif}}), do: true
-  defp market_price_answer?({:error, {:missing_field, :time_in_force}}), do: true
+  # A good-till-date duration tried on a market order may name its expiry key rather than
+  # `:time_in_force`; that is still the duration being refused, not the price being dropped.
+  defp market_price_answer?({:error, {:missing_field, field}}), do: field != :order_type
   defp market_price_answer?(_answer), do: false
 
   @doc """
@@ -3056,7 +3083,14 @@ defmodule DpExchange.Core.AdapterContract do
         eligible =
           DpExchange.Core.AdapterContract.eligible_cases(module, @venue.capabilities(), cases)
 
-        assert not required? or eligible != [],
+        # Nothing eligible is a failure only when the venue declares one of these calls active
+        # (so it is missing); a venue that declares them all `:unsupported` has nothing to hold.
+        assert not (required? and
+                      DpExchange.Core.AdapterContract.nothing_checked?(
+                        module,
+                        @venue.capabilities(),
+                        cases
+                      )),
                "#{what}: no call was eligible, so nothing was checked"
 
         faults = DpExchange.Core.AdapterContract.case_faults(module, eligible)

@@ -945,8 +945,8 @@ defmodule DpExchange.Core.Venue do
   Deposit and withdrawal history — needed to compute cost basis for transferred-in assets.
 
   A history that may be incomplete is never returned as complete (W7): when the venue's
-  documented maximum is reached with pages unwalked, the answer is
-  `{:error, :history_truncated}`.
+  documented maximum is reached with pages unwalked, the answer is exactly
+  `{:error, :history_truncated}`, for every venue and every bound (row cap or page count).
   """
   @callback get_transfers(credentials(), keyword()) :: result([map()])
 
@@ -963,9 +963,12 @@ defmodule DpExchange.Core.Venue do
   1. the request is a map: `{:error, {:invalid_order_request, request}}`. A non-map never
      raises `BadMapError`;
   2. no key the venue's builder does not read: `{:error, {:unsupported_order_field, key}}`.
-     That includes `:client_order_id` on a venue with no idempotency key;
-  3. `:symbol`: `{:error, {:invalid_symbol, value}}` for `nil`, a non-string or a blank one;
-  4. `:side`: `{:error, {:invalid_side, value}}`. `:buy`/`:sell` and `"buy"`/`"sell"` in any
+     That includes `:client_order_id` on a venue with no idempotency key. A key whose value is
+     `nil` is a forwarded unset option and counts as absent, as everywhere in this family;
+  3. `:symbol`: `{:error, {:invalid_symbol, value}}` for `nil` or an absent key, a non-string
+     or a blank one;
+  4. `:side`: `{:error, {:missing_field, :side}}` when absent, otherwise
+     `{:error, {:invalid_side, value}}`. `:buy`/`:sell` and `"buy"`/`"sell"` in any
      case are accepted; anything `capabilities/0` says the venue does not support (a short
      sale where `supports_short_selling` is `false`) is refused here too;
   5. `:order_type`: `{:error, {:missing_field, :order_type}}` when absent. **It is never
@@ -976,8 +979,10 @@ defmodule DpExchange.Core.Venue do
      whose request carries none, `{:error, {:unsupported_order_combination, type, tif}}` for
      a pair `capabilities/0` does not serve. A good-till-date order without its expiry key is
      `{:error, {:missing_field, key}}`;
-  7. `:quantity`: `{:error, {:invalid_quantity, value}}`;
-  8. the price fields: `{:error, {:invalid_price, value}}` and
+  7. `:quantity`: `{:error, {:missing_field, :quantity}}` when absent, otherwise
+     `{:error, {:invalid_quantity, value}}`;
+  8. the price fields: `{:error, {:missing_field, key}}` for one the type needs and the
+     request lacks, otherwise `{:error, {:invalid_price, value}}` and
      `{:error, {:invalid_stop_price, value}}`. A field the order type does not use is
      `{:error, {:unexpected_field, key}}` (`:price` on a market order, `:stop_price` on a
      non-stop one): **it is never silently dropped**, because the order placed would not be
@@ -1055,8 +1060,9 @@ defmodule DpExchange.Core.Venue do
   answer, not an `:exchange_error`. A transport failure keeps Core's
   `{:error, {:exchange_error, venue, message}}` tag.
 
-  **A cancel is sent once.** No venue retries it internally: a second cancel of an order
-  that the first already cancelled would come back as a refusal that hides the success.
+  **A cancel is always sent once.** No venue retries it internally, whatever `:retry_attempts`
+  the caller passes: a second cancel of an order that the first already cancelled would come
+  back as a refusal that hides the success.
   """
   @callback cancel_order(credentials(), String.t(), keyword()) ::
               result(Types.Order.t() | :cancelled)

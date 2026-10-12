@@ -21,6 +21,21 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- Conformance assertion 32 and the other convention checks no longer fail a venue that
+  declares every call they would drive `:unsupported` ("no call was eligible" is a failure
+  only when one of the calls is declared active).
+- Assertion 34's market-price check no longer false-fails a venue that refuses a
+  good-till-date duration by naming its expiry key (`{:missing_field, key}`), or one that
+  checks a stop price on the base request before the price: the request now drops
+  `:stop_price`, and any `{:missing_field, key}` other than `:order_type` counts as a
+  duration refusal.
+- `AdapterContract.nothing_checked?/3` holds the "declared active but not exported" decision
+  behind assertions 32 to 35, with teeth tests for both directions.
+- `Venue.place_order/3` doc: a missing side is `{:missing_field, :side}`, a missing quantity
+  or needed price is `{:missing_field, key}`, and a nil-valued unread key counts as absent.
+
 ## [0.3.80] - 2026-10-12
 
 ### Fixed

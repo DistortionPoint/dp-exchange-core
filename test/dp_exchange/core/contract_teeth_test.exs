@@ -1077,6 +1077,26 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert AdapterContract.eligible_cases(Broken.OverDeclares, caps, all_cases()) == []
     end
 
+    test "nothing eligible fails only when an unexported call is declared active" do
+      cases = all_cases()
+
+      all_off =
+        for {name, args, _expected} <- cases, into: %{}, do: {{name, length(args)}, :unsupported}
+
+      unsupported = Capabilities.new(endpoints: all_off, supported_quotes: ~w(USD))
+      declared = Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+
+      # Every driven call declared `:unsupported`: nothing is owed, so nothing is missing.
+      refute AdapterContract.nothing_checked?(Broken.OverDeclares, unsupported, cases)
+
+      # Declared active but not exported: the run examined nothing it should have.
+      assert AdapterContract.eligible_cases(Broken.OverDeclares, declared, cases) == []
+      assert AdapterContract.nothing_checked?(Broken.OverDeclares, declared, cases)
+
+      # Something eligible: checked.
+      refute AdapterContract.nothing_checked?(Broken.Convention.Lax, declared, cases)
+    end
+
     test "a failure message prints the call and the expectation, never its arguments" do
       secret = %{api_secret: "never-print-this"}
       cases = [{:get_order, [secret, nil, []], {:invalid_order_id, nil}}]
@@ -1125,6 +1145,31 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert AdapterContract.market_price_fault([{:raised, %ArgumentError{}}, price]) ==
                {:answered, {:raised, %ArgumentError{}}}
+    end
+
+    test "a good-till-date duration refused for its expiry key is a duration refusal" do
+      price = {:error, {:unexpected_field, :price}}
+      expiry = {:error, {:missing_field, :expire_time}}
+
+      assert AdapterContract.market_price_fault([expiry, price]) == nil
+      assert AdapterContract.market_price_fault([expiry]) == :price_never_refused
+
+      # A missing order type is not a duration refusal.
+      no_type = {:error, {:missing_field, :order_type}}
+      assert AdapterContract.market_price_fault([no_type, price]) == {:answered, no_type}
+    end
+
+    test "a stop price on the base request is not carried onto the market order" do
+      caps = %DpExchange.Core.Capabilities{
+        endpoints: %{},
+        supported_quotes: ["USD"],
+        supported_order_types: [:market, :stop_limit]
+      }
+
+      base = %{order_type: :limit, price: Decimal.new("2"), stop_price: Decimal.new("3")}
+      [request] = AdapterContract.market_price_requests(base, caps)
+      refute Map.has_key?(request, :stop_price)
+      assert request.order_type == :market
     end
 
     test "market requests carry a price, and are not built for a venue with no market type" do
