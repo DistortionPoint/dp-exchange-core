@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.84] - 2026-10-12
+
 ### Fixed
 
 - **Assertion 38 asked with the venue's own `:depth`.** The probe appended `depth: 1` and
