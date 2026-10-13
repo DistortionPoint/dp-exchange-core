@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.90] - 2026-10-13
+
 - **`HttpClient`: `:req_adapter` raised instead of working.** It is the documented transport seam
   (and four venue packages forward it), but it was handed to Req under its own name and Req
   0.7.5 raises `unknown option :req_adapter`, in the caller's process. It is now translated to
