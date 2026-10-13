@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.91] - 2026-10-13
+
 - **`PollingFeed` (bulk): a result about symbols removed while the fetch was in flight was a
   failure.** With the whole scope removed it raised the delivering-nothing warning, an outage
   notice and `[:link, :down]` for symbols nobody wanted; with part of it removed, an answer only
