@@ -937,6 +937,67 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert Map.keys(PollingFeed.coverage(pid)) == ["BTC-USD"]
     end
 
+    test "bulk mode: a result for a scope removed entirely in flight is not an outage" do
+      # (1) a bulk fetch for {A, B} is in flight, (2) the consumer unsubscribes everything,
+      # (3) the fetch answers. Every event was unwanted, which counted as
+      # `{:unrequested_symbols, _}`; with `last_ok` pruned empty that tripped the
+      # delivering-nothing warning and an outage notice for symbols nobody wanted.
+      test = self()
+
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD ETH-USD),
+          fetch_all: gated_fetch_all(test),
+          interval_ms: 60_000,
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:fetching, task}, 5_000
+
+      PollingFeed.update_symbols(pid, [])
+      _sync = PollingFeed.status(pid)
+      ref = Process.monitor(task)
+      send(task, :release)
+
+      # The task has exited, so its reply is already in the feed's mailbox ahead of the next
+      # call: the result is applied (or dropped) before `status/1` answers.
+      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+      assert %{failures_since_ok: 0, last_error: nil} = PollingFeed.status(pid)
+      refute_received {:published, _event}
+      refute_received {:notice, _notice}
+    end
+
+    test "bulk mode: an answer only about symbols removed in flight is not counted as unrequested" do
+      # Asked {BTC, ETH}; the scope becomes {ETH, SOL} while the fetch is out; the venue answers
+      # only BTC. BTC was asked for, so it is not a venue answering what nobody asked for.
+      test = self()
+
+      fetch_all = fn _symbols ->
+        send(test, {:fetching, self()})
+        receive(do: (:release -> {:ok, [event("BTC-USD")]}))
+      end
+
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD ETH-USD),
+          fetch_all: fetch_all,
+          interval_ms: 60_000,
+          on_notice: fn notice -> send(test, {:notice, notice}) end
+        )
+
+      assert_receive {:fetching, task}, 5_000
+
+      PollingFeed.update_symbols(pid, ~w(ETH-USD SOL-USD))
+      _sync = PollingFeed.status(pid)
+      ref = Process.monitor(task)
+      send(task, :release)
+
+      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+      assert %{failures_since_ok: 0, last_error: nil} = PollingFeed.status(pid)
+      refute_received {:published, _event}
+      refute_received {:notice, _notice}
+    end
+
     test "per-symbol mode drops a removed symbol's in-flight result" do
       test = self()
 

@@ -21,6 +21,19 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`PollingFeed` (bulk): a result about symbols removed while the fetch was in flight was a
+  failure.** With the whole scope removed it raised the delivering-nothing warning, an outage
+  notice and `[:link, :down]` for symbols nobody wanted; with part of it removed, an answer only
+  about the removed symbols was recorded as `{:unrequested_symbols, _}`. Both are now dropped,
+  judged against the set the fetch was asked for. Only a symbol it was NOT asked for is
+  unrequested.
+- **`HttpClient` (blocking, per-endpoint): a refused endpoint bucket spent the provider's
+  token.** The provider bucket was reserved and waited for, then the endpoint bucket answered
+  `:rate_limit_timeout`, and nothing was sent. Both buckets are now asked first with
+  `check/3` (which reserves nothing), as the non-blocking path already did.
+- **Docs:** `DefaultRateLimiter` states that a reservation is spent when it is made, so a caller
+  that dies before sending leaves its slot spent (bounded, and in the safe direction).
+
 ## [0.3.90] - 2026-10-13
 
 - **`HttpClient`: `:req_adapter` raised instead of working.** It is the documented transport seam

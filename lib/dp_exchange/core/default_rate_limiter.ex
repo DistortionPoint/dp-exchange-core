@@ -51,6 +51,14 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   in the *caller*. The server never blocks, so one slow caller cannot stall the limiter
   for everyone else.
 
+  ## A reservation is spent when it is made
+
+  `acquire/3` commits the caller's slot in the server before the caller waits for it. A
+  caller that dies, or whose call times out, after that commit and before it sends leaves the
+  slot spent on a request that never went out. This is deliberate: the server never blocks
+  and never monitors callers, and the cost is bounded by one wait. It errs toward sending
+  less, never more, which is the only safe direction against a venue that blocks the IP.
+
   ## Not started is not "no limit"
 
   `acquire/3` and `check/3` return `{:error, :not_started}` when the named limiter is not

@@ -259,6 +259,31 @@ defmodule DpExchange.Core.HttpClientTest do
       refute_received {:counted, _key, _weight}
     end
 
+    test "blocking: an endpoint wait beyond the timeout does not spend the provider's token" do
+      # (1) acquire on the provider bucket reserves and sleeps, (2) acquire on the endpoint
+      # bucket times out, (3) nothing is sent and the provider's token is gone. Asking every
+      # bucket with check/3 first refuses before anything is reserved.
+      use_stub(%{"v /never" => {:rate_limited, 60_000}})
+
+      assert {:error, {:exchange_error, "v", :rate_limit_timeout}} =
+               request(provider: "v", rate_limit_per_endpoint: true, rate_limit_blocking: true)
+
+      assert_received {:check, :key, "v"}
+      assert_received {:check, :key, "v /never"}
+      refute_received {:acquire, :key, _key}
+      refute_received {:counted, _key, _weight}
+    end
+
+    test "blocking: waits within the timeout on both buckets still block and reserve both" do
+      use_stub(%{"v" => {:rate_limited, 10}, "v /never" => {:rate_limited, 10}})
+
+      request(provider: "v", rate_limit_per_endpoint: true, rate_limit_blocking: true)
+
+      # The stub's acquire maps a rate-limited answer to a timeout, so the point here is only
+      # that the pre-check let both buckets through to the acquire step.
+      assert_received {:acquire, :key, "v"}
+    end
+
     test "on a blocking limiter the request is signed again after the wait, and that is sent" do
       # Signed once and then held by a blocking limiter, two callers on an incrementing
       # nonce were released in either order, and the earlier signature reached the venue

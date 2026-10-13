@@ -541,7 +541,10 @@ defmodule DpExchange.Core.PollingFeed do
   # clause below deliberately: that pattern is a bare two-tuple and would be tried against
   # this message first, and while the `in_flight` guard would reject it, relying on a
   # rejection to route a message is the kind of ordering nobody re-derives correctly later.
-  def handle_info({:fetch_timeout, ref}, %{in_flight: %{ref: ref, task: task, job: job}} = state) do
+  def handle_info(
+        {:fetch_timeout, ref},
+        %{in_flight: %{ref: ref, task: task} = flight} = state
+      ) do
     # `Task.shutdown/2` unlinks before it kills, so killing the task cannot take this
     # process with it. Its return value is used rather than discarded: a task that finished
     # in the instant between the timer firing and this clause running produced a real
@@ -554,7 +557,7 @@ defmodule DpExchange.Core.PollingFeed do
         nil -> {:error, :fetch_timeout}
       end
 
-    {:noreply, finish(state, job, result)}
+    {:noreply, finish(state, flight, result)}
   end
 
   # The task died without answering. `safely/1` converts a raise, a throw and an `exit`
@@ -563,18 +566,18 @@ defmodule DpExchange.Core.PollingFeed do
   # other to a caller of this module, not a new failure path.
   def handle_info(
         {:DOWN, ref, :process, _pid, reason},
-        %{in_flight: %{ref: ref, job: job, timer: timer}} = state
+        %{in_flight: %{ref: ref, timer: timer} = flight} = state
       ) do
     Process.cancel_timer(timer)
-    {:noreply, finish(state, job, {:error, {:fetch_crashed, opaque_reason(reason)}})}
+    {:noreply, finish(state, flight, {:error, {:fetch_crashed, opaque_reason(reason)}})}
   end
 
   # The fetch answered. This is the path that used to be a blocking `Task.yield/2` inside
   # `handle_info` — see the moduledoc for what that cost.
-  def handle_info({ref, result}, %{in_flight: %{ref: ref, job: job, timer: timer}} = state) do
+  def handle_info({ref, result}, %{in_flight: %{ref: ref, timer: timer} = flight} = state) do
     Process.demonitor(ref, [:flush])
     Process.cancel_timer(timer)
-    {:noreply, finish(state, job, result)}
+    {:noreply, finish(state, flight, result)}
   end
 
   def handle_info(_other, state), do: {:noreply, state}
@@ -583,13 +586,55 @@ defmodule DpExchange.Core.PollingFeed do
   # on the clock, then start whatever queued up while it ran. Rescheduling happens HERE and
   # nowhere else, which is what bounds the queue — a symbol cannot have a second tick
   # pending until its first has finished.
-  defp finish(state, job, result) do
+  defp finish(state, %{job: job} = flight, result) do
     state
     |> Map.put(:in_flight, nil)
-    |> apply_result(job, result)
+    |> apply_flight(flight, result)
     |> reschedule(job)
     |> start_next()
   end
+
+  # **A bulk result for a set that is entirely gone is dropped, not counted.** Interleaving:
+  # (1) a bulk fetch for {A, B} is in flight; (2) `update_symbols(feed, [])` (the consumer
+  # unsubscribed everything); (3) the fetch answers `{:ok, [A, B]}`, or `{:error, _}`. Every
+  # event is now unwanted, so `publish_and_record/2` recorded `{:unrequested_symbols, _}` and an
+  # error counted as well: `last_ok` had been pruned empty, so `delivering_nothing?/2` held and
+  # the feed warned and sent a `:coverage_change` outage notice and `[:link, :down]` for symbols
+  # nobody wanted any more. The per-symbol path has always dropped this (`apply_result/3`); this
+  # is the same rule for the bulk job, decided against the set the fetch was ASKED for.
+  #
+  # **And a bulk result's events for symbols removed in flight are dropped before counting.**
+  # The disjoint case above was the whole-set version; the partial one remained: asked {A, B},
+  # then `update_symbols([B, C])`, then an answer carrying only A. A was asked for and is no
+  # longer wanted, so it is neither delivered nor a venue answering what nobody asked for, but
+  # `publish_and_record/2` saw every event unwanted and recorded `{:unrequested_symbols, ["A"]}`
+  # as a failure. Only a symbol the fetch did NOT ask for is unrequested.
+  defp apply_flight(state, %{job: :all, asked: asked}, result) do
+    if MapSet.disjoint?(asked, state.symbols) do
+      state
+    else
+      case drop_removed_in_flight(result, asked, state.symbols) do
+        :removed_in_flight -> state
+        kept -> apply_result(state, :all, kept)
+      end
+    end
+  end
+
+  defp apply_flight(state, %{job: job}, result), do: apply_result(state, job, result)
+
+  # A result left empty BY this filter is not the venue answering nothing (`:empty_response`):
+  # it answered, about symbols no longer wanted. It is ignored rather than counted either way.
+  defp drop_removed_in_flight({:ok, [_first | _rest] = events}, asked, wanted) do
+    kept = Enum.reject(events, &removed_in_flight?(&1, asked, wanted))
+    if kept == [], do: :removed_in_flight, else: {:ok, kept}
+  end
+
+  defp drop_removed_in_flight(result, _asked, _wanted), do: result
+
+  defp removed_in_flight?(%{symbol: symbol}, asked, wanted),
+    do: MapSet.member?(asked, symbol) and not MapSet.member?(wanted, symbol)
+
+  defp removed_in_flight?(_not_an_event, _asked, _wanted), do: false
 
   # An Erlang `:queue`, not a list appended to: with thousands of symbols and a fetch slower
   # than the interval the queue holds one job per symbol, and `queue ++ [job]` copied all of
@@ -635,7 +680,9 @@ defmodule DpExchange.Core.PollingFeed do
     task = Task.async(fn -> safely(fetch_fun(state, job)) end)
     timer = Process.send_after(self(), {:fetch_timeout, task.ref}, state.fetch_timeout_ms)
 
-    %{state | queue: rest, in_flight: %{ref: task.ref, task: task, job: job, timer: timer}}
+    # `asked` is the scope at the instant the fetch started: see `apply_flight/3`.
+    flight = %{ref: task.ref, task: task, job: job, timer: timer, asked: state.symbols}
+    %{state | queue: rest, in_flight: flight}
   end
 
   # Built from the two values the fetch needs rather than by closing over `state`, so the

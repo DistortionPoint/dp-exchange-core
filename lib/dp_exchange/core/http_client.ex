@@ -1157,20 +1157,37 @@ defmodule DpExchange.Core.HttpClient do
   # `check/3`, which reserves nothing, and nothing is reserved unless all have room. Two
   # callers can still race between the check and the reservation; that narrows to the one
   # case the atomic reservation exists for, not every endpoint refusal.
+  #
+  # **The blocking path has the same leak, and is asked the same way.** Interleaving: (1)
+  # `acquire/3` on the provider bucket reserves and sleeps its wait in this process; (2)
+  # `acquire/3` on the endpoint bucket then answers `:rate_limit_timeout`; (3) no request is
+  # sent, and the provider's token, already committed and waited for, is spent. It was skipped
+  # here as "blocking waits, so nothing is refused", which is true of the wait and not of the
+  # `:timeout` that bounds it. Each bucket is now asked first with `check/3`, which reserves
+  # nothing, and a wait beyond the timeout is refused before ANY bucket is reserved. The
+  # waits can still differ by the time the first sleep takes; that narrows the window, as
+  # for the non-blocking path, it does not close it.
   defp precheck([_first, _second | _rest] = keys, opts) do
-    if blocking?(opts) do
-      :ok
-    else
-      Enum.reduce_while(keys, :ok, fn key, :ok ->
-        case key |> limiter().check(weight(opts), limiter_opts(opts)) |> normalise_check() do
-          :ok -> {:cont, :ok}
-          refused -> {:halt, refused}
-        end
-      end)
-    end
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      answer = limiter().check(key, weight(opts), limiter_opts(opts))
+
+      case precheck_verdict(answer, blocking?(opts), Config.opt(opts, :timeout, 30_000)) do
+        :ok -> {:cont, :ok}
+        refused -> {:halt, refused}
+      end
+    end)
   end
 
   defp precheck(_one_or_none, _opts), do: :ok
+
+  # Blocking: a wait within the timeout is what blocking is for. A wait beyond it, or any
+  # timeout that is not an integer (left for `acquire/3` to refuse by name), is judged there.
+  defp precheck_verdict({:rate_limited, wait_ms}, true, timeout)
+       when is_integer(timeout) and wait_ms > timeout,
+       do: {:error, :rate_limit_timeout}
+
+  defp precheck_verdict({:rate_limited, _wait_ms}, true, _timeout), do: :ok
+  defp precheck_verdict(answer, _blocking, _timeout), do: normalise_check(answer)
 
   defp reserve_all(keys, opts) do
     Enum.reduce_while(keys, :ok, fn key, :ok ->
