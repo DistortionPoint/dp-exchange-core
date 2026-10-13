@@ -354,7 +354,9 @@ defmodule DpExchange.Core.Telemetry do
   end
 
   defp strip_authority_userinfo(url) do
-    case Regex.run(~r{^([a-z][a-z0-9+.-]*://)([^/]*)(.*)$}is, url) do
+    # The scheme is optional: a scheme-relative `//user:pass@host/x` has an authority too, and
+    # its userinfo was left in the label because only `scheme://` was recognised.
+    case Regex.run(~r{^((?:[a-z][a-z0-9+.-]*:)?//)([^/]*)(.*)$}is, url) do
       [_whole, scheme, authority, rest] ->
         scheme <> (authority |> String.split("@") |> List.last()) <> rest
 

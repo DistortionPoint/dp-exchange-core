@@ -462,6 +462,68 @@ defmodule DpExchange.Core.UnwiredCheckTest do
 
       assert {:error, {:no_modules_scanned, ^lib_root}} = UnwiredCheck.run(beam_dir, lib_root)
     end
+
+    test "a beam file that cannot be read is an error, not a module left out of the scan" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{path: "plain.ex", code: "defmodule Plain#{u} do\n  def ok, do: :ok\nend\n"}
+        ])
+
+      UnwiredFixture.write_unreadable_beam!(beam_dir)
+
+      assert {:error, {:not_a_beam_file, _path}} = UnwiredCheck.run(beam_dir, lib_root)
+    end
+
+    test "a module whose beam records no source is never analysed" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{path: "sourced.ex", code: "defmodule Sourced#{u} do\n  def dead, do: :ok\nend\n"},
+          %{
+            path: "sourceless.ex",
+            code: "defmodule Sourceless#{u} do\n  def dead, do: :ok\nend\n"
+          }
+        ])
+
+      sourced = Module.concat([:"Elixir", "Sourced#{u}"])
+      sourceless = Module.concat([:"Elixir", "Sourceless#{u}"])
+      UnwiredFixture.drop_source!(beam_dir, sourceless)
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      mfas = violation_mfas(violations)
+
+      assert {sourced, :dead, 0} in mfas, "the sourced module must be flagged"
+      refute {sourceless, :dead, 0} in mfas
+    end
+
+    test "a behaviour that cannot be asked for its callbacks excuses nothing" do
+      u = uniq()
+
+      {{beam_dir, lib_root}, _compiler_warning} =
+        ExUnit.CaptureIO.with_io(:stderr, fn ->
+          UnwiredFixture.compile!([
+            %{
+              path: "orphan_impl.ex",
+              code: """
+              defmodule OrphanImpl#{u} do
+                @behaviour NoSuchBehaviour#{u}
+
+                def handle(_term), do: :ok
+              end
+              """
+            }
+          ])
+        end)
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      impl = Module.concat([:"Elixir", "OrphanImpl#{u}"])
+
+      assert {impl, :handle, 1} in violation_mfas(violations),
+             "a behaviour that does not exist declares no callbacks, so nothing is excused"
+    end
   end
 
   describe "format/1" do

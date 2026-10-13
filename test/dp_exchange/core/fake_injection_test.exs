@@ -182,6 +182,36 @@ defmodule DpExchange.Core.FakeInjectionTest do
       assert_receive {:DOWN, ^agent_ref, :process, ^agent, _reason}, 5_000
     end
 
+    test "resetting a venue nothing was configured for is a no-op, not an error" do
+      assert FakeInjection.reset(:webull) == :ok
+      assert FakeInjection.next_outcome(:webull) == :none
+    end
+
+    # The configuring process's agent can die between the liveness check and the call that
+    # follows it. A handle to a process that is alive but exits on its first call is exactly
+    # that moment, made deterministic: each read below must report "nothing configured".
+    test "an agent that dies mid-call means nothing is configured, never a crash" do
+      dying_agent = fn ->
+        pid =
+          spawn(fn ->
+            receive do
+              {:"$gen_call", _from, _request} -> exit(:agent_died)
+            end
+          end)
+
+        DpExchange.Core.Config.put_override(:fake_injection, pid)
+      end
+
+      dying_agent.()
+      assert FakeInjection.next_outcome(:webull) == :none
+
+      dying_agent.()
+      refute FakeInjection.credentials_bypassed?(:webull)
+
+      dying_agent.()
+      assert FakeInjection.reset(:webull) == :ok
+    end
+
     test "an override set in this test IS visible to a Task it spawns" do
       FakeInjection.fail_always(:webull, {:error, :down})
 

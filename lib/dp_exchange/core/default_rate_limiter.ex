@@ -207,13 +207,13 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   @impl DpExchange.Core.RateLimitBehaviour
   @spec record(atom() | String.t(), pos_integer(), keyword()) :: :ok
   def record(provider, weight, opts \\ []) do
+    # No `catch` here: `call/2` already turns every exit from the limiter (not running, dying
+    # mid-call, timing out) into an `{:error, _}` tuple, so nothing in this body can exit.
     with {:ok, weight} <- validate_weight(weight) do
       call(opts, {:record, provider, weight})
     end
 
     :ok
-  catch
-    :exit, _reason -> :ok
   end
 
   @doc """
@@ -233,10 +233,9 @@ defmodule DpExchange.Core.DefaultRateLimiter do
             "penalize/3 :ms must be a non-negative integer of milliseconds, got #{inspect(ms)}"
     end
 
+    # No `catch`: `call/2` returns an `{:error, _}` for every exit, so this cannot exit.
     call(opts, {:penalize, provider, ms})
     :ok
-  catch
-    :exit, _reason -> :ok
   end
 
   @doc """

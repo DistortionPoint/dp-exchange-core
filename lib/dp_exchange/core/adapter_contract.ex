@@ -1437,6 +1437,9 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # Deliberate defensive clause, reachable only under `--cover` with a cover-compiled module
+  # that no application claims. No such module can be arranged without hand-compiling one
+  # through `:cover`, so it is not tested; an unowned module is foreign (fail closed).
   defp permitted_app?(nil, _permitted), do: false
   defp permitted_app?(app, permitted), do: MapSet.member?(permitted, Atom.to_string(app))
 

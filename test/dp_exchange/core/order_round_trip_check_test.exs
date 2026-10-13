@@ -104,6 +104,35 @@ defmodule RoundTripFake.RaisesOnRead do
   def cancel_order(_credentials, _id, _opts), do: {:ok, :cancelled}
 end
 
+defmodule RoundTripFake.ThrowsOnRead do
+  @moduledoc false
+  # Leaves its read by a throw and its cancel by an exit, neither of which `rescue` sees.
+  @spec place_order(map(), map(), keyword()) :: {:ok, DpExchange.Core.Types.Order.t()}
+  def place_order(_credentials, _request, _opts), do: {:ok, RoundTripFake.Kept.order("placed-1")}
+
+  @spec get_order(map(), String.t(), keyword()) :: no_return()
+  def get_order(_credentials, id, _opts), do: throw({:no_such_order, id})
+
+  @spec cancel_order(map(), String.t(), keyword()) :: no_return()
+  def cancel_order(_credentials, id, _opts), do: exit({:gone, id})
+end
+
+defmodule RoundTripFake.MapBatch do
+  @moduledoc false
+  # A batch call whose arguments are not `[credentials, requests, opts]`, so the number of
+  # entries to expect is not knowable and only the ids it mints are judged.
+  alias RoundTripFake.{Kept, Mint}
+
+  @spec place_orders(map(), map()) :: {:ok, [DpExchange.Core.Types.Order.t()]}
+  def place_orders(_credentials, _batch), do: {:ok, [Mint.mint(), Mint.mint()]}
+
+  @spec get_order(map(), String.t(), keyword()) :: term()
+  defdelegate get_order(credentials, id, opts), to: Kept
+
+  @spec cancel_order(map(), String.t(), keyword()) :: term()
+  defdelegate cancel_order(credentials, id, opts), to: Kept
+end
+
 defmodule RoundTripFake.PlaceRefused do
   @moduledoc false
   @spec place_order(map(), map(), keyword()) :: {:error, term()}
@@ -279,6 +308,30 @@ defmodule DpExchange.Core.OrderRoundTripCheckTest do
     test "a raise is reported as the answer and does not escape" do
       assert {:ok, [%{step: :get_order, answered: {:raised, %ArgumentError{}}}]} =
                OrderRoundTripCheck.run(RoundTripFake.RaisesOnRead, caps(), calls())
+    end
+  end
+
+  describe "run/3 — a fake that leaves by throw or exit" do
+    test "each is reported as the answer by its kind, and does not escape" do
+      assert {:ok, violations} =
+               OrderRoundTripCheck.run(RoundTripFake.ThrowsOnRead, caps(), calls())
+
+      assert Enum.map(violations, &{&1.step, &1.answered}) == [
+               {:get_order, {:throw, {:no_such_order, "placed-1"}}},
+               {:cancel_order, {:exit, {:gone, "placed-1"}}}
+             ]
+    end
+  end
+
+  describe "run/3 — a batch whose arguments carry no request list" do
+    test "no length is expected of it, and the ids it mints are still round-tripped" do
+      batch_calls = %{
+        place_orders: [%{}, %{count: 2}],
+        get_order: fn id -> [%{}, id, []] end,
+        cancel_order: fn id -> [%{}, id, []] end
+      }
+
+      assert {:ok, []} = OrderRoundTripCheck.run(RoundTripFake.MapBatch, caps(), batch_calls)
     end
   end
 

@@ -620,4 +620,61 @@ defmodule DpExchange.Core.CapabilitiesTest do
       end
     end
   end
+
+  describe "the vocabularies a consumer branches on" do
+    test "maturities/0 is the full maturity vocabulary, and each member is declarable" do
+      assert Enum.sort(Capabilities.maturities()) == [:experimental, :proven, :unsupported]
+
+      for maturity <- Capabilities.maturities() do
+        assert Capabilities.maturity(caps(endpoints: %{{:a, 0} => maturity}), {:a, 0}) ==
+                 maturity
+      end
+    end
+  end
+
+  describe "malformed declarations are refused rather than stored" do
+    test "endpoints that are not a map are refused" do
+      assert_raise ArgumentError, ~r/endpoints must be a map, got \[a: 0\]/, fn ->
+        caps(endpoints: [{:a, 0}])
+      end
+    end
+
+    test "no_venue_contact that is not a list is refused" do
+      assert_raise ArgumentError, ~r/no_venue_contact must be a list, got :get_fees/, fn ->
+        caps(no_venue_contact: :get_fees)
+      end
+    end
+
+    test "a no_venue_contact entry that is not {function, arity} is refused" do
+      assert_raise ArgumentError, ~r/no_venue_contact entries must be \{function, arity\}/, fn ->
+        caps(no_venue_contact: [:get_fees])
+      end
+    end
+
+    test "an endpoint cannot be both unsupported and answered without contacting the venue" do
+      assert_raise ArgumentError, ~r/is in no_venue_contact but declared :unsupported/, fn ->
+        caps(endpoints: %{{:get_fees, 2} => :unsupported}, no_venue_contact: [{:get_fees, 2}])
+      end
+    end
+
+    test "a credential_benefit outside the vocabulary is refused" do
+      assert_raise ArgumentError, ~r/credential_benefit :bigger must be one of/, fn ->
+        caps(credential_benefit: :bigger)
+      end
+    end
+
+    test "a vocabulary field that is not a list is named, not left to a list subtraction" do
+      assert_raise ArgumentError, ~r/supported_order_types must be a list, got nil/, fn ->
+        caps(supported_order_types: nil)
+      end
+    end
+
+    test "a leverage of zero or below is refused: it is a Decimal, but not a leverage" do
+      for bad <- [Decimal.new(0), Decimal.new(-2)] do
+        assert_raise ArgumentError, ~r/max_leverage .* is not positive/, fn ->
+          caps(supports_margin: true, max_leverage: bad)
+        end
+      end
+    end
+  end
 end

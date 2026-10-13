@@ -796,9 +796,68 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       assert {:error, {:no_modules_scanned, ^lib_root}} =
                LinkSafetyCheck.run(beam_dir, lib_root)
     end
+
+    test "a beam file that cannot be read is an error, not a module left out of the scan" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{path: "plain.ex", code: "defmodule Plain#{u} do\n  def ok, do: :ok\nend\n"}
+        ])
+
+      UnwiredFixture.write_unreadable_beam!(beam_dir)
+
+      assert {:error, {:not_a_beam_file, _path}} = LinkSafetyCheck.run(beam_dir, lib_root)
+    end
+
+    test "a module whose beam records no source is never analysed" do
+      u = uniq()
+
+      feed_code = fn name ->
+        """
+        defmodule #{name}#{u} do
+          use GenServer
+
+          @impl true
+          def init(_opts), do: {:ok, nil}
+
+          @impl true
+          def handle_call(:open, _from, state) do
+            pid = spawn_link(fn -> :ok end)
+            {:reply, pid, state}
+          end
+        end
+        """
+      end
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{path: "sourced.ex", code: feed_code.("Sourced")},
+          %{path: "sourceless.ex", code: feed_code.("Sourceless")}
+        ])
+
+      sourced = Module.concat([:"Elixir", "Sourced#{u}"])
+      sourceless = Module.concat([:"Elixir", "Sourceless#{u}"])
+      UnwiredFixture.drop_source!(beam_dir, sourceless)
+
+      assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+
+      assert {sourced, :handle_call, 3} in violation_mfas(violations),
+             "the sourced module must be flagged, or the refute below proves nothing"
+
+      refute Enum.any?(violations, &(&1.module == sourceless))
+    end
   end
 
   describe "format/1" do
+    test "a violation with no line names the file alone, and with no file says so" do
+      with_file = %{module: Some.Feed, function: :init, arity: 1, file: "/a/feed.ex", line: nil}
+      without_file = %{with_file | file: nil}
+
+      assert LinkSafetyCheck.format([with_file]) =~ "(/a/feed.ex)"
+      assert LinkSafetyCheck.format([without_file]) =~ "(unknown source)"
+    end
+
     test "renders one line per violation naming the module, callback and location" do
       violations = [
         %{module: Some.Feed, function: :handle_call, arity: 3, file: "/a/feed.ex", line: 12}

@@ -21,6 +21,22 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`HttpClient`: `:req_adapter` raised instead of working.** It is the documented transport seam
+  (and four venue packages forward it), but it was handed to Req under its own name and Req
+  0.7.5 raises `unknown option :req_adapter`, in the caller's process. It is now translated to
+  Req's `:adapter`; an explicit `:adapter` wins.
+- **`HttpClient.get/3` nested its own error tag.** With `:provider`, a failed request came back
+  as `{:exchange_error, p, {:exchange_error, p, msg}}`; it is tagged once. A body that is not JSON,
+  or not an object or list, is now tagged with the venue like every other failure.
+- **The plain-http credential backstop ignored a map of headers.** Req accepts headers as a map,
+  and one carrying `Authorization` went out over http unrefused; a map is read like a list.
+- **`Telemetry.endpoint/1` kept the userinfo of a scheme-relative URL**
+  (`//user:pass@host/x`); it is stripped like any other authority's.
+- **Internal:** unreachable `catch :exit` clauses in `DefaultRateLimiter.record/3` and
+  `penalize/3` removed (`call/2` already catches every exit); both still answer `:ok`.
+- **Tests:** every line the suite never executed was read and either tested, proven dead and
+  removed, or kept as a commented defensive clause.
+
 ## [0.3.89] - 2026-10-12
 
 - **Security: `HttpClient` no longer quotes a refused request into its error.** Mint's

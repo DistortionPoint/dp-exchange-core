@@ -491,6 +491,163 @@ defmodule DpExchange.Core.PollingFeedTest do
       refute inspect(notice) =~ "test-secret-not-real"
       assert PollingFeed.status(pid).last_error == {:exit, {:timeout, :withheld}}
     end
+
+    test "text is bounded, and a shape that cannot be vetted is withheld whole" do
+      long = String.duplicate("x", 3_000)
+
+      cases = [
+        {fn _symbol -> exit(long) end, {:exit, String.slice(long, 0, 2_048)}},
+        {fn _symbol -> exit({%{api_secret: "test-secret-not-real"}, :call}) end,
+         {:exit, :withheld}},
+        {fn _symbol -> throw(%{api_secret: "test-secret-not-real"}) end, {:throw, :withheld}},
+        {fn _symbol -> exit([:call, "test-secret-not-real"]) end, {:exit, :withheld}}
+      ]
+
+      for {fetch, expected} <- cases do
+        pid =
+          start_supervised!(
+            {PollingFeed,
+             sink: sink_to_self(),
+             start_delay_ms: 0,
+             interval_ms: 50,
+             symbols: ~w(BTC-USD),
+             fetch: fetch},
+            id: make_ref()
+          )
+
+        status = await_status(pid, &(&1.last_error != nil))
+        assert status.last_error == expected
+      end
+    end
+  end
+
+  describe "a fetch task that ends in the instant its timeout fires" do
+    # `:sys.suspend/1` holds the feed's mailbox still, so the order the messages land in is the
+    # test's choice, not a race: the timeout is queued first, the fetch's end second.
+    defp in_flight_fetch(test) do
+      fn symbol ->
+        send(test, {:fetching, self()})
+
+        receive do
+          :release -> {:ok, event(symbol)}
+        end
+      end
+    end
+
+    test "a result that was already produced is used, not discarded as a timeout" do
+      feed = start_feed(symbols: ~w(BTC-USD), fetch: in_flight_fetch(self()), interval_ms: 60_000)
+      assert_receive {:fetching, task}, 5_000
+      %{in_flight: %{ref: ref}} = :sys.get_state(feed)
+
+      :ok = :sys.suspend(feed)
+      send(feed, {:fetch_timeout, ref})
+      task_ref = Process.monitor(task)
+      send(task, :release)
+      assert_receive {:DOWN, ^task_ref, :process, ^task, _reason}, 5_000
+      :ok = :sys.resume(feed)
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+      assert PollingFeed.status(feed).failures_since_ok == 0
+    end
+
+    test "a task that died on its own is a crashed fetch, by the reason it left with" do
+      feed = start_feed(symbols: ~w(BTC-USD), fetch: in_flight_fetch(self()), interval_ms: 60_000)
+      assert_receive {:fetching, task}, 5_000
+      %{in_flight: %{ref: ref}} = :sys.get_state(feed)
+
+      :ok = :sys.suspend(feed)
+      send(feed, {:fetch_timeout, ref})
+      task_ref = Process.monitor(task)
+      Process.exit(task, :boom)
+      assert_receive {:DOWN, ^task_ref, :process, ^task, :boom}, 5_000
+      :ok = :sys.resume(feed)
+
+      status = await_status(feed, &(&1.failures_since_ok >= 1))
+      assert {:fetch_crashed, _reason} = status.last_error
+      assert Process.alive?(feed)
+    end
+  end
+
+  describe "a tick that outlives its symbol's place in scope" do
+    test "a poll that fires after the symbol left is dropped, and a re-add is polled" do
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ~w(A),
+          interval_ms: 60_000,
+          fetch: fn symbol ->
+            send(test, {:fetched, symbol})
+            {:ok, event(symbol)}
+          end
+        )
+
+      assert_receive {:fetched, "A"}, 5_000
+      await_status(feed, &(&1.covered == 1))
+
+      # The timer armed for "A" fires after "A" has left; forgetting it is what lets the
+      # re-add below schedule "A" once, instead of finding it counted as already scheduled.
+      PollingFeed.update_symbols(feed, [])
+      send(feed, {:poll, "A"})
+      PollingFeed.update_symbols(feed, ~w(A))
+
+      assert_receive {:fetched, "A"}, 5_000
+    end
+
+    test "a tick queued for a symbol that left before its turn is skipped, and a re-add is polled" do
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ~w(A B),
+          interval_ms: 60_000,
+          fetch: fn symbol ->
+            send(test, {:fetching, symbol, self()})
+
+            receive do
+              :go -> {:ok, event(symbol)}
+            end
+          end
+        )
+
+      assert_receive {:fetching, first, first_task}, 5_000
+      [other] = ~w(A B) -- [first]
+
+      # `other`'s tick arrives while `first` is in flight, so it queues; then it leaves scope.
+      send(feed, {:poll, other})
+      PollingFeed.update_symbols(feed, [first])
+      _sync = PollingFeed.status(feed)
+      send(first_task, :go)
+      assert_receive {:published, %{symbol: ^first}}, 5_000
+
+      _sync = PollingFeed.status(feed)
+      refute_received {:fetching, ^other, _task}
+
+      PollingFeed.update_symbols(feed, [first, other])
+      assert_receive {:fetching, ^other, other_task}, 5_000
+      send(other_task, :go)
+    end
+  end
+
+  describe "a registered feed" do
+    test "is reachable by the name it was started under" do
+      name = :"polling_feed_#{System.unique_integer([:positive])}"
+      feed = start_feed(name: name, fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(A))
+
+      assert Process.whereis(name) == feed
+      assert_receive {:published, %{symbol: "A"}}, 5_000
+      assert Map.keys(PollingFeed.coverage(name)) == ["A"]
+    end
+  end
+
+  describe "a bulk fetch that fails outright" do
+    test "its reason is recorded as the feed's last error" do
+      feed = start_feed(fetch_all: fn _symbols -> {:error, :venue_down} end, symbols: ~w(A))
+
+      status = await_status(feed, &(&1.last_error != nil))
+      assert status.last_error == :venue_down
+      assert status.failures_since_ok >= 1
+    end
   end
 
   describe "status/1 makes 'delivering nothing' visible" do

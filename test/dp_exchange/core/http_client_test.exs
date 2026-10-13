@@ -67,6 +67,48 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  # Refuses every reservation, yet has room when asked how long to wait: a bucket that
+  # refilled between the refusal and the question.
+  defmodule RefillingLimiter do
+    @moduledoc false
+    @behaviour DpExchange.Core.RateLimitBehaviour
+
+    @impl true
+    def acquire(_provider, _weight, _opts), do: {:error, :rate_limit_timeout}
+
+    @impl true
+    def check(_provider, _weight, _opts), do: :ok
+
+    @impl true
+    def record(_provider, _weight, _opts), do: :ok
+
+    @impl true
+    def penalize(_provider, _ms, _opts), do: :ok
+  end
+
+  # A loopback listener that answers one request with `response` and closes. A real socket,
+  # because `request/2` and `get/1` have no options through which to pass a `:plug`.
+  defp serve_once(response) do
+    {:ok, listener} =
+      :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
+
+    {:ok, port} = :inet.port(listener)
+
+    spawn_link(fn ->
+      {:ok, socket} = :gen_tcp.accept(listener)
+      {:ok, _request} = :gen_tcp.recv(socket, 0)
+      :ok = :gen_tcp.send(socket, response)
+      :gen_tcp.close(socket)
+    end)
+
+    "http://127.0.0.1:#{port}/x"
+  end
+
+  defp json_response(json) do
+    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n" <>
+      "content-length: #{byte_size(json)}\r\nconnection: close\r\n\r\n" <> json
+  end
+
   defp use_stub(answer \\ :ok) do
     Config.put_override(:rate_limit_module, StubLimiter)
     Config.put_override(:stub_answer, answer)
@@ -270,6 +312,72 @@ defmodule DpExchange.Core.HttpClientTest do
 
       refute_received {:acquire, :key, "v"}
       refute_received {:counted, _key, _weight}
+    end
+
+    test "a signature that fails after a blocking wait is returned, and nothing is sent" do
+      use_stub()
+      test = self()
+      counter = :counters.new(1, [])
+
+      headers = fn ->
+        :counters.add(counter, 1, 1)
+
+        case :counters.get(counter, 1) do
+          1 -> [{"x-nonce", "1"}]
+          _later -> {:error, :signer_gone}
+        end
+      end
+
+      plug = fn conn ->
+        send(test, :sent)
+        Req.Test.json(conn, %{})
+      end
+
+      assert {:error, :signer_gone} =
+               HttpClient.request(:get, "http://venue.test/x", headers, nil,
+                 provider: "v",
+                 plug: plug,
+                 rate_limit_blocking: true,
+                 retry_attempts: 0
+               )
+
+      refute_received :sent
+    end
+
+    test "a blocking acquire that times out is the limiter's own refusal" do
+      use_stub({:rate_limited, 1_000})
+
+      assert {:error, {:exchange_error, "v", :rate_limit_timeout}} =
+               request(provider: "v", rate_limit_blocking: true)
+    end
+
+    test "a limiter that cannot answer the per-endpoint pre-check stops the request" do
+      use_stub({:error, :store_unreachable})
+
+      assert {:error, {:exchange_error, "v", "Rate limiter unavailable"}} =
+               request(provider: "v", rate_limit_per_endpoint: true)
+    end
+
+    test "a refusal whose wait has already elapsed still refuses, for the one-second minimum" do
+      Config.put_override(:rate_limit_module, RefillingLimiter)
+
+      assert {:error, {:exchange_error, "v", message}} = request(provider: "v")
+      assert message =~ "retry after 1s"
+    end
+
+    test "a Retry-After clamped to zero holds no bucket" do
+      use_stub()
+
+      assert {:error, {:exchange_error, "v", message}} =
+               HttpClient.request(:get, "http://venue.test/x", [], nil,
+                 plug: responding(429, %{}, [{"retry-after", "30"}]),
+                 provider: "v",
+                 max_retry_after_s: 0,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "retry after 0s"
+      refute_received {:penalized, _key, _ms}
     end
 
     test "without the option only the provider's bucket is metered" do
@@ -657,6 +765,15 @@ defmodule DpExchange.Core.HttpClientTest do
                get(plug: plug, max_body_bytes: 5, provider: "v")
     end
 
+    test "a body over the limit from a transport that ignores :into is refused after the fact" do
+      adapter = fn request ->
+        {request, Req.Response.new(status: 200, body: String.duplicate("x", 100))}
+      end
+
+      assert {:error, {:response_too_large, 10}} =
+               get(adapter: adapter, max_body_bytes: 10)
+    end
+
     test "a body split across chunks is counted as a whole and cut at the limit" do
       plug = fn conn ->
         conn = Plug.Conn.send_chunked(conn, 200)
@@ -957,6 +1074,104 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert {:ok, _response} = get(plug: responding(200, %{}))
       refute_received {:recorded, _venue, _weight}
+    end
+  end
+
+  describe "the default arities, against a real loopback socket" do
+    test "request/2 is a GET with no headers and no body" do
+      url = serve_once(json_response(~s({"ok":true})))
+
+      assert {:ok, %{status: 200, body: %{"ok" => true}}} = HttpClient.request(:get, url)
+    end
+
+    test "get/1 and get/2 default the params and the options" do
+      assert {:ok, %{"ok" => true}} = HttpClient.get(serve_once(json_response(~s({"ok":true}))))
+
+      assert {:ok, %{"ok" => true}} =
+               HttpClient.get(serve_once(json_response(~s({"ok":true}))), symbol: "BTC-USD")
+    end
+  end
+
+  describe "get/3 errors" do
+    test "an error is tagged with the venue once, not nested inside its own tag" do
+      use_stub()
+
+      assert {:error, {:exchange_error, "v", message}} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: responding(500, %{}),
+                 provider: "v",
+                 retry_attempts: 0
+               )
+
+      assert is_binary(message)
+      assert message =~ "Server error"
+    end
+
+    test "a refusal request/5 returns untagged is tagged once by get/3" do
+      refused = "refused: credentials are not sent over plain http"
+
+      assert {:error, {:exchange_error, "v", ^refused}} =
+               HttpClient.get("http://venue.test/x", [],
+                 headers: [{"authorization", "Bearer test-secret-not-real"}],
+                 provider: "v",
+                 retry_attempts: 0
+               )
+    end
+
+    test "without a provider the error is the bare message" do
+      assert {:error, "Server error" <> _rest} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: responding(500, %{}),
+                 retry_attempts: 0
+               )
+    end
+
+    test "a 2xx body that is not JSON is reported as such" do
+      plug = fn conn ->
+        conn |> Plug.Conn.put_resp_content_type("text/plain") |> Plug.Conn.send_resp(200, "nope")
+      end
+
+      assert {:error, "Invalid JSON response"} =
+               HttpClient.get("http://venue.test/x", [], plug: plug, retry_attempts: 0)
+    end
+
+    test "a 2xx body that decodes to a bare scalar is not an object or a list" do
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, "42")
+      end
+
+      assert {:error, "Unexpected response format"} =
+               HttpClient.get("http://venue.test/x", [], plug: plug, retry_attempts: 0)
+    end
+
+    test "with :provider, a body that cannot be read is tagged with the venue like any failure" do
+      use_stub()
+
+      not_json = fn conn ->
+        conn |> Plug.Conn.put_resp_content_type("text/plain") |> Plug.Conn.send_resp(200, "nope")
+      end
+
+      scalar = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(200, "42")
+      end
+
+      assert {:error, {:exchange_error, :venue, "Invalid JSON response"}} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: not_json,
+                 provider: :venue,
+                 retry_attempts: 0
+               )
+
+      assert {:error, {:exchange_error, :venue, "Unexpected response format"}} =
+               HttpClient.get("http://venue.test/x", [],
+                 plug: scalar,
+                 provider: :venue,
+                 retry_attempts: 0
+               )
     end
   end
 
@@ -1423,6 +1638,48 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe ":req_adapter, the documented transport seam" do
+    test "is handed to Req as its :adapter instead of raising an unknown option" do
+      use_stub()
+      test_pid = self()
+
+      adapter = fn request ->
+        send(test_pid, :adapter_called)
+        {request, Req.Response.new(status: 200, body: %{"ok" => true})}
+      end
+
+      assert {:ok, %{status: 200}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 req_adapter: adapter,
+                 retry_attempts: 0
+               )
+
+      assert_received :adapter_called
+    end
+
+    test "an explicit :adapter wins over it" do
+      use_stub()
+      test_pid = self()
+
+      answer = fn tag ->
+        fn request ->
+          send(test_pid, tag)
+          {request, Req.Response.new(status: 200, body: %{})}
+        end
+      end
+
+      assert {:ok, _response} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 adapter: answer.(:explicit),
+                 req_adapter: answer.(:seam),
+                 retry_attempts: 0
+               )
+
+      assert_received :explicit
+      refute_received :seam
+    end
+  end
+
   describe "credentials never travel over plain http" do
     # The adapter is NOT the `plug:` seam, so a request that got past the check would reach it.
     defp answering(test_pid) do
@@ -1462,6 +1719,72 @@ defmodule DpExchange.Core.HttpClientTest do
                )
 
       refute_received :sent
+    end
+
+    test "the shorter arities refuse the same way: request/3 and request/4" do
+      refused = {:error, "refused: credentials are not sent over plain http"}
+      creds = [{"authorization", "Bearer test-secret-not-real"}]
+
+      assert HttpClient.request(:get, "http://venue.test/x", creds) == refused
+      assert HttpClient.request(:post, "http://venue.test/x", creds, "{}") == refused
+    end
+
+    test "a map of headers is read like a list of pairs, so a credential in one is refused" do
+      use_stub()
+
+      assert {:error, "refused: credentials are not sent over plain http"} =
+               HttpClient.request(
+                 :get,
+                 "http://venue.test/x",
+                 %{"Authorization" => "Bearer test-secret-not-real"},
+                 nil,
+                 adapter: answering(self()),
+                 retry_attempts: 0
+               )
+
+      refute_received :sent
+
+      assert {:ok, _response} =
+               HttpClient.request(
+                 :get,
+                 "http://venue.test/x",
+                 %{"accept" => "application/json"},
+                 nil,
+                 adapter: answering(self()),
+                 retry_attempts: 0
+               )
+
+      assert_received :sent
+    end
+
+    test "a header entry that is not a name/value pair is not judged as a credential" do
+      # Stopped by the limiter before anything is sent, so what is asserted is only which
+      # refusal answered: the limiter's, not the cleartext backstop's.
+      use_stub({:rate_limited, 1_000})
+
+      assert {:error, {:exchange_error, "v", message}} =
+               HttpClient.request(
+                 :get,
+                 "http://venue.test/x",
+                 [:odd, {"accept", "application/json"}],
+                 nil,
+                 provider: "v",
+                 retry_attempts: 0
+               )
+
+      assert message =~ "Throttled by our own rate limiter"
+    end
+
+    test "a value that is not headers in any documented form is left to the transport" do
+      use_stub({:rate_limited, 1_000})
+
+      assert {:error, {:exchange_error, "v", message}} =
+               HttpClient.request(:get, "http://venue.test/x", :not_headers, nil,
+                 provider: "v",
+                 retry_attempts: 0
+               )
+
+      assert message =~ "Throttled by our own rate limiter"
     end
 
     test "https, a loopback http host and an unauthenticated http request still go out" do
@@ -1524,6 +1847,27 @@ defmodule DpExchange.Core.HttpClientTest do
 
       assert_receive {:stop_event, metadata}, 5_000
       refute inspect(metadata) =~ "test-secret-not-real"
+    end
+
+    test "Mint's invalid_request_target keeps the kind and drops the target" do
+      use_stub()
+
+      # The target is the path and query, and a venue that authenticates in the query puts
+      # the credential there.
+      refusal = %Mint.HTTPError{
+        module: Mint.HTTP1,
+        reason: {:invalid_request_target, "/x?token=test-secret-not-real"}
+      }
+
+      assert {:error, {:exchange_error, "v", message}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 provider: "v",
+                 adapter: fn request -> {request, refusal} end,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "invalid_request_target"
+      refute message =~ "test-secret-not-real"
     end
 
     test "a KeyError's term, which can be a plain-map credential, is not printed" do

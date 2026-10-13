@@ -279,6 +279,9 @@ defmodule DpExchange.Core.UnwiredCheck do
 
       case :xref.q(server, ~c"E") do
         {:ok, edges} -> {:ok, index_edges(edges)}
+        # Deliberate defensive clause: the query is the constant `E` over modules that were
+        # all just added, so xref has no input to reject today. Kept so a future xref
+        # failure is returned as an error instead of crashing the caller with a CaseClauseError.
         {:error, _module, _reason} = error -> {:error, error}
       end
     after
@@ -386,6 +389,9 @@ defmodule DpExchange.Core.UnwiredCheck do
 
         {line, described.source}
 
+      # Deliberate defensive clause: `:xref.add_module/2` reads the same abstract code and has
+      # already accepted this beam, so only a beam rewritten between the two reads gets here.
+      # `line` is `nil` in the violation type, and `format/1` renders it.
       _no_abstract_code ->
         {nil, described.source}
     end

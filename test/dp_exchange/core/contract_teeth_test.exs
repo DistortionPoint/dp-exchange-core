@@ -1445,6 +1445,19 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert AdapterContract.market_value_fault(top.(Decimal.new("1"), zero)) ==
                {:non_positive, :ask, zero}
+
+      # A price that is not a Decimal at all cannot be judged positive, so it is faulted.
+      assert AdapterContract.market_value_fault(top.("1.5", Decimal.new("1"))) ==
+               {:non_positive, :bid, "1.5"}
+    end
+
+    test "a book level whose price is not a Decimal is faulted, not passed" do
+      assert AdapterContract.market_value_fault(book([{"2", "1"}], [{"3", "1"}])) == nil
+
+      assert AdapterContract.market_value_fault(%{
+               book([], [])
+               | bids: [{2.5, Decimal.new("1")}]
+             }) == {:non_positive, {:bids, :price}, 2.5}
     end
 
     test "a book level with no size or no price, or a side out of order, is faulted" do

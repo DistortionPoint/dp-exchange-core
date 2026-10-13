@@ -422,6 +422,79 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       opts = start_limiter(fast())
       assert {:error, :unknown_call} = GenServer.call(opts[:limiter], :nonsense)
     end
+
+    test "a stray message is ignored: the limiter keeps its state and keeps answering" do
+      opts = start_limiter(fast())
+      pid = Process.whereis(opts[:limiter])
+
+      assert :ok = Limiter.acquire(:venue, 1, opts)
+      before = :sys.get_state(pid)
+
+      send(pid, :not_a_message_this_server_knows)
+      send(pid, {:also, :unknown})
+
+      assert :sys.get_state(pid) == before
+      assert Process.whereis(opts[:limiter]) == pid
+      assert :ok = Limiter.check(:venue, 1, opts)
+    end
+  end
+
+  describe "a limit nobody configured" do
+    test "no entry for the provider and no :default falls back to 10 per second, burst 10" do
+      opts = start_limiter(%{})
+
+      # Ten fit in an idle bucket's burst; eleven can never fit, and the wait is the
+      # eleventh token's whole emission interval (100 ms at 10 per second).
+      assert :ok = Limiter.check(:venue, 10, opts)
+      assert {:rate_limited, 100} = Limiter.check(:venue, 11, opts)
+    end
+  end
+
+  describe "a limiter that dies while being asked" do
+    # A process registered under the limiter's name that exits on its first call, so the
+    # caller sees a real `GenServer.call` exit rather than a "not running".
+    defp register_dying_limiter do
+      name = :"dying_limiter_#{System.unique_integer([:positive])}"
+      parent = self()
+
+      pid =
+        spawn(fn ->
+          Process.register(self(), name)
+          send(parent, {:registered, name})
+
+          receive do
+            {:"$gen_call", _from, _request} -> exit(:limiter_died)
+          end
+        end)
+
+      assert_receive {:registered, ^name}, 5_000
+      {pid, [limiter: name]}
+    end
+
+    test "acquire and check answer {:limiter_unavailable, reason}, never :ok" do
+      {_pid, opts} = register_dying_limiter()
+
+      assert {:error, {:limiter_unavailable, {:limiter_died, _reason}}} =
+               Limiter.acquire(:v, 1, opts)
+
+      {_pid, opts} = register_dying_limiter()
+
+      assert {:error, {:limiter_unavailable, {:limiter_died, _reason}}} =
+               Limiter.check(:v, 1, opts)
+
+      {_pid, opts} = register_dying_limiter()
+
+      assert {:error, {:limiter_unavailable, {:limiter_died, _reason}}} =
+               Limiter.inspect_provider(:v, opts)
+    end
+
+    test "record and penalize still answer :ok: metering is never why a request fails" do
+      {_pid, opts} = register_dying_limiter()
+      assert :ok = Limiter.record(:v, 1, opts)
+
+      {_pid, opts} = register_dying_limiter()
+      assert :ok = Limiter.penalize(:v, 1_000, opts)
+    end
   end
 
   describe "penalize/3 — a venue's Retry-After holds the bucket" do

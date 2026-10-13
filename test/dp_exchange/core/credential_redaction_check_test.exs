@@ -479,6 +479,47 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
       assert {:error, {:no_modules_scanned, ^lib_root}} =
                CredentialRedactionCheck.run(beam_dir, lib_root)
     end
+
+    test "a beam file that cannot be read is an error, not a module left out of the scan" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "readable.ex",
+            code: "defmodule Readable#{u} do\n  defstruct [:api_key]\nend\n"
+          }
+        ])
+
+      UnwiredFixture.write_unreadable_beam!(beam_dir)
+
+      assert {:error, {:not_a_beam_file, _path}} =
+               CredentialRedactionCheck.run(beam_dir, lib_root)
+    end
+
+    test "a module whose beam records no source is never analysed" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "sourced.ex",
+            code: "defmodule Sourced#{u} do\n  defstruct [:api_key]\nend\n"
+          },
+          %{
+            path: "sourceless.ex",
+            code: "defmodule Sourceless#{u} do\n  defstruct [:api_key]\nend\n"
+          }
+        ])
+
+      sourced = Module.concat([:"Elixir", "Sourced#{u}"])
+      sourceless = Module.concat([:"Elixir", "Sourceless#{u}"])
+      UnwiredFixture.drop_source!(beam_dir, sourceless)
+
+      assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert {sourced, :api_key} in violation_fields(violations)
+      refute Enum.any?(violations, &(&1.module == sourceless))
+    end
   end
 
   describe "run/2 — a module it cannot load" do

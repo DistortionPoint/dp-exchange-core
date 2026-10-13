@@ -305,7 +305,10 @@ defmodule DpExchange.Core.HttpClient do
 
   defp credentials_in?(headers) when is_function(headers, 0), do: true
 
-  defp credentials_in?(headers) when is_list(headers) do
+  # A map is read like a list of pairs. `Req` accepts `%{"authorization" => ...}` as headers
+  # and `resolve_headers/1` passes it through, so a map carrying a credential used to fall
+  # through to the catch-all below and go out over plain http unrefused.
+  defp credentials_in?(headers) when is_list(headers) or is_map(headers) do
     Enum.any?(headers, fn
       {name, _value} ->
         name = name |> to_string() |> String.downcase()
@@ -316,6 +319,9 @@ defmodule DpExchange.Core.HttpClient do
     end)
   end
 
+  # Deliberate: a value that is not headers in any form `request/5` documents. There is
+  # nothing to inspect, so it is not judged here; the transport rejects it and the failure
+  # comes back as an `{:error, _}` like any other transport failure.
   defp credentials_in?(_headers), do: false
 
   defp cleartext_remote?(url) do
@@ -352,7 +358,13 @@ defmodule DpExchange.Core.HttpClient do
     # not correct on the wire. Found by a venue package's tier-2 tests.
     case request(:get, full_url, Config.opt(opts, :headers, []), nil, opts) do
       {:ok, %{status: status, body: body}} when status in 200..299 ->
-        parse_response_body(body, Config.opt(opts, :decode_body, true))
+        # A body that is not JSON, or not an object or list, is tagged with the venue like
+        # every other failure here. It came back bare, so the one caller who passed
+        # `:provider` to tell its failures apart got two that did not say whose they were.
+        case parse_response_body(body, Config.opt(opts, :decode_body, true)) do
+          {:ok, _decoded} = ok -> ok
+          {:error, reason} -> wrap_exchange_error(opts, reason)
+        end
 
       {:ok, %{status: status, body: body}} ->
         # Capped like every other message built from a body (`format_body/1`). Reached only
@@ -363,6 +375,13 @@ defmodule DpExchange.Core.HttpClient do
           opts,
           "HTTP #{status}: #{inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)}"
         )
+
+      # `request/5` has already tagged its own failures with the venue when `:provider` was
+      # given, so tagging again nested the tag: `{:exchange_error, "v", {:exchange_error,
+      # "v", message}}`, which no `request_error()` clause describes. A refusal `request/5`
+      # returns bare (the cleartext backstop, a signer's own error) is tagged here, once.
+      {:error, {:exchange_error, _provider, _reason} = tagged} ->
+        {:error, tagged}
 
       {:error, reason} ->
         wrap_exchange_error(opts, reason)
@@ -765,8 +784,20 @@ defmodule DpExchange.Core.HttpClient do
   # sees it: measured, `1234.567890123456789` arrives as `1234.567890123457`. With
   # `decode_body: false` the venue receives the bytes and decodes them itself, e.g. with
   # `Jason.decode(body, floats: :decimals)`. Absent, Req's default is unchanged.
-  defp transport_opts(opts),
-    do: Keyword.take(opts, [:plug, :adapter, :req_adapter, :decode_body])
+  #
+  # **`:req_adapter` is this package's name for Req's `:adapter`, and is translated here.** It
+  # was passed through under its own name, and Req (0.7.5) raises `unknown option
+  # :req_adapter`: the seam this comment documents, and four venue packages forward, raised an
+  # `ArgumentError` in the caller's process for anyone who used it. An explicit `:adapter`
+  # wins over it.
+  defp transport_opts(opts) do
+    taken = Keyword.take(opts, [:plug, :adapter, :decode_body])
+
+    case Keyword.fetch(opts, :req_adapter) do
+      {:ok, adapter} -> Keyword.put_new(taken, :adapter, adapter)
+      :error -> taken
+    end
+  end
 
   # The one place a request actually leaves this process and comes back, which is why the
   # `[:dp_exchange, :request, :*]` events are emitted HERE and not at the public entry

@@ -108,6 +108,20 @@ defmodule DpExchange.Core.TelemetryTest do
       assert metadata.provider == provider
     end
 
+    test "stop and exception need no extra metadata: the request's own is all they carry" do
+      provider = unique_provider()
+
+      :ok =
+        attach([[:dp_exchange, :request, :stop], [:dp_exchange, :request, :exception]], provider)
+
+      metadata = %{provider: provider, endpoint: "/x", method: :get}
+      Telemetry.request_stop(System.monotonic_time(), metadata)
+      Telemetry.request_exception(System.monotonic_time(), metadata)
+
+      assert_receive {:telemetry, [:dp_exchange, :request, :stop], %{duration: _}, ^metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :exception], %{duration: _}, ^metadata}
+    end
+
     test "exception is its own event, not a stop carrying an error" do
       # An error RESULT is the venue answering badly; an exception is this package failing
       # to ask. Folding them together makes a client-side bug indistinguishable from a
@@ -159,6 +173,14 @@ defmodule DpExchange.Core.TelemetryTest do
 
     test "a relative or schemeless value is only stripped of its query" do
       assert Telemetry.endpoint("/v1/x?token=SECRET") == "/v1/x"
+    end
+
+    test "an @ in a schemeless path is a path, so only the query goes" do
+      assert Telemetry.endpoint("/v1/users/a@b.com?token=SECRET") == "/v1/users/a@b.com"
+    end
+
+    test "a scheme-relative URL loses its userinfo too" do
+      assert Telemetry.endpoint("//user:test-secret-not-real@host/x?q=1") == "//host/x"
     end
 
     test "a URL with no query is unchanged" do

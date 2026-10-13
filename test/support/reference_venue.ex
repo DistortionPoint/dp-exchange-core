@@ -953,19 +953,17 @@ defmodule DpExchange.Core.ReferenceVenue do
     # first tick. A caller cannot tell the difference, and that is the point.
     #
     # The symbols that actually got a send are recorded, and they are what `coverage/1`
-    # reports. A symbol this reference refused, or does not list, is not added — so coverage
-    # stays a record of what was delivered rather than of what was asked for.
+    # reports. A symbol this reference does not list is not added — so coverage stays a
+    # record of what was delivered rather than of what was asked for. A listed symbol is
+    # always priced (`check_symbols/1` has already refused a blank one, and `priced/1`
+    # answers every member of `@symbols`), so the match below cannot fail today; if
+    # `get_price/2` ever refuses a listed symbol this raises instead of quietly dropping it.
     delivered =
       for symbol <- symbols, symbol in @symbols, reduce: [] do
         acc ->
-          case get_price(symbol, []) do
-            {:ok, quote_struct} ->
-              send(target, {:dp_exchange, runtime_id(), quote_struct})
-              [symbol | acc]
-
-            _refused_or_error ->
-              acc
-          end
+          {:ok, quote_struct} = get_price(symbol, [])
+          send(target, {:dp_exchange, runtime_id(), quote_struct})
+          [symbol | acc]
       end
 
     Process.put(@covered_key, MapSet.union(covered(), MapSet.new(delivered)))

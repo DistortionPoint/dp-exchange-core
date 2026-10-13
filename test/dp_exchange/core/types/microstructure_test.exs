@@ -193,6 +193,17 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
       end
     end
 
+    test "a price key that is not text at all is unreadable too, and does not raise" do
+      # The type says text, and nothing at construction checks it. A venue that keyed a level
+      # by a number must not turn a tie into a crash; it loses to any readable price.
+      assert VolumeProfile.point_of_control(
+               profile(%{
+                 buy_at_price: %{5 => Decimal.new("100"), "99" => Decimal.new("100")},
+                 sell_at_price: %{}
+               })
+             ) == "99"
+    end
+
     test "one-sided volume still has a point of control" do
       assert VolumeProfile.point_of_control(
                profile(%{buy_at_price: %{"24.30" => Decimal.new("5")}, sell_at_price: %{}})

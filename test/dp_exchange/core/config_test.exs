@@ -250,6 +250,11 @@ defmodule DpExchange.Core.ConfigTest do
                :fallback
     end
 
+    test "resolve_snapshot/3 defaults to nil when neither snapshot nor app env has the key" do
+      assert Config.resolve_snapshot(%{}, :dp_exchange_core, :never_set_anywhere_at_all) == nil
+      assert Config.resolve_snapshot(%{seen: 1}, :dp_exchange_core, :seen) == 1
+    end
+
     test "an empty snapshot falls back to the APP THE CALLER NAMED, not a hardcoded one (C7)" do
       # Before this fix, `resolve_snapshot/3` hardcoded `:dp_exchange_core` regardless of
       # what app a caller intended — despite its own moduledoc claiming it falls back to

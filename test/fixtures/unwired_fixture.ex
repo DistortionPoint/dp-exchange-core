@@ -79,4 +79,29 @@ defmodule DpExchange.Core.UnwiredFixture do
 
     {beam_dir, lib_root}
   end
+
+  @doc """
+  Writes a file named like a module's `.beam` into `beam_dir` that is not a BEAM file at all
+  (a truncated or corrupt build artefact), so a scan has something it cannot read.
+  """
+  @spec write_unreadable_beam!(Path.t()) :: Path.t()
+  def write_unreadable_beam!(beam_dir) do
+    path = Path.join(beam_dir, "Elixir.NotReallyABeam.beam")
+    File.write!(path, "this is not a beam file")
+    path
+  end
+
+  @doc """
+  Rewrites `module`'s `.beam` in `beam_dir` so its `:compile_info` records no `:source`,
+  as a module generated without a source file would be. Every other chunk is untouched.
+  """
+  @spec drop_source!(Path.t(), module()) :: :ok
+  def drop_source!(beam_dir, module) do
+    path = Path.join(beam_dir, Atom.to_string(module) <> ".beam")
+    {:ok, _module, chunks} = :beam_lib.all_chunks(String.to_charlist(path))
+
+    chunks = List.keyreplace(chunks, ~c"CInf", 0, {~c"CInf", :erlang.term_to_binary([])})
+    {:ok, binary} = :beam_lib.build_module(chunks)
+    File.write!(path, binary)
+  end
 end
