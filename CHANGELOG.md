@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.93] - 2026-10-14
+
 - **Facade consistency (tick AD): one reason for each of ten situations, documented.**
   `DpExchange.Core.Venue` and `DpExchange.Core.Notice` (and `usage-rules.md`) now name:
   `{:refused, :not_listed}` (a well-formed symbol the venue does not list), `{:refused,
