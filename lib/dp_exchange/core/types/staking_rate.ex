@@ -54,7 +54,11 @@ defmodule DpExchange.Core.Types.StakingRate do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:rate_pct, :apy_pct, :deposit_limit_usd])
+  end
 
   @doc """
   Converts a rate in basis points to a percentage, or `nil` for a value it cannot read.
@@ -87,7 +91,14 @@ defmodule DpExchange.Core.Types.StakingRate do
   """
   @spec bps_to_pct(Decimal.t() | number() | String.t() | nil) :: Decimal.t() | nil
   def bps_to_pct(%Decimal{} = bps) do
-    if Decimal.nan?(bps) or Decimal.inf?(bps), do: nil, else: Decimal.div(bps, 100)
+    # An exponent outside `Validate.max_decimal_exponent/0` (`"1e5000"` parses in full) is
+    # unreadable too: the rate it states is not one, and a `Decimal` that wide is refused by
+    # every `Types.*` constructor, so returning one here only moved the failure downstream.
+    cond do
+      Decimal.nan?(bps) or Decimal.inf?(bps) -> nil
+      abs(bps.exp) > Validate.max_decimal_exponent() -> nil
+      true -> Decimal.div(bps, 100)
+    end
   end
 
   def bps_to_pct(bps) when is_integer(bps), do: bps |> Decimal.new() |> Decimal.div(100)

@@ -82,6 +82,13 @@ defmodule DpExchange.Core.Types.AuctionImbalance do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([
+      :paired_quantity,
+      :imbalance_quantity,
+      :reference_price,
+      :near_price,
+      :far_price
+    ])
     |> Validate.one_of!(:auction, [:opening, :closing])
   end
 

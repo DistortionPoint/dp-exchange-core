@@ -130,7 +130,11 @@ defmodule DpExchange.Core.Types.Quote do
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
-    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.decimals!([:price, :volume])
+
     validate_volume_window!(built)
     built
   end

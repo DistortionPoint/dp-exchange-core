@@ -93,6 +93,7 @@ defmodule DpExchange.Core.Types.OptionContract do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:strike, :multiplier])
     |> Validate.one_of!(:right, [:call, :put])
   end
 

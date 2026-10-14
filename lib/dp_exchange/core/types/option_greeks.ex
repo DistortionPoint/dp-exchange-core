@@ -66,5 +66,19 @@ defmodule DpExchange.Core.Types.OptionGreeks do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([
+      :delta,
+      :gamma,
+      :theta,
+      :vega,
+      :rho,
+      :implied_volatility,
+      :model_price,
+      :underlying_price,
+      :open_interest
+    ])
+  end
 end

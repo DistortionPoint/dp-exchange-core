@@ -164,6 +164,8 @@ defmodule DpExchange.Core.Timeframe do
 
   def aligned?(_other, _timeframe), do: false
 
+  @epoch ~U[1970-01-01 00:00:00Z]
+
   @doc "The start of the bucket `datetime` falls in, or the input when unknown."
   @spec boundary(DateTime.t(), String.t()) :: DateTime.t()
   def boundary(%DateTime{} = datetime, timeframe) do
@@ -171,11 +173,19 @@ defmodule DpExchange.Core.Timeframe do
       {:ok, width} ->
         # `Integer.floor_div/2`: `div/2` truncates toward zero, so before 1970 it rounded a
         # time UP into the next bucket instead of down into its own.
-        datetime
-        |> DateTime.to_unix()
-        |> Integer.floor_div(width)
-        |> Kernel.*(width)
-        |> DateTime.from_unix!()
+        #
+        # **Not `DateTime.from_unix!/1`, which raises for any year before 0000.** A `DateTime`
+        # is valid from year -9999, `DateTime.from_iso8601("-0001-06-15T10:30:00Z")` builds one,
+        # and `boundary/2` raised `ArgumentError` ("invalid Unix time") on it: a venue
+        # timestamp with a bad year took the caller down in a function that promises an
+        # answer. `DateTime.add/3` from the epoch covers the whole calendar range.
+        floored =
+          datetime
+          |> DateTime.to_unix()
+          |> Integer.floor_div(width)
+          |> Kernel.*(width)
+
+        DateTime.add(@epoch, floored, :second)
 
       :error ->
         datetime

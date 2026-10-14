@@ -576,6 +576,26 @@ defmodule DpExchange.Core.HttpClientTest do
       assert nil == HttpClient.parse_rate_limit_headers(headers)
     end
 
+    test "a negative limit or remaining is nil, not a budget" do
+      assert nil ==
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "-1"},
+                 {"X-RateLimit-Remaining", "5"}
+               ])
+
+      assert nil ==
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "100"},
+                 {"X-RateLimit-Remaining", "-5"}
+               ])
+
+      assert %{limit: 0, remaining: 0} =
+               HttpClient.parse_rate_limit_headers([
+                 {"X-RateLimit-Limit", "0"},
+                 {"X-RateLimit-Remaining", "0"}
+               ])
+    end
+
     test "a value that merely STARTS with digits is not read as those digits" do
       # The case `"lots"` above cannot reach: `Integer.parse/1` answers `{integer, rest}` for
       # anything beginning with a number, so ignoring `rest` read a budget out of a header
@@ -1168,6 +1188,40 @@ defmodule DpExchange.Core.HttpClientTest do
       end
 
       assert {:error, "Unexpected response format"} =
+               HttpClient.get("http://venue.test/x", [], plug: plug, retry_attempts: 0)
+    end
+
+    test "a bare scalar served as text/plain is refused like one served as JSON" do
+      # Req leaves a `text/plain` body as bytes, so `parse_response_body/2` decoded it with
+      # Jason and returned whatever came out: `{:ok, nil}` for `null`, `{:ok, 42}` for `42`.
+      # The same bytes as `application/json` were already "Unexpected response format".
+      for scalar <- ["null", "42", "\"x\"", "true"] do
+        plug = fn conn ->
+          conn
+          |> Plug.Conn.put_resp_content_type("text/plain")
+          |> Plug.Conn.send_resp(200, scalar)
+        end
+
+        assert {:error, "Unexpected response format"} =
+                 HttpClient.get("http://venue.test/x", [], plug: plug, retry_attempts: 0)
+
+        assert {:error, "Unexpected response format"} =
+                 HttpClient.get("http://venue.test/x", [],
+                   plug: plug,
+                   retry_attempts: 0,
+                   decode_body: false
+                 )
+      end
+    end
+
+    test "a JSON object served as text/plain is still decoded" do
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.send_resp(200, ~s({"a": 1}))
+      end
+
+      assert {:ok, %{"a" => 1}} =
                HttpClient.get("http://venue.test/x", [], plug: plug, retry_attempts: 0)
     end
 

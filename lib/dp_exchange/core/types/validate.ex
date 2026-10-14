@@ -38,9 +38,12 @@ defmodule DpExchange.Core.Types.Validate do
   **Closed vocabularies are checked per type, not here.** `new!/3` knows nothing about which
   field is a `:buy | :sell`. A type whose typespec states one pipes its result through
   `one_of!/3` (and `positive_integer!/2` for a count), so `Fill`, `Trade`, `Position` and
-  `OrderLeg` refuse a side outside what they state. The `Decimal` fields are not type-checked
-  for being a `Decimal` (an integer is accepted, and a venue builds these with integers in its
-  own tests), but a **float** is refused at the top level of any field and inside a list or
+  `OrderLeg` refuse a side outside what they state. The `Decimal` fields are type-checked
+  through `decimals!/2` (and `decimal_map_values!/2` for maps of Decimals): a type pipes its
+  result through them for every field its typespec states as `Decimal.t()`, and a string, a
+  map or any other non-number is an `ArgumentError` naming module, field and value (an
+  integer is accepted, and a venue builds these with integers in its own tests). A **float**
+  is refused at the top level of any field and inside a list or
   tuple, because no field of any type is a float and a float has already lost digits. Free-form
   maps (`details`, `line_items`, `metrics`) may still hold one: they are the venue's own.
 
@@ -53,6 +56,15 @@ defmodule DpExchange.Core.Types.Validate do
   is the one that turns a decode bug into an error at the boundary instead of a crash three
   calls downstream.
   """
+
+  @max_decimal_exponent 1_000
+
+  @doc """
+  The widest exponent a `Decimal` may carry in any field (`+/-1000`). Exposed so a venue
+  decoder's own `decimal/1` can apply the same bound before building a value.
+  """
+  @spec max_decimal_exponent() :: pos_integer()
+  def max_decimal_exponent, do: @max_decimal_exponent
 
   @doc """
   Builds `module`'s struct from `attrs`, raising `ArgumentError` naming the field if any of
@@ -79,6 +91,77 @@ defmodule DpExchange.Core.Types.Validate do
                 "a nil here is what a decode bug on a renamed venue field produces, and this " <>
                 "constructor fails closed rather than build a struct the typespec says cannot occur"
     end
+  end
+
+  @doc """
+  Returns `built` if every one of `fields` holds a `Decimal`, an integer or `nil`, and
+  raises `ArgumentError` naming module, field and value otherwise.
+
+  For the fields a type's typespec states as `Decimal.t()` (or `Decimal.t() | nil`). A
+  `"1.5"`, `"abc"` or a map in one builds fine under `new!/3` and raises inside
+  `Decimal.compare/2` in the CONSUMER's process, so a decoder that forgot to parse a number
+  is refused here, at the boundary. An integer is accepted (venues build with integers in
+  their own tests). `nil` passes this check because presence is `new!/3`'s job: a field
+  whose typespec forbids `nil` is already in `required_non_nil`, and a field whose typespec
+  allows it must not be refused here. Floats, NaN, infinities and absurd exponents are
+  refused by `new!/3` itself.
+  """
+  @spec decimals!(struct(), [atom()]) :: struct()
+  def decimals!(%module{} = built, fields) when is_list(fields) do
+    Enum.each(fields, fn field ->
+      case Map.fetch!(built, field) do
+        nil -> :ok
+        value -> decimal!(module, field, value)
+      end
+    end)
+
+    built
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a map whose values are all `Decimal`s or
+  integers, and raises `ArgumentError` naming module, field and value otherwise.
+
+  For `%{String.t() => Decimal.t()}` fields (`VolumeProfile.buy_at_price`,
+  `StakingBalance.by_provider`). A field holding something other than a map is refused.
+  """
+  @spec decimal_map_values!(struct(), [atom()]) :: struct()
+  def decimal_map_values!(%module{} = built, fields) when is_list(fields) do
+    Enum.each(fields, fn field ->
+      case Map.fetch!(built, field) do
+        nil -> :ok
+        map when is_map(map) and not is_struct(map) -> decimal_values!(module, field, map)
+        other -> raise_not_decimal!(module, field, other, "a map of Decimals")
+      end
+    end)
+
+    built
+  end
+
+  defp decimal_values!(module, field, map) do
+    Enum.each(map, fn {_key, value} -> decimal!(module, field, value) end)
+  end
+
+  @doc """
+  Raises `ArgumentError` naming `module`, `field` and `value` unless `value` is a `Decimal`
+  or an integer; returns `:ok` otherwise.
+
+  The element-level check for a type that walks a nested structure itself (order book
+  levels, option strikes). `nil` is NOT accepted here.
+  """
+  @spec decimal!(module(), atom(), term()) :: :ok
+  def decimal!(_module, _field, %Decimal{}), do: :ok
+  def decimal!(_module, _field, value) when is_integer(value), do: :ok
+
+  def decimal!(module, field, value),
+    do: raise_not_decimal!(module, field, value, "a Decimal (or an integer)")
+
+  defp raise_not_decimal!(module, field, value, wanted) do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} holds " <>
+            "#{inspect(value, limit: 5, printable_limit: 40)} — must be #{wanted}; a decoder " <>
+            "that passes a string or a map through builds a struct that raises inside " <>
+            "Decimal.compare/2 in the consumer's process"
   end
 
   @doc """
@@ -172,6 +255,20 @@ defmodule DpExchange.Core.Types.Validate do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(coef)} — not a " <>
             "number any field of this type can carry"
+  end
+
+  # **An absurd exponent is refused too.** `Decimal.parse("1e5000")` is a well-formed
+  # `Decimal` with `exp: 5_000`, and `Decimal.add/2`, `sub/2` and `compare/2` align the
+  # two operands' exponents by multiplying a coefficient by `10^(difference)` with no bound:
+  # a single such value in a `price` makes `TopOfBook.mid/1`, `crossed?/1` or
+  # `VolumeProfile.point_of_control/1` build a number of hundreds of megabytes, stalling or
+  # killing the CONSUMER's process, with no error naming the venue. No real quantity needs
+  # more than a few dozen digits either side of the point, so the bound is generous.
+  defp refuse_value!(module, field, %Decimal{exp: exp}) when abs(exp) > @max_decimal_exponent do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} is a Decimal with exponent " <>
+            "#{exp} — outside +/-#{@max_decimal_exponent}, which no real quantity needs and " <>
+            "which makes later arithmetic allocate a number of that many digits"
   end
 
   defp refuse_value!(module, field, %NaiveDateTime{}) do

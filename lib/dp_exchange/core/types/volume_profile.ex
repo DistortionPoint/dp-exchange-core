@@ -68,7 +68,12 @@ defmodule DpExchange.Core.Types.VolumeProfile do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:total_volume, :delta, :buy_volume, :sell_volume])
+    |> Validate.decimal_map_values!([:buy_at_price, :sell_at_price])
+  end
 
   @doc """
   The price with the most volume across both sides — the point of control.

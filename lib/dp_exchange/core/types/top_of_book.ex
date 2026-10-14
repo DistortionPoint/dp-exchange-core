@@ -92,7 +92,11 @@ defmodule DpExchange.Core.Types.TopOfBook do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:bid, :ask, :bid_size, :ask_size])
+  end
 
   @doc """
   The mid price, or `nil` when either side is missing.

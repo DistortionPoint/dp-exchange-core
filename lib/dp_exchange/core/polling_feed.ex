@@ -613,7 +613,7 @@ defmodule DpExchange.Core.PollingFeed do
     if MapSet.disjoint?(asked, state.symbols) do
       state
     else
-      case drop_removed_in_flight(result, asked, state.symbols) do
+      case result |> proper_lists_only() |> drop_removed_in_flight(asked, state.symbols) do
         :removed_in_flight -> state
         kept -> apply_result(state, :all, kept)
       end
@@ -621,6 +621,21 @@ defmodule DpExchange.Core.PollingFeed do
   end
 
   defp apply_flight(state, %{job: job}, result), do: apply_result(state, job, result)
+
+  # **An improper list in a bulk answer is a failure, not a crash.** `{:ok, [event | :tail]}`
+  # matched `{:ok, [_first | _rest]}` and then raised in `Enum.reject/2` (and in `Enum.all?/2`
+  # for `{:refused, _}`) inside this process: the restart lost every runtime `update_symbols/2`
+  # scope, the incident `safely/1` exists to prevent, reached through the shape of a list a
+  # fetch built from a venue payload. Reported like any other answer outside `t:fetch_all/0`.
+  defp proper_lists_only({tag, list} = result) when tag in [:ok, :refused] and is_list(list) do
+    if proper_list?(list), do: result, else: {:bad_fetch_result_improper_list, tag}
+  end
+
+  defp proper_lists_only(result), do: result
+
+  defp proper_list?([]), do: true
+  defp proper_list?([_head | tail]), do: proper_list?(tail)
+  defp proper_list?(_improper_tail), do: false
 
   # A result left empty BY this filter is not the venue answering nothing (`:empty_response`):
   # it answered, about symbols no longer wanted. It is ignored rather than counted either way.
@@ -714,6 +729,9 @@ defmodule DpExchange.Core.PollingFeed do
 
   defp apply_result(state, :all, result) do
     case result do
+      {:bad_fetch_result_improper_list, tag} ->
+        record_failure(state, "bulk fetch", {:bad_fetch_result, {tag, :improper_list}})
+
       {:ok, []} ->
         # A bulk endpoint that answers successfully with zero events delivers exactly
         # nothing, same as an outright failure would — a bad credential filtered down to
@@ -1133,7 +1151,15 @@ defmodule DpExchange.Core.PollingFeed do
 
   # The struct names its own kind, in the same spirit as every `coverage_by_kind/1` in the
   # family: never a channel name, never a subscription intent, only what actually arrived.
-  defp delivery_type(%module{}), do: module |> Module.split() |> List.last()
+  # `Module.split/1` raises for a module atom not prefixed `Elixir.` (an Erlang-style struct
+  # module such as `:foo`), and this runs inside the feed process on every delivery.
+  defp delivery_type(%module{}) when is_atom(module) do
+    case Atom.to_string(module) do
+      "Elixir." <> rest -> rest |> String.split(".") |> List.last()
+      other -> other
+    end
+  end
+
   defp delivery_type(_other), do: "unknown"
 
   defp delivering_nothing?(state, failures) do

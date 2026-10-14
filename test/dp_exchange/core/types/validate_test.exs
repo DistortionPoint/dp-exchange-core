@@ -108,6 +108,46 @@ defmodule DpExchange.Core.Types.ValidateTest do
       assert %Candle{volume: nil} = Candle.new(@valid_candle)
     end
 
+    test "a Decimal with an absurd exponent is refused, in any field" do
+      # `Decimal.parse("1e5000")` is a well-formed value. `Decimal.add/2` and `compare/2`
+      # align exponents with `10^difference`, so one such price made a consumer's
+      # `TopOfBook.mid/1` or `crossed?/1` allocate a number of that many digits.
+      for exp <- [5_000, -5_000, 999_999_999] do
+        huge = %Decimal{sign: 1, coef: 1, exp: exp}
+
+        for field <- [:open, :close, :volume] do
+          error =
+            assert_raise ArgumentError, fn ->
+              Candle.new(Keyword.put(@valid_candle, field, huge))
+            end
+
+          assert error.message =~ "exponent"
+          assert error.message =~ Atom.to_string(field)
+        end
+      end
+
+      # Decimal 3.2 refuses to parse "1e999999999" itself, but "1e5000" parses.
+      {parsed, ""} = Decimal.parse("1e5000")
+      broken = Keyword.put(@valid_candle, :high, parsed)
+      assert_raise ArgumentError, ~r/exponent/, fn -> Candle.new(broken) end
+    end
+
+    test "the exponent bound is inclusive at +/-1000" do
+      limit = Validate.max_decimal_exponent()
+      assert limit == 1_000
+
+      at_top = %Decimal{sign: 1, coef: 1, exp: limit}
+      at_bottom = %Decimal{sign: 1, coef: 1, exp: -limit}
+      past_top = %Decimal{sign: 1, coef: 1, exp: limit + 1}
+
+      assert %Candle{} = Candle.new(Keyword.put(@valid_candle, :open, at_top))
+      assert %Candle{} = Candle.new(Keyword.put(@valid_candle, :low, at_bottom))
+
+      assert_raise ArgumentError, ~r/exponent/, fn ->
+        Candle.new(Keyword.put(@valid_candle, :open, past_top))
+      end
+    end
+
     test "does not coerce, default, or guess — it only accepts or refuses" do
       built = Candle.new(@valid_candle)
       assert Decimal.equal?(built.open, Decimal.new("100"))
@@ -953,6 +993,308 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "finite levels still build" do
       bids = [{Decimal.new("100"), Decimal.new("1")}]
       assert %OrderBook{bids: ^bids} = OrderBook.new(Keyword.put(@book, :bids, bids))
+    end
+  end
+
+  describe "a Decimal field must hold a Decimal, an integer, or nil where the type allows it" do
+    @candle [
+      symbol: "BTC-USD",
+      timeframe: "1h",
+      opened_at: @ts,
+      open: Decimal.new("100"),
+      high: Decimal.new("110"),
+      low: 95,
+      close: Decimal.new("105"),
+      provider: :reference
+    ]
+
+    test "Validate.decimals!/2 names module, field and a truncated value" do
+      built = Candle.new(@candle)
+      assert ^built = Validate.decimals!(built, [:open, :low, :volume])
+
+      error =
+        assert_raise ArgumentError, fn ->
+          Validate.decimals!(%{built | open: String.duplicate("x", 500)}, [:open])
+        end
+
+      assert error.message =~ "Candle"
+      assert error.message =~ ":open"
+      assert error.message =~ "..."
+      assert String.length(error.message) < 500
+    end
+
+    test "Validate.decimal!/3 and decimal_map_values!/2 accept Decimals and integers only" do
+      assert :ok = Validate.decimal!(Candle, :open, Decimal.new("1"))
+      assert :ok = Validate.decimal!(Candle, :open, 1)
+
+      for bad <- ["1.5", "abc", %{}, :one, nil, [1]] do
+        assert_raise ArgumentError, ~r/Candle.*:open/, fn ->
+          Validate.decimal!(Candle, :open, bad)
+        end
+      end
+
+      profile = VolumeProfile.new(symbol: "A", timeframe: "1d", opened_at: @ts, provider: :x)
+
+      assert %VolumeProfile{buy_at_price: %{"1" => 2}} =
+               Validate.decimal_map_values!(%{profile | buy_at_price: %{"1" => 2}}, [
+                 :buy_at_price
+               ])
+
+      assert_raise ArgumentError, ~r/buy_at_price/, fn ->
+        Validate.decimal_map_values!(%{profile | buy_at_price: [1]}, [:buy_at_price])
+      end
+    end
+
+    test "Candle refuses a string, map or atom in any Decimal field; integer and nil pass" do
+      for field <- [:open, :high, :low, :close, :volume], bad <- ["1.5", "abc", %{a: 1}, :x] do
+        error =
+          assert_raise ArgumentError, fn -> Candle.new(Keyword.put(@candle, field, bad)) end
+
+        assert error.message =~ Atom.to_string(field)
+      end
+
+      assert %Candle{volume: 7} = Candle.new(Keyword.put(@candle, :volume, 7))
+      assert %Candle{volume: nil} = Candle.new(Keyword.put(@candle, :volume, nil))
+    end
+
+    test "TopOfBook refuses a string bid and accepts Decimal, integer and nil" do
+      base = [symbol: "BTC-USD", observed_at: @ts, provider: :reference]
+
+      for field <- [:bid, :ask, :bid_size, :ask_size] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          TopOfBook.new(Keyword.put(base, field, "100.5"))
+        end
+      end
+
+      assert %TopOfBook{bid: 100, ask: %Decimal{}} =
+               TopOfBook.new([{:bid, 100}, {:ask, Decimal.new("101")} | base])
+
+      assert %TopOfBook{bid: nil} = TopOfBook.new(Keyword.put(base, :bid, nil))
+    end
+
+    test "OrderBook levels refuse a string price or quantity (already per-element)" do
+      for bad <- [[{"1", Decimal.new("1")}], [{Decimal.new("1"), "1"}]] do
+        assert_raise ArgumentError, ~r/bids.*pairs/, fn ->
+          OrderBook.new(
+            symbol: "A",
+            bids: bad,
+            asks: [],
+            observed_at: @ts,
+            provider: :reference
+          )
+        end
+      end
+    end
+
+    test "OrderBookDelta levels refuse a string price or quantity, accept Decimal and integer" do
+      attrs = [symbol: "A", timestamp: @ts, provider: :reference]
+
+      for bad <- [{:bid, "100", Decimal.new("1")}, {:ask, Decimal.new("100"), "1"}] do
+        assert_raise ArgumentError, ~r/levels/, fn ->
+          OrderBookDelta.new([{:levels, [bad]} | attrs])
+        end
+      end
+
+      ok = [{:bid, Decimal.new("100"), 0}, {:ask, 101, Decimal.new("2")}]
+      assert %OrderBookDelta{levels: ^ok} = OrderBookDelta.new([{:levels, ok} | attrs])
+    end
+
+    test "Fill and Order refuse a string in their Decimal fields" do
+      fill = [
+        order_id: "o-1",
+        symbol: "BTC-USD",
+        side: :buy,
+        quantity: Decimal.new("1"),
+        price: Decimal.new("100"),
+        timestamp: @ts,
+        provider: :reference
+      ]
+
+      for field <- [:quantity, :price, :fee] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          Fill.new(Keyword.put(fill, field, "1.5"))
+        end
+      end
+
+      assert %Fill{quantity: 3, fee: nil} = Fill.new(Keyword.put(fill, :quantity, 3))
+
+      order = [
+        id: "o-1",
+        symbol: "BTC-USD",
+        side: :buy,
+        order_type: :limit,
+        quantity: Decimal.new("1"),
+        status: :open,
+        provider: :reference
+      ]
+
+      for field <- [:quantity, :price, :stop_price, :filled_quantity, :average_price, :fee] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          Order.new(Keyword.put(order, field, "1.5"))
+        end
+      end
+
+      assert %Order{quantity: nil} = Order.new(Keyword.put(order, :quantity, nil))
+    end
+
+    test "Trade, Quote, Position and Balance refuse a string" do
+      assert_raise ArgumentError, ~r/price/, fn ->
+        Trade.new(
+          id: "t",
+          symbol: "A",
+          side: :buy,
+          price: "1",
+          quantity: 1,
+          timestamp: @ts,
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/volume/, fn ->
+        Quote.new(symbol: "A", price: 1, volume: "9", observed_at: @ts, provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/leverage/, fn ->
+        Position.new(symbol: "A", side: :long, quantity: 1, leverage: "3", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/hold/, fn ->
+        Balance.new(currency: "USD", balance: 1, hold: "2", timestamp: @ts, provider: :x)
+      end
+    end
+
+    test "the rest of the Decimal-bearing types refuse a string" do
+      assert_raise ArgumentError, ~r/rate/, fn ->
+        FxRate.new(pair: "GBPUSD", rate: "1.27", as_of: @ts, provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/strike/, fn ->
+        OptionContract.new(
+          underlying: "X",
+          expiry: @date,
+          strike: "500",
+          right: :call,
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/delta/, fn ->
+        OptionGreeks.new(provider: :x, delta: "0.5")
+      end
+
+      assert_raise ArgumentError, ~r/amount/, fn ->
+        Withdrawal.new(id: "w", status: :requested, asset: "BTC", amount: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/amount/, fn ->
+        StakingReward.new(asset: "ETH", amount: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/amount_remaining/, fn ->
+        StakingTransaction.new(
+          id: "t",
+          type: :stake,
+          asset: "ETH",
+          amount: 1,
+          amount_remaining: "1",
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/apy_pct/, fn ->
+        StakingRate.new(asset: "ETH", apy_pct: "4.2", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/staked/, fn ->
+        StakingBalance.new(asset: "ETH", staked: "10", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/by_provider/, fn ->
+        StakingBalance.new(asset: "ETH", staked: 1, by_provider: %{"a" => "1"}, provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/mark_price/, fn ->
+        ContractStats.new(symbol: "A", mark_price: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/amount/, fn ->
+        Funding.new(symbol: "A", amount: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/fee/, fn ->
+        Conversion.new(
+          id: "q",
+          status: :quoted,
+          from_asset: "USD",
+          to_asset: "BTC",
+          fee: "1",
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/amount/, fn ->
+        CorporateEvent.new(symbol: "A", kind: :dividend, amount: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/near_price/, fn ->
+        AuctionImbalance.new(
+          symbol: "A",
+          auction: :closing,
+          observed_at: @ts,
+          near_price: "1",
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/total_volume/, fn ->
+        VolumeProfile.new(
+          symbol: "A",
+          timeframe: "1d",
+          opened_at: @ts,
+          total_volume: "1",
+          provider: :x
+        )
+      end
+
+      assert_raise ArgumentError, ~r/buy_at_price/, fn ->
+        VolumeProfile.new(
+          symbol: "A",
+          timeframe: "1d",
+          opened_at: @ts,
+          buy_at_price: %{"1" => "2"},
+          provider: :x
+        )
+      end
+    end
+
+    test "OptionChain refuses a string underlying_price or strike key, accepts Decimals" do
+      row = %{call: nil, put: nil}
+
+      assert_raise ArgumentError, ~r/underlying_price/, fn ->
+        OptionChain.new(underlying: "X", expiries: %{}, underlying_price: "1", provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/strike key/, fn ->
+        OptionChain.new(underlying: "X", expiries: %{@date => %{"500" => row}}, provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/expiry to strikes/, fn ->
+        OptionChain.new(underlying: "X", expiries: [], provider: :x)
+      end
+
+      assert_raise ArgumentError, ~r/map of Decimal strike/, fn ->
+        OptionChain.new(underlying: "X", expiries: %{@date => []}, provider: :x)
+      end
+
+      chain =
+        OptionChain.new(
+          underlying: "X",
+          expiries: %{@date => %{Decimal.new("500") => row}},
+          underlying_price: 5,
+          provider: :x
+        )
+
+      assert [%Decimal{}] = OptionChain.strikes(chain, @date)
     end
   end
 end

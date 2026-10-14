@@ -76,6 +76,7 @@ defmodule DpExchange.Core.Types.Conversion do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:from_amount, :to_amount, :rate, :fee])
     |> Validate.one_of!(:status, @statuses)
   end
 

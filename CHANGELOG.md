@@ -21,6 +21,42 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`Types.*.new/1` now refuses a non-Decimal in a Decimal field (behaviour change for venue
+  decoders).** A decoder that passed `"abc"`, `"1.5"` or a map through built fine and raised
+  later inside `Decimal.compare/2` in the CONSUMER's process (`TopOfBook.mid/1`, `crossed?/1`,
+  `VolumeProfile.point_of_control/1`). It now gets an `ArgumentError` at construction naming
+  module, field and the (truncated) value. A `Decimal` or an integer is accepted; `nil` only
+  where the type's typespec allows it. New `Validate.decimals!/2`, `decimal_map_values!/2` and
+  `decimal!/3`. Declared per type from its own `@type t`: `Candle`, `TopOfBook`, `Quote`,
+  `Fill`, `Order`, `Trade`, `Balance`, `Position`, `FxRate`, `Funding`, `ContractStats`,
+  `Conversion`, `CorporateEvent`, `AuctionImbalance`, `OptionContract`, `OptionGreeks`,
+  `StakingBalance` (incl. `by_provider` values), `StakingRate`, `StakingReward`,
+  `StakingTransaction`, `Withdrawal`, `VolumeProfile` (incl. price-map values). Also checked
+  inside collections: `OrderBookDelta` levels (price and quantity; `OrderBook` already did)
+  and `OptionChain` strike keys and `underlying_price`. A venue that builds with strings must
+  parse them with `Decimal.parse/1` first.
+- `PollingFeed`: delivering an event struct whose module atom has no `Elixir.` prefix (an
+  Erlang-style struct module) raised `ArgumentError` from `Module.split/1` inside the feed on
+  every delivery; the link-event type now falls back to the atom's own name.
+
+- **Decoder robustness against hostile venue payloads (tick AC).**
+  - `HttpClient.get/3`: a 2xx body served as `text/plain` that is a bare JSON scalar (`null`,
+    `42`, `"x"`, `true`) was returned as `{:ok, nil}` / `{:ok, 42}`; the same bytes as
+    `application/json` were already `{:error, "Unexpected response format"}`. Both are now
+    refused, including under `decode_body: false`.
+  - `HttpClient.parse_rate_limit_headers/1`: a negative `x-ratelimit-limit` or
+    `x-ratelimit-remaining` was returned as a budget; it is now `nil` ("did not say").
+  - `Types.Validate.new!/3`: a `Decimal` with an exponent beyond +/-1000 (`"1e5000"` parses
+    in full) is refused in any field. `Decimal.add/2` and `compare/2` align exponents with
+    `10^difference`, so one such price made a consumer's `TopOfBook.mid/1`, `crossed?/1` or
+    `VolumeProfile.point_of_control/1` allocate a number of that many digits.
+    New `Validate.max_decimal_exponent/0`. `StakingRate.bps_to_pct/1` answers `nil` for one.
+  - `Timeframe.boundary/2` raised `ArgumentError` for a `DateTime` before year 0000 (it used
+    `from_unix!/1`); it now buckets across the whole calendar range.
+  - `PollingFeed`: a bulk fetch answering `{:ok, improper_list}` or `{:refused, improper_list}`
+    raised inside the feed (losing every runtime `update_symbols/2` scope); it is now recorded
+    as `{:bad_fetch_result, {tag, :improper_list}}` and the feed continues.
+
 ## [0.3.91] - 2026-10-13
 
 - **`PollingFeed` (bulk): a result about symbols removed while the fetch was in flight was a

@@ -78,6 +78,7 @@ defmodule DpExchange.Core.Types.Withdrawal do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:amount, :fee])
     |> Validate.one_of!(:status, @statuses)
   end
 end

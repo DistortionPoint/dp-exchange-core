@@ -1728,6 +1728,34 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
     end
 
+    test "a bulk answer that is an improper list is recorded, and the feed survives" do
+      # `{:ok, [event | :tail]}` matched the non-empty-list clause and then raised in
+      # `Enum.reject/2` inside the feed, losing every runtime `update_symbols/2` scope; the
+      # same shape in `{:refused, _}` raised in `Enum.all?/2`.
+      answers = [
+        {:ok, [%{symbol: "BTC-USD"} | :tail]},
+        {:refused, [{"BTC-USD", :not_listed} | :tail]}
+      ]
+
+      for answer <- answers do
+        feed =
+          start_supervised!(
+            {PollingFeed,
+             sink: sink_to_self(),
+             start_delay_ms: 0,
+             interval_ms: 50,
+             symbols: ["BTC-USD"],
+             fetch_all: fn _symbols -> answer end},
+            id: make_ref()
+          )
+
+        status = await_status(feed, &(&1.last_error != nil))
+        assert Process.alive?(feed)
+        assert %{last_error: {:bad_fetch_result, {_tag, :improper_list}}} = status
+        refute_received {:published, _}
+      end
+    end
+
     test "a slow fetch over many symbols still polls every one, in a queue that stays FIFO" do
       # One fetch blocks while the rest of the symbols' ticks pile up behind it; the queue is
       # then drained in order. The count is large enough that a queue copied per tick would
@@ -1809,6 +1837,28 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       assert_receive {:telemetry, [:dp_exchange, :link, :event], _measurements, metadata}, 5_000
       assert metadata.provider == provider
+    end
+
+    # A struct whose module atom has no `Elixir.` prefix. `Module.split/1` raises on it, and
+    # `delivery_type/1` runs inside the feed process on every delivery.
+    defmodule :polling_feed_erlang_style_event do
+      defstruct [:symbol]
+    end
+
+    test "an event struct whose module is not an Elixir module still reports its kind" do
+      label = "poll_#{System.unique_integer([:positive])}"
+      :ok = attach_link(label)
+
+      pid =
+        start_feed(
+          label: label,
+          symbols: ["BTC-USD"],
+          fetch: fn symbol -> {:ok, struct(:polling_feed_erlang_style_event, symbol: symbol)} end
+        )
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], _measurements, metadata}, 5_000
+      assert metadata.type == "polling_feed_erlang_style_event"
+      assert Process.alive?(pid)
     end
   end
 

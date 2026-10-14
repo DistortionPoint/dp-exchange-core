@@ -85,6 +85,16 @@ defmodule DpExchange.Core.Types.Position do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([
+      :quantity,
+      :average_cost,
+      :mark_price,
+      :notional_value,
+      :realised_pnl,
+      :unrealised_pnl,
+      :liquidation_price,
+      :leverage
+    ])
     |> Validate.one_of!(:side, [:long, :short])
   end
 

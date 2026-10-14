@@ -148,6 +148,14 @@ defmodule DpExchange.Core.Types.Order do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@required_non_nil, attrs)
+    |> Validate.decimals!([
+      :quantity,
+      :price,
+      :stop_price,
+      :filled_quantity,
+      :average_price,
+      :fee
+    ])
     |> Validate.one_of!(:side, [:buy, :sell, nil])
     |> Validate.one_of!(:order_type, [nil | @order_types])
     |> Validate.one_of!(:status, [nil | @statuses])

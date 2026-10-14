@@ -68,5 +68,9 @@ defmodule DpExchange.Core.Types.Balance do
   be `nil` and the moduledoc says when.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @required_non_nil, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@required_non_nil, attrs)
+    |> Validate.decimals!([:balance, :available_balance, :hold])
+  end
 end

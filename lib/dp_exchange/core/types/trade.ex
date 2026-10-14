@@ -112,6 +112,7 @@ defmodule DpExchange.Core.Types.Trade do
 
     __MODULE__
     |> Validate.new!(@required_non_nil, attrs)
+    |> Validate.decimals!([:price, :quantity])
     |> Validate.one_of!(:side, [:buy, :sell, nil])
     |> Validate.one_of!(:broken, [true, false])
   end

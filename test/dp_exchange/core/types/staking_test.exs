@@ -53,6 +53,15 @@ defmodule DpExchange.Core.Types.StakingTest do
       assert StakingRate.bps_to_pct(nil) == nil
     end
 
+    test "a rate with an absurd exponent is nil, not a Decimal that poisons arithmetic" do
+      # "1e999999999" parses in full; returning it only moved the failure into whatever
+      # compares or adds the rate (`Decimal.add/2` aligns exponents with `10^difference`).
+      assert StakingRate.bps_to_pct("1e999999999") == nil
+      assert StakingRate.bps_to_pct("1e-999999999") == nil
+      assert StakingRate.bps_to_pct(%Decimal{sign: 1, coef: 1, exp: 5_000}) == nil
+      assert Decimal.equal?(StakingRate.bps_to_pct("4.5e2"), Decimal.new("4.5"))
+    end
+
     test "padding is not a reason to fail" do
       # `Decimal.new("  500  ")` raises. Whitespace around a number does not change it.
       assert Decimal.equal?(StakingRate.bps_to_pct("  450  "), Decimal.new("4.5"))

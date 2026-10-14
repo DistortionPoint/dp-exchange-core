@@ -401,8 +401,20 @@ defmodule DpExchange.Core.HttpClient do
     floats = if decode_body == false, do: :decimals, else: :native
 
     case Jason.decode(body, floats: floats) do
-      {:ok, json} -> {:ok, json}
-      {:error, _last} -> {:error, "Invalid JSON response"}
+      {:ok, json} when is_map(json) or is_list(json) ->
+        {:ok, json}
+
+      # **A bare JSON scalar is refused here exactly as it is when Req decodes it.** A body
+      # `null`, `42`, `"x"` or `true` served as `text/plain` reached the caller as
+      # `{:ok, nil}` / `{:ok, 42}`, while the same bytes served as `application/json` (Req
+      # decodes them to a non-container) were `{:error, "Unexpected response format"}`. The
+      # `{:ok, nil}` is the substitute this family refuses: a venue decoder doing `Map.get`
+      # on it raised in the caller's process, or read a successful empty answer.
+      {:ok, _scalar} ->
+        {:error, "Unexpected response format"}
+
+      {:error, _last} ->
+        {:error, "Invalid JSON response"}
     end
   end
 
@@ -483,8 +495,8 @@ defmodule DpExchange.Core.HttpClient do
   def parse_rate_limit_headers(headers) do
     header_map = normalise_headers(headers)
 
-    with {:ok, limit} <- fetch_integer(header_map, "x-ratelimit-limit"),
-         {:ok, remaining} <- fetch_integer(header_map, "x-ratelimit-remaining") do
+    with {:ok, limit} <- fetch_count(header_map, "x-ratelimit-limit"),
+         {:ok, remaining} <- fetch_count(header_map, "x-ratelimit-remaining") do
       %{limit: limit, remaining: remaining, reset_time: parse_reset(header_map)}
     else
       :error -> nil
@@ -511,6 +523,18 @@ defmodule DpExchange.Core.HttpClient do
       {:ok, integer}
     else
       _absent_or_unparseable -> :error
+    end
+  end
+
+  # **A count of requests is not negative.** `fetch_integer/2` answers any integer, which is
+  # right for `Retry-After` (its caller treats a negative as the floor) and for the reset, but
+  # `x-ratelimit-limit: -1` or `remaining: -5` came back as `%{limit: -1, remaining: -5}`: a
+  # budget that is a plausible integer with no meaning, which a caller throttling on
+  # `remaining` reads as "exhausted" or as an unlimited sentinel. Unreadable, so `nil`.
+  defp fetch_count(headers, key) do
+    case fetch_integer(headers, key) do
+      {:ok, count} when count >= 0 -> {:ok, count}
+      _absent_or_negative -> :error
     end
   end
 

@@ -146,6 +146,18 @@ defmodule DpExchange.Core.TimeframeTest do
       end
     end
 
+    test "a time before year 0 is bucketed, not raised on" do
+      # `DateTime.from_unix!/1` raises "invalid Unix time" for any year before 0000, though a
+      # `DateTime` is valid from -9999 and a venue timestamp with a bad year can build one.
+      early = DateTime.new!(Date.new!(-1, 6, 15), ~T[10:30:00], "Etc/UTC")
+
+      assert Timeframe.boundary(early, "1d") ==
+               DateTime.new!(Date.new!(-1, 6, 15), ~T[00:00:00], "Etc/UTC")
+
+      assert Timeframe.boundary(early, "1h") ==
+               DateTime.new!(Date.new!(-1, 6, 15), ~T[10:00:00], "Etc/UTC")
+    end
+
     test "an unmodelled timeframe returns the input untouched" do
       dt = ~U[2026-08-06 13:47:12Z]
       assert dt == Timeframe.boundary(dt, "1w")

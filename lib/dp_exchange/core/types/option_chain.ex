@@ -48,7 +48,47 @@ defmodule DpExchange.Core.Types.OptionChain do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.decimals!([:underlying_price])
+
+    check_strikes!(built.expiries)
+    built
+  end
+
+  # `strikes/2` sorts the strike keys with `Decimal.compare/2`, so a string key raises in the
+  # consumer's process. Integers are refused here: `Decimal.compare/2` accepts them but the
+  # typespec's key is `Decimal.t()` and a mixed-type map would hold two keys for one strike.
+  defp check_strikes!(expiries) when is_map(expiries) do
+    Enum.each(expiries, fn {_expiry, strikes} -> check_strike_keys!(strikes) end)
+  end
+
+  defp check_strikes!(other) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :expiries holds " <>
+            "#{inspect(other, limit: 5, printable_limit: 40)} — must be a map of expiry to strikes"
+  end
+
+  defp check_strike_keys!(strikes) when is_map(strikes) do
+    Enum.each(strikes, fn
+      {%Decimal{}, _row} ->
+        :ok
+
+      {key, _row} ->
+        raise ArgumentError,
+              "#{inspect(__MODULE__)}.new/1: field :expiries has strike key " <>
+                "#{inspect(key, limit: 5, printable_limit: 40)} — must be a Decimal"
+    end)
+  end
+
+  defp check_strike_keys!(other) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :expiries holds " <>
+            "#{inspect(other, limit: 5, printable_limit: 40)} for an expiry — must be a map " <>
+            "of Decimal strike to row"
+  end
 
   @doc "The expiries in the chain, earliest first."
   @spec expiry_dates(t()) :: [Date.t()]

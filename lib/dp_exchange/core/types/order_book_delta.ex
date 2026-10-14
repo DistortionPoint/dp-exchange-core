@@ -104,7 +104,8 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
 
   Also raises `ArgumentError` when `levels` is not a list of `{side, price, quantity}`
-  triples with `side` one of `:bid | :ask`. A level on `:buy`, or on the string `"bid"`, is
+  triples with `side` one of `:bid | :ask` and `price` and `quantity` each a `Decimal` (or
+  an integer). A level on `:buy`, or on the string `"bid"`, is
   read by a consumer matching the two sides as no side at all, and its quantity lands on
   neither side of the book.
   """
@@ -121,6 +122,11 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
     end
   end
 
-  defp level?({side, _price, _quantity}), do: side in [:bid, :ask]
+  defp level?({side, price, quantity}),
+    do: side in [:bid, :ask] and number?(price) and number?(quantity)
+
   defp level?(_other), do: false
+
+  defp number?(%Decimal{}), do: true
+  defp number?(value), do: is_integer(value)
 end

@@ -74,6 +74,10 @@ defmodule DpExchange.Core.Types.StakingBalance do
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
     attrs = attrs |> Map.new() |> Map.update(:by_provider, %{}, &(&1 || %{}))
-    Validate.new!(__MODULE__, @enforce_keys, attrs)
+
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:staked, :available_to_trade, :available_for_withdrawal])
+    |> Validate.decimal_map_values!([:by_provider])
   end
 end

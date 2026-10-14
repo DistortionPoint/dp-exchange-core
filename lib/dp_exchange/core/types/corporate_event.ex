@@ -66,6 +66,7 @@ defmodule DpExchange.Core.Types.CorporateEvent do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:amount])
     |> Validate.one_of!(:kind, @kinds)
   end
 end

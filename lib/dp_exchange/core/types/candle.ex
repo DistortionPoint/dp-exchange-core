@@ -97,7 +97,11 @@ defmodule DpExchange.Core.Types.Candle do
   `DpExchange.Core.Types.Validate`, written up there in full.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.decimals!([:open, :high, :low, :close, :volume])
+  end
 
   @doc """
   Whether the bar's own values are internally consistent — high is the highest, low the
