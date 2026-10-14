@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.92] - 2026-10-14
+
 - **`Types.*.new/1` now refuses a non-Decimal in a Decimal field (behaviour change for venue
   decoders).** A decoder that passed `"abc"`, `"1.5"` or a map through built fine and raised
   later inside `Decimal.compare/2` in the CONSUMER's process (`TopOfBook.mid/1`, `crossed?/1`,
