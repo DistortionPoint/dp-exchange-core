@@ -1,7 +1,7 @@
 # Facade Consistency (tick AD) - Design Document
 
 **Date**: 2026-10-14
-**Status**: Implementing
+**Status**: Implemented
 **Version**: 1.0
 **Author(s)**: User/Claude Collaboration (decided by the orchestrating agent on the
 unattended loop, from the family conventions already recorded; no open questions)
@@ -16,10 +16,10 @@ each, and the venues move to it.
 
 ### Objectives
 
-- [ ] One reason for each situation below, documented in `DpExchange.Core.Venue` /
+- [x] One reason for each situation below, documented in `DpExchange.Core.Venue` /
       `DpExchange.Core.Notice` and the venues' `usage-rules.md`.
-- [ ] Every venue's real path AND Fake produce it.
-- [ ] Conformance assertions hold the Fakes to the ones a Fake can be driven into.
+- [x] Every venue's real path AND Fake produce it.
+- [x] Conformance assertions hold the Fakes to the ones a Fake can be driven into.
 
 ### Scope
 
@@ -153,10 +153,42 @@ family-wide" (Core lists it optional).
       `by_symbol` entry (and refuses to create one for `[]`). Core's own `PollingFeed` emits a
       `:coverage_change` on recovery, not a `:link_down` notice, so D3 does not apply to it.
       Not run: no gate (agents never run tests); the orchestrator gates.
-- [ ] Coinbase: D4, D8, D9 (invalid_range), D10; websockex buffer join.
-- [ ] Gemini: D1, D2, D4, D5, D8, D9 (invalid_range), D10; websockex buffer join if present.
-- [ ] Webull: D1, D4, D7, D8, D10; shard stagger.
-- [ ] Robinhood: D1, D3, D5, D6, D7, D8, D10 (Fake + doc).
-- [ ] Schwab: D1 (not_an_equity_symbol tag), D2, D3, D4, D9 (range_unavailable); websockex
+- [x] Coinbase: D4, D8, D9 (invalid_range), D10; websockex buffer join.
+      Found: an error frame names no product, so the socket now tracks what it was asked to
+      carry and a `:refusal` names that set (a superset of what was refused, documented).
+      websockex joined the buffer per TCP chunk; it now queues chunks and joins once the
+      header's declared length has arrived (400 x 1 KiB frame test).
+- [x] Gemini: D1, D2, D4, D5, D8, D9 (invalid_range), D10; websockex buffer join if present.
+      Found: no Gemini feed authenticates, so `:credentials_rejected` is never emitted
+      (stated in usage-rules). `InvalidSymbol` on `place_order` is `:not_listed` too.
+      websockex had the same per-chunk join; fixed the same way (2 MiB in 1 KiB writes).
+- [x] Webull: D1, D4, D7, D8, D10; shard stagger.
+      Found: D1 covers every single-symbol read (bars of every category, volume profile,
+      auction imbalance, fundamentals, event trades/book). Shard opens now carry their own
+      message (`:open_staggered`) and enforce the spacing when handled.
+- [x] Robinhood: D1, D3, D5, D6, D7, D8, D10 (Fake + doc).
+      Found: the stream's per-symbol refusal keeps the venue's own reason (only the
+      single-symbol reads map to `:not_listed`).
+- [x] Schwab: D1 (not_an_equity_symbol tag), D2, D3, D4, D9 (range_unavailable); websockex
       buffer join if present.
-- [ ] usage-rules.md and CHANGELOG in every repo.
+      Found: Schwab's websockex is already linear (parse on an incomplete frame matches the
+      header only), so no change. `earliest` uses the documented 10-day minute retention,
+      not probed.
+- [x] usage-rules.md and CHANGELOG in every repo.
+
+Released 2026-10-14: Core 0.3.93; every venue on it (see each CHANGELOG).
+
+## Retrospective
+
+**What drifted and why.** Two of the ten (D9's `invalid_range` arity on Coinbase and Gemini)
+had been decided on 2026-10-11 and drifted back within three days, because the decision lived
+in a memory file and a moduledoc, not in an assertion. The rest were never decided: each venue
+answered a situation the contract did not name, and each answer was locally reasonable.
+
+**What held.** A read-only cross-venue audit found all ten in one pass, citing file:line, and
+the fix was mechanical once one answer was chosen. The new conformance groups (40, 41) turn the
+two drivable decisions into assertions; the rest stay documentation, listed as not assertable
+in `docs/reference/core/assertion-coverage.md`.
+
+**For next time.** A family decision that only a doc holds will drift. Where a Fake can be
+driven into the situation, the decision goes into the conformance suite the same tick.
