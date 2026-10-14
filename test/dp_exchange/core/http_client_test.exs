@@ -2006,4 +2006,19 @@ defmodule DpExchange.Core.HttpClientTest do
       assert_receive {:query, "zeta=1&alpha=2&mid=3"}, 5_000
     end
   end
+
+  describe "retry backoff is jittered" do
+    test "every wait is at least the configured delay and at most a quarter longer" do
+      # Without jitter every caller that failed together slept the same `retry_delay * n` and
+      # retried together. The jitter only lengthens the wait, so the configured delay is a floor.
+      waits = for _sample <- 1..200, do: HttpClient.backoff_ms(1_000, 2)
+
+      assert Enum.all?(waits, &(&1 >= 2_000 and &1 <= 2_500))
+      assert length(Enum.uniq(waits)) > 1
+    end
+
+    test "a zero delay stays zero" do
+      assert HttpClient.backoff_ms(0, 3) == 0
+    end
+  end
 end

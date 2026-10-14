@@ -21,6 +21,53 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **Facade consistency (tick AD): one reason for each of ten situations, documented.**
+  `DpExchange.Core.Venue` and `DpExchange.Core.Notice` (and `usage-rules.md`) now name:
+  `{:refused, :not_listed}` (a well-formed symbol the venue does not list), `{:refused,
+  :no_quote}` (listed, nothing to quote), `{:refused, {:account_not_found, id}}`, `{:error,
+  {:invalid_credentials, venue}}` (padded or control-character credential, before signing,
+  never echoed), `{:error, {:insecure_url, venue}}`, `{:error, {:invalid_range, range}}`,
+  `{:error, {:range_unavailable, timeframe, earliest: dt | nil, requested: dt}}` beside
+  `:range_too_wide` and `:history_truncated`; a poll route's `:link_down` closed by one
+  latched `:link_up`; the notice kind rules (`:data_quality` for gaps and undecodable books,
+  `:refusal` with `details.symbols`, `:degraded` only for a slower path, `:credentials_rejected`
+  for a poll as well as a stream); and `details.reason` as an atom or tagged tuple with free
+  text in `details.message`. **Breaking, for venue packages:** each venue moves its returned
+  reasons to these (a changed reason, tracked in that venue's own CHANGELOG); Core itself
+  returns none of them.
+  - **New optional callback `wanted/1`** (`@optional_callbacks`, so no venue fails
+    completeness): the symbols the consumer asked to stream, against `coverage/1`'s observed
+    delivery. The contract is now 89 callbacks, 85 required and 4 optional.
+  - **Conformance: group 40** (when the fake exports `wanted/1`: a list or `MapSet` holding
+    every symbol subscribed and every symbol `coverage/1` reports) and **group 41**, opt-in
+    and skipped by default: `unlisted_symbol:` (`get_price/2` is `{:refused, :not_listed}`)
+    and `padded_credentials:` (`get_balances/2` is `{:error, {:invalid_credentials,
+    runtime_id}}`). No existing venue run changes.
+  - `ReferenceVenue` (test support) answers `{:refused, :not_listed}` where it said
+    `{:refused, :symbol_not_listed}`, exports `wanted/1` and refuses a padded credential.
+    `contract_teeth_test.exs` pinned the old tag and is updated.
+  - `CanonicalPair`: the upcased `asset_aliases` map was rebuilt on every `to_canonical/2` and
+    `to_exchange/2` call (per message in a venue). It is cached in one `:persistent_term`,
+    keyed by the caller's own alias map (so a changed mapping can only miss) and capped at 64
+    distinct maps. The quote-suffix sort is unchanged and stays per call, as documented.
+  - `FakeInjection`: a symbol's `by_symbol` entry is removed when its last queued outcome is
+    popped (it kept `symbol => []` for the life of the agent); queuing no outcomes adds none.
+
+- **Hot-path performance (tick AD).**
+  - `PollingFeed`: every fetch task closed over the whole feed state (symbols, `scheduled`,
+    `last_ok`, the job queue) because `fetch_fun/2` was called inside the task's `fn`, so
+    spawning copied O(symbols) words per fetch, O(n^2) per cycle in per-symbol mode. The fetch
+    function is now built in the feed and the task closes over it alone.
+  - `HttpClient`: the retry backoff carries up to 25% random jitter on top of
+    `retry_delay * attempts_made` (the configured delay is still the floor), so callers that
+    failed together no longer retry together against a recovering venue.
+  - `Types.Validate.new!/3`: the NaN/exponent/NaiveDateTime scan and the float scan were two
+    walks of every field; they are one. Tuples are walked by index without a list copy.
+    Behaviour is unchanged (floats are still allowed inside free-form maps).
+  - `Types.OrderBook.new/1`: the sort check is one walk over adjacent levels instead of
+    three passes and a list of pairs per side.
+  - `Fanout.deliver/4`: subscribers are resolved and filtered in one pass.
+
 ## [0.3.92] - 2026-10-14
 
 - **`Types.*.new/1` now refuses a non-Decimal in a Decimal field (behaviour change for venue

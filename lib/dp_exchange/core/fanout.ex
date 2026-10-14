@@ -188,9 +188,13 @@ defmodule DpExchange.Core.Fanout do
     # Resolved and deduplicated first. One process registered both as a pid and by name was
     # two entries, so it got every message twice, and both iterations read the same old
     # `dropping` set and reported its transition twice.
-    subscribers
-    |> Enum.map(&delivery_pid/1)
-    |> Enum.reject(&is_nil/1)
+    #
+    # Resolved and filtered in ONE pass (`pid = ...` is the filter: `nil` is falsy and a pid
+    # never is). It was `Enum.map` then `Enum.reject`, two full lists built per message to
+    # every subscriber, on the path this module's moduledoc calls the hottest in the family.
+    resolved = for subscriber <- subscribers, pid = delivery_pid(subscriber), do: pid
+
+    resolved
     |> Enum.uniq()
     |> Enum.reduce({0, MapSet.new(), []}, fn pid, acc ->
       deliver_one(pid, message, max, dropping, acc)

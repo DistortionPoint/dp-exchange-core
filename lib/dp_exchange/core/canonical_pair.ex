@@ -108,13 +108,72 @@ defmodule DpExchange.Core.CanonicalPair do
   # Uppercased, like the input. A mapping written `%{"xbt" => "btc"}` or `quotes: ["usdt"]`
   # was compared against uppercased symbols and silently never matched, and `to_canonical/2`
   # handed the input back as if it were already canonical.
+  #
+  # **Cached, keyed by the alias map itself.** This used to rebuild and upcase the whole map on
+  # every call, and venues call `to_canonical/2` once per message. The key is the caller's own
+  # `asset_aliases` term, not a name or a hash of it, so a cache hit is by definition the same
+  # aliases and a changed mapping can only miss: there is nothing to invalidate and nothing
+  # that can serve one mapping's aliases for another's. (This is not the quote-suffix sort
+  # below, whose per-call decision stands.)
+  #
+  # The cache is one `:persistent_term` holding a map, capped at `@alias_cache_limit`
+  # distinct alias maps. A venue has one mapping, so the cap is never reached in production;
+  # a test suite minting a mapping per test cannot grow it without bound either: past the cap
+  # a new mapping is computed per call, as it always was. Concurrent first calls may each
+  # write and one write may be lost, which only means one more miss. The single key is
+  # rewritten at most `@alias_cache_limit` times in the life of the node.
+  @alias_cache_key {__MODULE__, :aliases}
+  @alias_cache_limit 64
+
   defp aliases(mapping) do
-    mapping
-    |> Map.get(:asset_aliases, %{})
-    |> Map.new(fn {exchange, canonical} ->
+    case Map.get(mapping, :asset_aliases, %{}) do
+      raw when is_map(raw) and map_size(raw) == 0 -> %{}
+      raw when is_map(raw) -> cached_aliases(raw)
+      # Not a map (a keyword list was accepted here before): computed per call, never cached.
+      raw -> upcase_aliases(raw)
+    end
+  end
+
+  defp cached_aliases(raw) do
+    cache = alias_cache()
+    {upcased, updated} = cache_lookup(cache, raw, @alias_cache_limit)
+
+    if map_size(updated) != map_size(cache) do
+      :persistent_term.put(@alias_cache_key, updated)
+    end
+
+    upcased
+  end
+
+  # Pure: the upcased aliases for `raw` and the cache to keep. A hit returns `cache` as it
+  # was; a miss adds `raw` only while the cache holds fewer than `limit` maps.
+  @doc false
+  @spec cache_lookup(map(), map(), pos_integer()) :: {map(), map()}
+  def cache_lookup(cache, raw, limit) do
+    case cache do
+      %{^raw => upcased} ->
+        {upcased, cache}
+
+      _miss ->
+        upcased = upcase_aliases(raw)
+        kept = if map_size(cache) < limit, do: Map.put(cache, raw, upcased), else: cache
+        {upcased, kept}
+    end
+  end
+
+  defp upcase_aliases(raw) do
+    Map.new(raw, fn {exchange, canonical} ->
       {String.upcase(exchange), String.upcase(canonical)}
     end)
   end
+
+  @doc false
+  @spec alias_cache() :: %{optional(map()) => map()}
+  def alias_cache, do: :persistent_term.get(@alias_cache_key, %{})
+
+  @doc false
+  @spec alias_cache_limit() :: pos_integer()
+  def alias_cache_limit, do: @alias_cache_limit
 
   # Split native into {base, quote}. Three cases:
   #   * a real separator ("-", "/") → split on it;

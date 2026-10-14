@@ -30,7 +30,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Thirty-nine groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Forty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -161,7 +161,14 @@ defmodule DpExchange.Core.AdapterContract do
          "{:unsupported_option, :limit}, honoured natively or tolerated, never a stray error"},
       {39,
        "prices and sizes are positive — every Quote, Trade and Candle price, every book " <>
-         "level's price and size, with books best first"}
+         "level's price and size, with books best first"},
+      {40,
+       "wanted/1 — optional; when the fake exports it, it holds every symbol subscribed and " <>
+         "every symbol coverage/1 reports, as a list or a MapSet"},
+      {41,
+       "family reasons — opt-in by `unlisted_symbol:` and `padded_credentials:`; an unlisted " <>
+         "symbol is {:refused, :not_listed} and a padded credential is " <>
+         "{:error, {:invalid_credentials, runtime_id}}"}
     ]
   end
 
@@ -1086,6 +1093,71 @@ defmodule DpExchange.Core.AdapterContract do
   end
 
   @doc """
+  What is wrong with a fake's `wanted/1`, or `nil`. Assertion 40.
+
+  A fake that does not export `wanted/1` has not adopted the optional callback and is never
+  faulted. Otherwise, after `subscribe/2` of `pairs`, `wanted/1` is a list or a `MapSet`
+  (`{:not_a_collection, value}`), holds every symbol subscribed
+  (`{:subscribed_not_wanted, symbols}`) and holds every symbol `coverage/1` reports
+  (`{:covered_not_wanted, symbols}`), because what arrived was asked for. The set is cleared
+  with `update_symbols/2` first, so an earlier subscription cannot satisfy it.
+  """
+  @spec wanted_fault(module(), [String.t()], keyword()) :: nil | {atom(), term()}
+  def wanted_fault(fake, pairs, opts) do
+    Code.ensure_loaded(fake)
+
+    if function_exported?(fake, :wanted, 1) do
+      fake.update_symbols([], opts)
+      fake.subscribe(pairs, opts)
+      wanted_answer_fault(fake.wanted(opts), pairs, fake.coverage(opts))
+    end
+  end
+
+  defp wanted_answer_fault(wanted, pairs, coverage) when is_list(wanted) do
+    wanted_answer_fault(MapSet.new(wanted), pairs, coverage)
+  end
+
+  defp wanted_answer_fault(wanted, pairs, coverage) when is_struct(wanted, MapSet) do
+    asked = pairs |> Enum.map(&String.upcase/1) |> MapSet.new()
+    missed = asked |> MapSet.difference(wanted) |> MapSet.to_list() |> Enum.sort()
+
+    unasked =
+      coverage |> Map.keys() |> MapSet.new() |> MapSet.difference(wanted) |> Enum.sort()
+
+    cond do
+      missed != [] -> {:subscribed_not_wanted, missed}
+      unasked != [] -> {:covered_not_wanted, unasked}
+      true -> nil
+    end
+  end
+
+  defp wanted_answer_fault(other, _pairs, _coverage), do: {:not_a_collection, other}
+
+  @doc """
+  What is wrong with a fake's answers for the two opt-in family reasons, or `nil`. Assertion 41.
+
+  `unlisted` is a well-formed symbol the fake does not list and `price_answer` is what its
+  `get_price/2` said for it: anything but `{:refused, :not_listed}` is
+  `{:unlisted_symbol, answer}`. `padded_answer` is what a credentialed read said for a
+  credentials map with surrounding whitespace, from a venue whose `runtime_id/0` is `venue`:
+  anything but `{:error, {:invalid_credentials, venue}}` is `{:padded_credentials, answer}`.
+  A `nil` for either answer is a reason the venue did not opt in to, and is not judged.
+  """
+  @spec family_reason_fault(term(), term(), atom()) :: nil | {atom(), term()}
+  def family_reason_fault(price_answer, padded_answer, venue) do
+    cond do
+      price_answer not in [nil, {:refused, :not_listed}] ->
+        {:unlisted_symbol, price_answer}
+
+      padded_answer not in [nil, {:error, {:invalid_credentials, venue}}] ->
+        {:padded_credentials, padded_answer}
+
+      true ->
+        nil
+    end
+  end
+
+  @doc """
   What is wrong with a fake's `subscribe/2` given `to: nil`, or `nil`. Assertion 27.
 
   A forwarded `nil` is a caller that said nothing, and nothing means the caller: it must not
@@ -1465,6 +1537,8 @@ defmodule DpExchange.Core.AdapterContract do
       both_endpoints(),
       coverage_routes(),
       coverage_by_kind(),
+      wanted_callback(),
+      family_reasons(),
       top_of_book_assertion(),
       purity(),
       volume_window_stated(),
@@ -1580,6 +1654,18 @@ defmodule DpExchange.Core.AdapterContract do
       # assertions came to run on one venue in five. Naming a symbol the endpoint actually
       # serves makes the assertion RUN instead, which is the point of having it.
       @endpoint_symbols Keyword.get(opts, :endpoint_symbols, %{})
+
+      # **Opt-in, default skip: facts only the venue's fixture knows.** Assertion 41 holds the
+      # fake to two family reasons it can only be driven into with venue knowledge, and a
+      # venue that has not supplied the fixture is not failed for lacking it:
+      #
+      #   * `unlisted_symbol:` — a well-formed symbol the fake does not list. `get_price/2` on
+      #     it must answer `{:refused, :not_listed}`.
+      #   * `padded_credentials:` — a credentials map whose values carry surrounding
+      #     whitespace. A credentialed read must answer
+      #     `{:error, {:invalid_credentials, runtime_id}}`.
+      @unlisted_symbol Keyword.get(opts, :unlisted_symbol)
+      @padded_credentials Keyword.get(opts, :padded_credentials)
     end
   end
 
@@ -2313,6 +2399,83 @@ defmodule DpExchange.Core.AdapterContract do
                 declare it in `endpoint_opts:` on `use DpExchange.Core.AdapterContract`.
                 """)
             end
+          end
+        end
+      end
+    end
+  end
+
+  # --- 40. wanted/1 (optional) -----------------------------------------------------------
+  #
+  # `wanted/1` is in `Venue.@optional_callbacks`, for the reason `coverage_by_kind/1` is: Core
+  # publishes it before every venue has adopted it. A fake that does not export it is not
+  # failed, and this group then asserts nothing. Do not turn the `if` into an unconditional
+  # assertion.
+  defp wanted_callback do
+    quote location: :keep do
+      describe "40. wanted/1" do
+        test "when the fake exports it, it holds what was subscribed and what coverage/1 " <>
+               "reports" do
+          if @fake && @sample_pairs != [] do
+            opts = arg_value(:opts, {:subscribe, 2})
+            fault = DpExchange.Core.AdapterContract.wanted_fault(@fake, @sample_pairs, opts)
+
+            assert fault == nil,
+                   "wanted/1 disagrees with what was subscribed or with coverage/1: " <>
+                     "#{inspect(fault)}. wanted/1 is the symbols asked for, as a list or a " <>
+                     "MapSet; coverage/1 is what arrived, and nothing arrives unasked."
+          end
+        end
+      end
+    end
+  end
+
+  # --- 41. family reasons, opt-in ----------------------------------------------------------
+  #
+  # Both checks need a fact only the venue's fixture has (a symbol its fake does not list, a
+  # padded credential its credential check refuses), so each runs only when `use` names it
+  # (`unlisted_symbol:`, `padded_credentials:`). Absent, it is skipped: the venues that have
+  # not got the fixture yet are not failed for lacking it, and the suite does not guess one.
+  defp family_reasons do
+    quote location: :keep do
+      describe "41. family reasons" do
+        test "an unlisted symbol is {:refused, :not_listed} (opt-in: unlisted_symbol:)" do
+          caps = @venue.capabilities()
+
+          if @fake && @unlisted_symbol && Capabilities.active?(caps, {:get_price, 2}) do
+            args = List.replace_at(endpoint_args(:get_price, 2), 0, @unlisted_symbol)
+            answer = call_on(@fake, {:get_price, 2}, args)
+
+            assert DpExchange.Core.AdapterContract.family_reason_fault(
+                     answer,
+                     nil,
+                     @venue.runtime_id()
+                   ) == nil,
+                   "get_price/2 for the unlisted symbol #{inspect(@unlisted_symbol)} answered " <>
+                     "#{inspect(answer)}, not {:refused, :not_listed}"
+          end
+        end
+
+        test "a padded credential is {:error, {:invalid_credentials, venue}} " <>
+               "(opt-in: padded_credentials:)" do
+          caps = @venue.capabilities()
+
+          if @fake && @padded_credentials && Capabilities.active?(caps, {:get_balances, 2}) do
+            args =
+              :get_balances
+              |> endpoint_args(2)
+              |> List.replace_at(0, @padded_credentials)
+              |> List.update_at(-1, &Keyword.put(&1, :credentials, @padded_credentials))
+
+            answer = call_on(@fake, {:get_balances, 2}, args)
+
+            assert DpExchange.Core.AdapterContract.family_reason_fault(
+                     nil,
+                     answer,
+                     @venue.runtime_id()
+                   ) == nil,
+                   "get_balances/2 with padded credentials answered #{inspect(answer)}, not " <>
+                     "{:error, {:invalid_credentials, #{inspect(@venue.runtime_id())}}}"
           end
         end
       end

@@ -910,6 +910,31 @@ defmodule DpExchange.Core.Types.ValidateTest do
     end
   end
 
+  describe "one walk refuses floats, NaN and exponents (found 2026-10-14)" do
+    @statement [symbol: "AAPL", kind: :income, provider: :reference]
+
+    test "a float is allowed in a free-form map, NaN in the same map is not" do
+      free_form = %{"margin" => 0.25, "n" => [1.5]}
+
+      assert %FinancialStatement{} =
+               FinancialStatement.new([{:line_items, free_form} | @statement])
+
+      assert_raise ArgumentError, ~r/line_items.*NaN/, fn ->
+        FinancialStatement.new([{:line_items, %{"x" => Decimal.new("NaN")}} | @statement])
+      end
+    end
+
+    test "a float in a tuple nested in a list is refused, and an absurd exponent beside it" do
+      assert_raise ArgumentError, ~r/line_items.*float/, fn ->
+        FinancialStatement.new([{:line_items, [{:a, {:b, 1.5}}]} | @statement])
+      end
+
+      assert_raise ArgumentError, ~r/line_items.*exponent/, fn ->
+        FinancialStatement.new([{:line_items, [{:a, Decimal.new("1e5000")}]} | @statement])
+      end
+    end
+  end
+
   describe "unrepresentable values inside a level (found 2026-10-10)" do
     @book [symbol: "BTC-USD", asks: [], observed_at: @ts, provider: :reference]
 

@@ -100,6 +100,38 @@ defmodule DpExchange.Core.Notice do
   ### Degradation
 
   `:degraded` — the venue is answering, but from a slower path than usual.
+
+  ## Which kind a situation is
+
+  The kinds above are not interchangeable, and a venue picks by what happened:
+
+    * A **sequence gap**, or a depth/book update that cannot be decoded, is `:data_quality`.
+      It is not `:degraded`.
+    * A venue **refusing a subscription** is `:refusal`, carrying `details.symbols` (a
+      list of the symbols refused). Not `:degraded`, even when the frame that said so names
+      a subscription rather than a symbol.
+    * `:degraded` is only for "a slower path is in use".
+    * `:credentials_rejected` is emitted wherever a stream **or a poll** is refused for
+      authentication (a 401 or 403), not only on a socket. A poll that only narrows its
+      coverage on a 401 hides the cause. It is latched per feed and cleared on the next good
+      poll.
+
+  ## A poll route's link notices are a pair
+
+  `:link_down` is closed by `:link_up`. A poll route (a venue's own feed or fallback poll,
+  built on `Core.PollingFeed` or not) that emits a `:link_down` notice because a read did not
+  answer or crashed emits `:link_up` **once** (latched) on the first good poll afterwards,
+  with the same
+  `details.symbols` shape the venue's streaming `:link_up` uses. A `:link_down` with no
+  closing `:link_up` leaves a consumer waiting for a recovery it is never told about.
+
+  ## `details.reason` is an atom or a tagged tuple, `details.message` is the text
+
+  `details.reason` is something a consumer can **match**: an atom (`:unauthorized`) or a
+  tagged tuple (`{:http_status, 503}`), never free text and never a venue's body. Venue free
+  text goes in `details.message`, bounded (see the cap on a default message below). The
+  top-level `:message` field is the notice's own line; `details.message` is the venue's
+  wording, kept apart so that matching on `reason` never depends on a venue's phrasing.
   """
 
   alias DpExchange.Core.{Config, Notice}

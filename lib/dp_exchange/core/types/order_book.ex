@@ -85,17 +85,23 @@ defmodule DpExchange.Core.Types.OrderBook do
               "pairs of Decimals, got #{inspect(levels, limit: 5)}"
     end
 
-    levels
-    |> Enum.map(&elem(&1, 0))
-    |> Enum.chunk_every(2, 1, :discard)
-    |> Enum.each(fn [better, worse] ->
-      if Decimal.compare(better, worse) not in allowed do
-        raise ArgumentError,
-              "OrderBook.new/1: field #{inspect(field)} is not sorted best price first " <>
-                "(#{inspect(better)} before #{inspect(worse)})"
-      end
-    end)
+    check_sorted!(levels, field, allowed)
   end
+
+  # One walk over adjacent levels. This was `Enum.map` of the prices, `Enum.chunk_every(2, 1)`
+  # and `Enum.each`: three passes and a list of two-element lists per side, on every book a
+  # venue builds, which is every snapshot message.
+  defp check_sorted!([{better, _qty} | [{worse, _next_qty} | _rest] = tail], field, allowed) do
+    if Decimal.compare(better, worse) not in allowed do
+      raise ArgumentError,
+            "OrderBook.new/1: field #{inspect(field)} is not sorted best price first " <>
+              "(#{inspect(better)} before #{inspect(worse)})"
+    end
+
+    check_sorted!(tail, field, allowed)
+  end
+
+  defp check_sorted!(_fewer_than_two_levels, _field, _allowed), do: :ok
 
   defp level?({price, quantity}), do: number?(price) and number?(quantity)
   defp level?(_other), do: false

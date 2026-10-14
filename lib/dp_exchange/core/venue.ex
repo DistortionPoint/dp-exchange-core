@@ -71,15 +71,67 @@ defmodule DpExchange.Core.Venue do
 
   ## "Optional" means two different things in this file
 
-  Only three callbacks are in `@optional_callbacks`, and only those three may be left out of
-  a venue module entirely: `c:list_instruments/1`, `c:quantization/1` and
-  `c:coverage_by_kind/1`. `required_callbacks/0` is every other callback, and the compiler
-  and the conformance suite insist the module defines each one.
+  Only four callbacks are in `@optional_callbacks`, and only those four may be left out of
+  a venue module entirely: `c:list_instruments/1`, `c:quantization/1`,
+  `c:coverage_by_kind/1` and `c:wanted/1`. `required_callbacks/0` is every other callback,
+  and the compiler and the conformance suite insist the module defines each one.
 
   Many other callback docs below begin "Optional". Read that as **a venue may not serve
   this**: it declares the endpoint `:unsupported` in `c:capabilities/0` and its function
   still exists and answers `{:error, :not_supported}`. It does not mean the function may be
   missing.
+
+  ## One reason for each situation
+
+  A consumer that swaps venues behind the facade must get the same answer for the same fact.
+  These are the reasons the family agrees on, from the real path and from every Fake. A
+  caller matches the tag and never a venue's wording; no venue text and no credential rides
+  in a reason (log it if it helps).
+
+  ### Refusals (`{:refused, reason}`, permanent)
+
+    * `{:refused, :not_listed}` — a **well-formed** symbol the venue does not list. Every
+      single-symbol read (`c:get_price/2`, `c:get_top_of_book/2`, `c:get_order_book/2`,
+      `c:get_historical_prices/4`, `c:get_trades/2`, `c:quantization/1`, instrument reads)
+      answers it, real path and Fake alike. It is not `{:error, {:invalid_symbol, v}}` (that
+      is a symbol that is not text or is blank) and it is never a retryable
+      `{:error, _}`: a 4xx the venue gives for an unknown symbol is a refusal.
+    * `{:refused, :no_quote}` — a **listed** symbol with no current quote or book (a venue
+      that has not printed yet, or is closed with nothing resting). Not `:not_listed`, and
+      not `{:error, _}`.
+    * `{:refused, {:account_not_found, id}}` — the credential does not hold the account `id`.
+      Retrying with the same credential cannot succeed, so it is a refusal and not an error.
+    * An equity-only venue's refusal of a crypto pair keeps its own tag, for example
+      `{:refused, {:not_an_equity_symbol, symbol}}`, and is also a refusal: it will never
+      succeed on retry.
+
+  ### Errors decided locally (`{:error, reason}`, the caller can fix and retry)
+
+    * `{:error, {:invalid_credentials, venue}}` — a credential value with surrounding
+      whitespace or control characters, refused **before signing**. `venue` is the venue's
+      `c:runtime_id/0` atom. The value is never echoed, not even partly.
+    * `{:error, {:insecure_url, venue}}` — a plaintext URL (`ws://`, `http://`) configured
+      for a transport that carries credentials or signed requests. `venue` is the
+      `c:runtime_id/0` atom; which option held the URL is the venue's business.
+    * `{:error, {:invalid_range, range}}` — a malformed `:start`/`:end` range (not
+      `DateTime`s, or `:start` not before `:end`). `range` is the argument as given, never a
+      venue-specific shape.
+    * `{:error, {:range_unavailable, timeframe, earliest: DateTime.t() | nil, requested:
+      DateTime.t()}}` — a well-formed range that starts **before what the venue retains** for
+      `timeframe`. `earliest` is the oldest bar the venue serves, or `nil` when the venue
+      does not say. It sits beside `{:error, {:range_too_wide, count}}` (too many bars for one
+      request) and `{:error, :history_truncated}` (the reply may be incomplete); the three
+      are different facts and none stands in for another.
+
+  ### Notices
+
+  A poll route follows the same pairing a stream does. A `:link_down` emitted because a poll
+  read did not answer or crashed is **closed by a `:link_up`**, emitted once (latched) on the
+  first good poll afterwards, carrying the same `details.symbols` shape the venue's streaming
+  `:link_up` uses. A consumer waiting for recovery must not wait forever. See
+  `DpExchange.Core.Notice` for the kind rules (what is `:data_quality`, `:refusal`,
+  `:degraded`, `:credentials_rejected`) and for `details.reason` (an atom or a tagged tuple)
+  versus `details.message` (bounded free text).
 
   ## A library does not start itself
 
@@ -1596,6 +1648,33 @@ defmodule DpExchange.Core.Venue do
   @callback coverage_by_kind(keyword()) :: %{Capabilities.data_kind() => %{symbol() => route()}}
 
   @doc """
+  The symbols the consumer **asked to stream**: what `c:subscribe/2` and `c:update_symbols/2`
+  have set and `c:unsubscribe/2` has not removed.
+
+  Optional — see `@optional_callbacks`. A venue that does not export it has not adopted it,
+  which is not a failure.
+
+  ## Wanted is intent; `c:coverage/1` is evidence
+
+  `c:coverage/1` is what is **observed delivering**, and it deliberately never reports
+  intent. `wanted/1` is the opposite and is allowed to be: it is the consumer's own request,
+  read back. The two together answer the question neither answers alone: a symbol in
+  `wanted/1` and not in `c:coverage/1` is asked for and not arriving, which is the
+  325-subscribed/174-delivering shape (see `c:coverage/1`) made visible without a consumer
+  keeping its own copy of what it asked for.
+
+  Returns a list of canonical symbols or a `MapSet` of them, never a route map, and never
+  including a symbol the consumer did not ask for. With no feed running, or a `:feed` naming
+  a pid on another node, the answer is empty, as `c:coverage/1`'s is. It never shows a
+  venue's own channel or session vocabulary.
+
+  The conformance suite asserts, **only when this callback is exported**, that after a
+  `c:subscribe/2` the Fake's `wanted/1` holds every symbol subscribed and that every symbol
+  `c:coverage/1` reports is also wanted.
+  """
+  @callback wanted(keyword()) :: [symbol()] | MapSet.t(symbol())
+
+  @doc """
   Subscribes the caller to the package's notices — what it is doing and what is going
   wrong with it.
 
@@ -1657,7 +1736,8 @@ defmodule DpExchange.Core.Venue do
   @optional_callbacks [
     list_instruments: 1,
     quantization: 1,
-    coverage_by_kind: 1
+    coverage_by_kind: 1,
+    wanted: 1
   ]
 
   @doc """
@@ -1941,6 +2021,10 @@ defmodule DpExchange.Core.Venue do
           "venue flattens to exactly zero; a venue carrying no positions has nothing to close",
       {:subscribe_notices, 1} =>
         "not load-bearing — losing notices costs visibility into the stream, not the stream",
+      {:wanted, 1} =>
+        "not load-bearing — a consumer can keep its own copy of what it subscribed; " <>
+          "irreplaceable only as the venue's own read-back of the set it is actually " <>
+          "holding, to compare against coverage/1",
       {:coverage_by_kind, 1} =>
         "irreplaceable and not load-bearing — only the venue can say which kind of data is " <>
           "arriving per symbol, and a caller asking only 'is anything arriving' is complete " <>

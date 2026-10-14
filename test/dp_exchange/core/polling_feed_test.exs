@@ -1902,4 +1902,29 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert Process.alive?(feed)
     end
   end
+
+  describe "found 2026-10-14 (per-tick cost)" do
+    test "a fetch task does not inherit the feed's state through its closure" do
+      # `start_fetch/3` built the fetch function INSIDE the task's `fn`, so the closure captured
+      # the whole feed state and spawning copied it (symbols, `scheduled`, the queue) into the
+      # task on every fetch: O(symbols) words per fetch, O(n^2) per cycle. The task's heap is
+      # the observable: it holds what was copied into it. 20_000 symbols copied are well over
+      # 200_000 words; the fetch's own closure is a few dozen.
+      test = self()
+      symbols = for i <- 1..20_000, do: "SYM-#{i}"
+
+      start_feed(
+        symbols: symbols,
+        interval_ms: 60_000,
+        fetch: fn symbol ->
+          {:total_heap_size, words} = Process.info(self(), :total_heap_size)
+          send(test, {:task_heap, words})
+          {:error, {:no_data, symbol}}
+        end
+      )
+
+      assert_receive {:task_heap, words}, 5_000
+      assert words < 50_000
+    end
+  end
 end

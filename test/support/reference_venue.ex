@@ -220,7 +220,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     else
       # A refusal, not an error: this venue does not carry the symbol, and that is a
       # permanent answer rather than something to retry forever.
-      {:refused, :symbol_not_listed}
+      {:refused, :not_listed}
     end
   end
 
@@ -267,7 +267,7 @@ defmodule DpExchange.Core.ReferenceVenue do
         {:error, {:invalid_option, :include_partial, Keyword.get(opts, :include_partial)}}
 
       symbol not in @symbols ->
-        {:refused, :symbol_not_listed}
+        {:refused, :not_listed}
 
       timeframe not in capabilities().historical_timeframes ->
         # Refused rather than served at the nearest width. A missing granularity becoming
@@ -340,7 +340,7 @@ defmodule DpExchange.Core.ReferenceVenue do
          provider: runtime_id()
        }}
     else
-      {:refused, :symbol_not_listed}
+      {:refused, :not_listed}
     end
   end
 
@@ -371,7 +371,7 @@ defmodule DpExchange.Core.ReferenceVenue do
          provider: runtime_id()
        }}
     else
-      {:refused, :symbol_not_listed}
+      {:refused, :not_listed}
     end
   end
 
@@ -501,18 +501,38 @@ defmodule DpExchange.Core.ReferenceVenue do
   # --- account and trading -----------------------------------------------
 
   @impl true
-  def get_balances(_credentials, _opts) do
-    {:ok,
-     [
-       %Types.Balance{
-         currency: "USD",
-         balance: Decimal.new("10000"),
-         available_balance: Decimal.new("9500"),
-         hold: Decimal.new("500"),
-         timestamp: ~U[2026-08-27 12:00:00Z],
-         provider: runtime_id()
-       }
-     ]}
+  def get_balances(credentials, _opts) do
+    with :ok <- check_credentials(credentials) do
+      {:ok, balances()}
+    end
+  end
+
+  # A credential value with surrounding whitespace or a control character is refused before
+  # anything is signed, as `{:invalid_credentials, venue}` (the family convention, see
+  # `DpExchange.Core.Venue`), and never echoed.
+  defp check_credentials(credentials) when is_map(credentials) do
+    padded? =
+      Enum.any?(credentials, fn
+        {_key, value} when is_binary(value) -> String.match?(value, ~r/\A\s|\s\z|[[:cntrl:]]/u)
+        _other -> false
+      end)
+
+    if padded?, do: {:error, {:invalid_credentials, runtime_id()}}, else: :ok
+  end
+
+  defp check_credentials(_credentials), do: :ok
+
+  defp balances do
+    [
+      %Types.Balance{
+        currency: "USD",
+        balance: Decimal.new("10000"),
+        available_balance: Decimal.new("9500"),
+        hold: Decimal.new("500"),
+        timestamp: ~U[2026-08-27 12:00:00Z],
+        provider: runtime_id()
+      }
+    ]
   end
 
   @impl true
@@ -1028,6 +1048,11 @@ defmodule DpExchange.Core.ReferenceVenue do
   # process-scoped isolation in its own assertion 13: two tests subscribing different
   # symbols at the same time must not see each other's coverage.
   defp covered, do: Process.get(@covered_key, MapSet.new())
+
+  # What the caller asked to stream, as opposed to `coverage/1`'s observed delivery. This
+  # reference delivers synchronously on subscribe, so the two sets are the same here.
+  @impl true
+  def wanted(_opts), do: covered()
 
   @impl true
   def subscribe_notices(opts) do

@@ -126,6 +126,48 @@ defmodule DpExchange.Core.FakeInjectionTest do
     end
   end
 
+  describe "a symbol's queue is pruned when its last outcome is popped" do
+    # The agent state is `%{venue => state}`; reading it is the only way to see that an empty
+    # list was not left behind, because `next_outcome/2` answers `:none` either way.
+    defp by_symbol(venue) do
+      {:ok, agent} = DpExchange.Core.Config.find_override(:fake_injection)
+      Agent.get(agent, &Map.fetch!(&1, venue).by_symbol)
+    end
+
+    test "the symbol's entry is removed after its last pop" do
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :one}, {:error, :two}])
+      assert Map.keys(by_symbol(:webull)) == ["BTC-USD"]
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == {:override, {:error, :one}}
+      assert Map.keys(by_symbol(:webull)) == ["BTC-USD"]
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == {:override, {:error, :two}}
+      assert by_symbol(:webull) == %{}
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == :none
+    end
+
+    test "other symbols' queues are untouched by the prune" do
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :btc}])
+      FakeInjection.queue_failures(:webull, "ETH-USD", [{:error, :eth}])
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == {:override, {:error, :btc}}
+      assert by_symbol(:webull) == %{"ETH-USD" => [{:error, :eth}]}
+    end
+
+    test "queuing no outcomes for a symbol leaves no entry" do
+      FakeInjection.queue_failures(:webull, "BTC-USD", [])
+      assert by_symbol(:webull) == %{}
+    end
+
+    test "a symbol can be queued again after it was pruned" do
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :one}])
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == {:override, {:error, :one}}
+
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :again}])
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == {:override, {:error, :again}}
+    end
+  end
+
   describe "isolation between venues" do
     test "queuing for one venue never answers a read for another" do
       FakeInjection.queue_failures(:webull, [{:error, :timeout}])

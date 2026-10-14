@@ -160,6 +160,86 @@ defmodule DpExchange.Core.CanonicalPairTest do
     end
   end
 
+  describe "the upcased alias map is cached, keyed by the caller's own alias map" do
+    defp unique_aliases(code), do: %{"x#{code}" => "btc#{code}"}
+
+    test "a miss stores the upcased map under the raw map, and a hit returns it unchanged" do
+      raw = %{"xbt" => "btc"}
+
+      assert {%{"XBT" => "BTC"}, cache} = CanonicalPair.cache_lookup(%{}, raw, 4)
+      assert cache == %{raw => %{"XBT" => "BTC"}}
+      assert {%{"XBT" => "BTC"}, ^cache} = CanonicalPair.cache_lookup(cache, raw, 4)
+    end
+
+    test "a miss at the limit is answered but not stored" do
+      full = %{%{"a" => "b"} => %{"A" => "B"}}
+      raw = %{"c" => "d"}
+
+      assert {%{"C" => "D"}, ^full} = CanonicalPair.cache_lookup(full, raw, 1)
+    end
+
+    test "the cache key is the alias map's content, so a different map is a different entry" do
+      first = %{"xbt" => "btc"}
+      second = %{"xbt" => "eth"}
+      {_upcased, cache} = CanonicalPair.cache_lookup(%{}, first, 4)
+
+      assert {%{"XBT" => "ETH"}, cache} = CanonicalPair.cache_lookup(cache, second, 4)
+      assert map_size(cache) == 2
+    end
+
+    test "a real call goes through the cache and answers the same as before" do
+      raw = unique_aliases(System.unique_integer([:positive]))
+      mapping = %{sep: "", quotes: ~w(USD), asset_aliases: raw}
+      [{exchange, canonical}] = Map.to_list(raw)
+
+      assert CanonicalPair.to_canonical(mapping, exchange <> "usd") ==
+               String.upcase(canonical) <> "-USD"
+
+      # Twice: the second call is the hit path, whichever way the cache stood.
+      assert CanonicalPair.to_canonical(mapping, exchange <> "usd") ==
+               String.upcase(canonical) <> "-USD"
+    end
+
+    test "two mappings never see each other's aliases" do
+      n = System.unique_integer([:positive])
+      one = %{sep: "", quotes: ~w(USD), asset_aliases: %{"Q#{n}" => "AAA"}}
+      two = %{sep: "", quotes: ~w(USD), asset_aliases: %{"Q#{n}" => "BBB"}}
+
+      assert CanonicalPair.to_canonical(one, "Q#{n}USD") == "AAA-USD"
+      assert CanonicalPair.to_canonical(two, "Q#{n}USD") == "BBB-USD"
+      assert CanonicalPair.to_canonical(one, "Q#{n}USD") == "AAA-USD"
+    end
+
+    test "a mapping with no aliases is never cached" do
+      empty = %{sep: "", quotes: ~w(USD), asset_aliases: %{}}
+
+      assert CanonicalPair.to_canonical(%{sep: "", quotes: ~w(USD)}, "BTCUSD") == "BTC-USD"
+      assert CanonicalPair.to_canonical(empty, "BTCUSD") == "BTC-USD"
+      refute Map.has_key?(CanonicalPair.alias_cache(), %{})
+    end
+
+    test "the cache is bounded, and a mapping past the bound is still answered correctly" do
+      base = System.unique_integer([:positive])
+      limit = CanonicalPair.alias_cache_limit()
+
+      for i <- 1..(limit * 2) do
+        raw = %{"y#{base}_#{i}" => "z#{i}"}
+        mapping = %{sep: "", quotes: ~w(USD), asset_aliases: raw}
+
+        assert CanonicalPair.to_canonical(mapping, "Y#{base}_#{i}USD") == "Z#{i}-USD"
+        assert CanonicalPair.to_exchange(mapping, "Z#{i}-USD") == "Y#{base}_#{i}USD"
+        assert map_size(CanonicalPair.alias_cache()) <= limit
+      end
+    end
+
+    test "a non-map asset_aliases (a keyword list) is still read, and never cached" do
+      mapping = %{sep: "", quotes: ~w(USD), asset_aliases: [{"xk", "kk"}]}
+
+      assert CanonicalPair.to_canonical(mapping, "XKUSD") == "KK-USD"
+      refute Map.has_key?(CanonicalPair.alias_cache(), [{"xk", "kk"}])
+    end
+  end
+
   describe "two exchange codes for one canonical code (found 2026-10-10)" do
     test "to_exchange/2 refuses to choose between them" do
       mapping = %{sep: "", quotes: ~w(USD), asset_aliases: %{"XBT" => "BTC", "XXBT" => "BTC"}}

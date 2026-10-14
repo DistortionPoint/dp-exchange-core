@@ -102,8 +102,13 @@ defmodule DpExchange.Core.FakeInjection do
   @spec queue_failures(atom(), String.t(), [outcome()]) :: :ok
   def queue_failures(venue, symbol, outcomes)
       when is_atom(venue) and is_binary(symbol) and is_list(outcomes) do
-    update(venue, fn state ->
-      %{state | by_symbol: Map.update(state.by_symbol, symbol, outcomes, &(&1 ++ outcomes))}
+    update(venue, fn
+      state when outcomes == [] ->
+        state
+
+      state ->
+        by_symbol = Map.update(state.by_symbol, symbol, outcomes, &(&1 ++ outcomes))
+        %{state | by_symbol: by_symbol}
     end)
   end
 
@@ -149,6 +154,11 @@ defmodule DpExchange.Core.FakeInjection do
     :exit, _reason -> :none
   end
 
+  # A symbol whose queue is empty is removed, not kept as `symbol => []`: the map would grow
+  # by one entry per symbol ever queued for, for the life of the agent.
+  defp pop_symbol(by_symbol, symbol, []), do: Map.delete(by_symbol, symbol)
+  defp pop_symbol(by_symbol, symbol, rest), do: Map.put(by_symbol, symbol, rest)
+
   defp pop_outcome(state, symbol) do
     cond do
       symbol && Map.has_key?(state.symbol_always, symbol) ->
@@ -156,7 +166,7 @@ defmodule DpExchange.Core.FakeInjection do
 
       symbol && Map.get(state.by_symbol, symbol, []) != [] ->
         [outcome | rest] = Map.fetch!(state.by_symbol, symbol)
-        {{:override, outcome}, %{state | by_symbol: Map.put(state.by_symbol, symbol, rest)}}
+        {{:override, outcome}, %{state | by_symbol: pop_symbol(state.by_symbol, symbol, rest)}}
 
       state.global_always != :none ->
         {:some, outcome} = state.global_always

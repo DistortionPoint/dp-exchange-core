@@ -692,7 +692,13 @@ defmodule DpExchange.Core.PollingFeed do
   defp start_next(state), do: state
 
   defp start_fetch(state, job, rest) do
-    task = Task.async(fn -> safely(fetch_fun(state, job)) end)
+    # `fetch_fun/2` runs HERE, in the feed, and the task closes over only the function it
+    # returns. Calling it inside the `fn` captured the whole `state` (symbol set, `last_ok`,
+    # `scheduled`, the job queue) in the closure, and spawning copies a closure's environment
+    # into the new process: every fetch copied O(symbols) words, so a per-symbol feed paid
+    # O(n^2) per cycle for n symbols. The comment on `fetch_fun/2` always said it avoided this.
+    fetch = fetch_fun(state, job)
+    task = Task.async(fn -> safely(fetch) end)
     timer = Process.send_after(self(), {:fetch_timeout, task.ref}, state.fetch_timeout_ms)
 
     # `asked` is the scope at the instant the fetch started: see `apply_flight/3`.

@@ -739,7 +739,7 @@ defmodule DpExchange.Core.HttpClient do
           # changes for the common case.
           total_attempts = Config.opt(opts, :retry_attempts, 3)
           attempts_made = total_attempts - attempts_left + 1
-          backoff_delay = retry_delay * attempts_made
+          backoff_delay = backoff_ms(retry_delay, attempts_made)
           provider = Config.opt(opts, :provider, "unknown")
           # Through `Telemetry.endpoint/1`, not a split on "?": that kept `user:pass@` and a
           # `#fragment`, so a credential in the URL's userinfo reached the warning.
@@ -758,6 +758,20 @@ defmodule DpExchange.Core.HttpClient do
       {:error, reason} ->
         wrap_exchange_error(opts, reason)
     end
+  end
+
+  @doc false
+  # The wait before a retry: `retry_delay` scaled by the attempts already made, plus up to a
+  # quarter of that again at random. **Without jitter every caller that failed together
+  # retried together.** A venue outage or a dropped connection fails every in-flight request
+  # of every feed and task at the same instant, they all slept the identical
+  # `retry_delay * n`, and the whole fleet re-hit the recovering venue in one burst, which is
+  # the request spike a limiter and a venue's own 429 exist to prevent. The jitter only ever
+  # lengthens the wait, so the configured delay stays a floor. Public for its test alone.
+  @spec backoff_ms(non_neg_integer(), pos_integer()) :: non_neg_integer()
+  def backoff_ms(retry_delay, attempts_made) do
+    base = retry_delay * attempts_made
+    base + :rand.uniform(div(base, 4) + 1) - 1
   end
 
   defp rate_limit_refusal(refused, opts) do

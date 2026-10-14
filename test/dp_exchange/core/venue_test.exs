@@ -45,7 +45,12 @@ defmodule DpExchange.Core.VenueTest do
       # publishes it" (coverage_by_kind — see its own moduledoc for the #22 incident).
       # Anything else optional is a venue silently shipping without a capability.
       assert Enum.sort(Venue.behaviour_info(:optional_callbacks)) ==
-               Enum.sort([{:list_instruments, 1}, {:quantization, 1}, {:coverage_by_kind, 1}])
+               Enum.sort([
+                 {:list_instruments, 1},
+                 {:quantization, 1},
+                 {:coverage_by_kind, 1},
+                 {:wanted, 1}
+               ])
     end
 
     test "required_callbacks/0 is derived, not hand-maintained" do
@@ -455,6 +460,60 @@ defmodule DpExchange.Core.VenueTest do
       assert {:error, reason} = Venue.not_supported()
       assert is_atom(reason)
       assert reason == :not_supported
+    end
+  end
+
+  describe "the facade names one reason for each situation (tick AD)" do
+    test "the Venue moduledoc names every agreed tag" do
+      docs = Venue |> Code.fetch_docs() |> elem(4) |> Map.get("en")
+
+      for tag <- [
+            "{:refused, :not_listed}",
+            "{:refused, :no_quote}",
+            "{:refused, {:account_not_found, id}}",
+            "{:error, {:invalid_credentials, venue}}",
+            "{:error, {:insecure_url, venue}}",
+            "{:error, {:invalid_range, range}}",
+            "range_unavailable",
+            "range_too_wide",
+            "history_truncated",
+            "`:link_up`",
+            "`details.message`"
+          ] do
+        assert docs =~ tag, "the Venue moduledoc does not name #{tag}"
+      end
+    end
+
+    test "the Notice moduledoc states the kind rules and the reason/message split" do
+      docs = DpExchange.Core.Notice |> Code.fetch_docs() |> elem(4) |> Map.get("en")
+
+      for phrase <- [
+            "`:data_quality`",
+            "`:refusal`",
+            "`details.symbols`",
+            "`:credentials_rejected`",
+            "closed by",
+            "`details.reason`",
+            "`details.message`"
+          ] do
+        assert docs =~ phrase, "the Notice moduledoc does not say #{phrase}"
+      end
+    end
+
+    test "wanted/1 is an optional callback with a doc, and a typed collection result" do
+      assert {:wanted, 1} in Venue.behaviour_info(:optional_callbacks)
+      refute {:wanted, 1} in Venue.required_callbacks()
+
+      {:docs_v1, _anno, _lang, _fmt, _moduledoc, _meta, entries} = Code.fetch_docs(Venue)
+
+      assert {{:callback, :wanted, 1}, _anno, _sig, %{"en" => doc}, _meta} =
+               List.keyfind(entries, {:callback, :wanted, 1}, 0)
+
+      assert doc =~ "coverage/1"
+    end
+
+    test "wanted/1 is classified as peripheral, with a reason that names a test" do
+      assert Venue.peripheral_endpoints()[{:wanted, 1}] =~ "not load-bearing"
     end
   end
 

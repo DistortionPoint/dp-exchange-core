@@ -12,6 +12,10 @@ defmodule DpExchange.Core.AdapterContractTest do
     symbol_format: DpExchange.Core.ReferenceVenue.SymbolFormat,
     sample_pairs: ~w(BTC-USDC ETH-USD BTC-USDT),
     credentials: %{api_key: "reference", api_secret: "reference"},
+    # Opt-in facts for assertion 41: a symbol the reference does not list, and a credential
+    # padded with whitespace.
+    unlisted_symbol: "NOPE-USD",
+    padded_credentials: %{api_key: " reference\n", api_secret: "reference"},
     # The reference venue lives in `test/support/`, not `lib/` — this package is not
     # itself venue-shaped, and assertion 16 must scope to where the fixture actually
     # is rather than to Core's own many consumer-facing modules.

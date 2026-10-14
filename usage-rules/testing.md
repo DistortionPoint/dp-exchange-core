@@ -13,9 +13,17 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Thirty-nine assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Forty-one assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Two groups are opt-in and skip until you name the fact only your fixture knows.** Group 41
+holds your fake to two family reasons: `unlisted_symbol: "ZZZ-USD"` (a well-formed symbol the
+fake does not list; `get_price/2` for it must be `{:refused, :not_listed}`) and
+`padded_credentials: %{api_key: " key\n", ...}` (a credentials map with surrounding
+whitespace; `get_balances/2` with it must be `{:error, {:invalid_credentials, runtime_id}}`).
+Group 40 needs nothing: when your fake exports the optional `wanted/1`, it must hold every
+symbol subscribed and every symbol `coverage/1` reports.
 
 **`fake:` and `sample_pairs:` are not optional in practice.** Every group that calls an
 active endpoint drives the fake, never the real venue, and several skip or loop zero times

@@ -208,6 +208,38 @@ suite asserts both. **It is not a replacement for `coverage/1`, not a per-channe
 venue's own channel names never cross the facade), and **not a freshness or latency API** —
 it is the same observed-arrival fact, split by `data_kind()`.
 
+### `wanted/1` is what you asked for; `coverage/1` is what arrived
+
+`wanted/1`, where a venue implements it (optional, so check `function_exported?/3`), answers
+the symbols **you asked to stream**: what `subscribe/2` and `update_symbols/2` set and
+`unsubscribe/2` did not remove. It is a list or a `MapSet` of canonical symbols, never a route
+map. It is intent, and `coverage/1` is evidence, so the two together name the gap: a symbol
+in `wanted/1` and not in `coverage/1` is asked for and not arriving. Every symbol in
+`coverage/1` is also in `wanted/1`.
+
+## One reason for each situation
+
+Every venue answers these the same way, from the real path and from its Fake. Match the tag;
+never match a venue's wording. No venue text and no credential rides in a reason.
+
+| Situation | Answer |
+|---|---|
+| a well-formed symbol the venue does not list (any single-symbol read) | `{:refused, :not_listed}` |
+| a listed symbol with no current quote or book | `{:refused, :no_quote}` |
+| the credential does not hold that account | `{:refused, {:account_not_found, id}}` |
+| a crypto pair on an equity-only venue | `{:refused, {:not_an_equity_symbol, symbol}}` (the venue's own tag; still a refusal) |
+| a credential value with surrounding whitespace or control characters | `{:error, {:invalid_credentials, venue}}`, refused before signing, never echoed |
+| a plaintext URL configured for a credentialed transport | `{:error, {:insecure_url, venue}}` |
+| a malformed `:start`/`:end` range | `{:error, {:invalid_range, range}}` |
+| a range starting before what the venue retains | `{:error, {:range_unavailable, timeframe, earliest: dt_or_nil, requested: dt}}` |
+| too many bars for one request | `{:error, {:range_too_wide, count}}` |
+| a reply that may be truncated | `{:error, :history_truncated}` |
+
+`venue` is the venue's `runtime_id/0` atom. A refusal is permanent and an error may be worth
+retrying, so a venue that gives a retryable error for an unlisted symbol or an unknown
+account is not conforming. `:invalid_symbol` is Core's own local tag for a value that is not
+a symbol at all (`nil`, not text, blank), never a venue saying it does not list one.
+
 ## Notices: a prompt to re-read, never the record
 
 `subscribe_notices/1` carries what the *package* says about *itself* — link state
@@ -217,6 +249,17 @@ it is the same observed-arrival fact, split by `data_kind()`.
 payload that did not decode, and a `:degraded` slower path (including a subscriber whose
 mailbox is over its bound and is being skipped). A consumer's handler should ignore a kind
 it does not know.
+
+**Kind rules.** A sequence gap or an undecodable depth or book update is `:data_quality`.
+A venue refusing a subscription is `:refusal`, with `details.symbols` (a list). `:degraded`
+is only for "the venue answers from a slower path". `:credentials_rejected` is emitted
+wherever a stream or a poll is refused for authentication. A poll route's `:link_down` is
+closed by a `:link_up` on the first good poll afterwards, once, with the same
+`details.symbols` shape the streaming `:link_up` uses, so a consumer waiting for recovery
+is not left waiting.
+
+**`details.reason` is an atom or a tagged tuple, never free text.** The venue's own wording
+goes in `details.message`, bounded. Match on `reason`; show `message`.
 
 **Delivery is not guaranteed, and your correctness must not depend on it.** A
 `:catalog_change` notice is a reason to call `list_instruments/1`; it is not the authority
@@ -256,10 +299,10 @@ two different things. **Read [Authentication](usage-rules/auth.md) before writin
 in particular the Schwab section, because its refresh token is one-time use and losing the
 rotated value is unrecoverable without a person.
 
-## The contract is 88 callbacks, and a package implements what its venue serves
+## The contract is 89 callbacks, and a package implements what its venue serves
 
-`Venue.required_callbacks/0` is what the compiler enforces, and it is all but three of them.
-Only `list_instruments/1`, `quantization/1` and `coverage_by_kind/1` are
+`Venue.required_callbacks/0` is what the compiler enforces, and it is all but four of them.
+Only `list_instruments/1`, `quantization/1`, `coverage_by_kind/1` and `wanted/1` are
 `@optional_callbacks` and may be absent. For every other callback a venue that does not serve
 it still defines the function, declares it `:unsupported`, and it **exists and returns
 `{:error, :not_supported}`** — never a raise, never a missing function.

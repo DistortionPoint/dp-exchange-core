@@ -278,9 +278,11 @@ implement 85 real endpoints.** It implements what its venue serves and declares 
 which is exactly the work, because the declaring is where the thinking is. Many callback docs
 in `Core.Venue` begin "Optional"; that means "may be `:unsupported`", not "may be missing".
 
-Only `list_instruments/1`, `quantization/1` and `coverage_by_kind/1` are
-`@optional_callbacks`, and may be left out of your module. `coverage_by_kind/1`
-is not ceremony to skip, it is a callback Core ships **ahead of any venue adopting it**, so
+Only `list_instruments/1`, `quantization/1`, `coverage_by_kind/1` and `wanted/1` are
+`@optional_callbacks`, and may be left out of your module. `wanted/1` is the symbols the
+consumer asked to stream (intent), where `coverage/1` is what is observed delivering; a
+venue that implements it holds both to "everything `coverage/1` reports was asked for".
+`coverage_by_kind/1` is not ceremony to skip, it is a callback Core ships **ahead of any venue adopting it**, so
 that publishing it never breaks a venue package mid-release. Adopt it when you can — see
 `usage-rules/feeds.md` for the incident it exists to make visible — but a package that has not
 yet is not a package doing anything wrong.

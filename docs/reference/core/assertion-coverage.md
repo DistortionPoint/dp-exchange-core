@@ -792,6 +792,25 @@ and both fakes were fixed to take `depth` levels a side before the venues moved 
 registers a subscriber (family convention 9: a registration is not an event); the teeth test
 that asserted it now asserts that no notice arrives and that a bad subscriber is refused.
 
+## Facade consistency, 2026-10-14 — assertions 40 and 41
+
+Tick AD fixed one reason for each of ten situations the five venues answered differently (see
+`DpExchange.Core.Venue`, "One reason for each situation"). Only what a Fake can be driven into
+without fixture knowledge the venues do not yet have is asserted.
+
+| group | claim | skipped when |
+|---|---|---|
+| 40 | when the fake exports the optional `wanted/1`: it is a list or a `MapSet`, holds every symbol subscribed, and holds every symbol `coverage/1` reports | the fake does not export `wanted/1`; no `sample_pairs:` |
+| 41 | `unlisted_symbol:` named, `get_price/2` for it is `{:refused, :not_listed}`; `padded_credentials:` named, `get_balances/2` with them is `{:error, {:invalid_credentials, runtime_id}}` | each option absent (the default), or the endpoint `:unsupported` |
+
+Not asserted, because a Fake cannot be driven into them from the suite: `:no_quote`,
+`{:account_not_found, id}`, `{:insecure_url, venue}` (a configuration, not a call),
+`{:invalid_range, range}` and `{:range_unavailable, ...}` (each needs the venue's retention
+window) and the notice rules D3 to D5 (they need a feed that fails). They are documented on
+`Core.Venue` and `Core.Notice` and held by each venue's own tests. The reference venue now
+answers `:not_listed` (it said `:symbol_not_listed`, a tag no venue used), exports `wanted/1`,
+and refuses a padded credential, so both groups run on Core's own suite.
+
 ## Fourth axis, 2026-10-12 — can the assertion be shown to fail?
 
 The first three axes asked whether an assertion exists, whether it runs on every venue, and

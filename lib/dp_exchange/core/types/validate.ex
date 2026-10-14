@@ -221,11 +221,13 @@ defmodule DpExchange.Core.Types.Validate do
   # it, which is the exact Decimal-raising value this check exists to stop, one container
   # deeper. Found 2026-10-10 by reading the path. Structs other than these two are not
   # descended into: a nested `Types.*` value was built by its own `new/1`.
+  #
+  # **One walk, not two.** The NaN/exponent/NaiveDateTime scan and the float scan used to be
+  # separate traversals, so every field of every constructed struct was walked twice and an
+  # order book's levels twice over. `refuse_value!/4` carries `floats?` and does both in one
+  # pass; it is `false` once the walk enters a plain map (see the float note below).
   defp refuse_unrepresentable!(module, attrs_map) do
-    Enum.each(attrs_map, fn {field, value} ->
-      refuse_value!(module, field, value)
-      refuse_float!(module, field, value)
-    end)
+    Enum.each(attrs_map, fn {field, value} -> refuse_value!(module, field, value, true) end)
   end
 
   # **A float is refused too, but only where no type could mean one.** No `Types.*` field is
@@ -236,22 +238,14 @@ defmodule DpExchange.Core.Types.Validate do
   # tuples (the `{price, quantity}` levels of an order book). NOT inside plain maps: the
   # free-form `term()` payloads (`details`, `line_items`, `metrics`) are the venue's own and
   # may hold any JSON value.
-  defp refuse_float!(module, field, value) when is_float(value) do
+  defp refuse_value!(module, field, value, true) when is_float(value) do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} holds float #{inspect(value)} " <>
             "— every number in this family is a Decimal (or an integer), and a float has " <>
             "already lost digits; decode the venue's number as a Decimal"
   end
 
-  defp refuse_float!(module, field, values) when is_list(values),
-    do: Enum.each(values, &refuse_float!(module, field, &1))
-
-  defp refuse_float!(module, field, value) when is_tuple(value),
-    do: value |> Tuple.to_list() |> Enum.each(&refuse_float!(module, field, &1))
-
-  defp refuse_float!(_module, _field, _value), do: :ok
-
-  defp refuse_value!(module, field, %Decimal{coef: coef}) when coef in [:NaN, :inf] do
+  defp refuse_value!(module, field, %Decimal{coef: coef}, _floats?) when coef in [:NaN, :inf] do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(coef)} — not a " <>
             "number any field of this type can carry"
@@ -264,48 +258,58 @@ defmodule DpExchange.Core.Types.Validate do
   # `VolumeProfile.point_of_control/1` build a number of hundreds of megabytes, stalling or
   # killing the CONSUMER's process, with no error naming the venue. No real quantity needs
   # more than a few dozen digits either side of the point, so the bound is generous.
-  defp refuse_value!(module, field, %Decimal{exp: exp}) when abs(exp) > @max_decimal_exponent do
+  defp refuse_value!(module, field, %Decimal{exp: exp}, _floats?)
+       when abs(exp) > @max_decimal_exponent do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} is a Decimal with exponent " <>
             "#{exp} — outside +/-#{@max_decimal_exponent}, which no real quantity needs and " <>
             "which makes later arithmetic allocate a number of that many digits"
   end
 
-  defp refuse_value!(module, field, %NaiveDateTime{}) do
+  defp refuse_value!(module, field, %NaiveDateTime{}, _floats?) do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} is a NaiveDateTime — every " <>
             "time in this family is a DateTime, and a time with no zone cannot be placed"
   end
 
-  defp refuse_value!(module, field, values) when is_list(values),
-    do: refuse_list!(module, field, values)
+  defp refuse_value!(module, field, values, floats?) when is_list(values),
+    do: refuse_list!(module, field, values, floats?)
 
-  defp refuse_value!(module, field, value) when is_tuple(value),
-    do: value |> Tuple.to_list() |> Enum.each(&refuse_value!(module, field, &1))
+  defp refuse_value!(module, field, value, floats?) when is_tuple(value),
+    do: refuse_tuple!(module, field, value, floats?, tuple_size(value))
 
   # Plain maps too, keys and values: `VolumeProfile.buy_at_price`, `OptionChain.expiries`
   # (Decimal strikes as keys) and `StakingBalance.by_provider` carry Decimals inside maps,
   # and a NaN there passed the scan and then raised in `Decimal.compare/2` or `add/2` inside
   # the consumer (`VolumeProfile.point_of_control/1`). Structs are skipped, as above.
-  defp refuse_value!(module, field, value) when is_map(value) and not is_struct(value) do
+  defp refuse_value!(module, field, value, _floats?)
+       when is_map(value) and not is_struct(value) do
     Enum.each(value, fn {key, inner} ->
-      refuse_value!(module, field, key)
-      refuse_value!(module, field, inner)
+      refuse_value!(module, field, key, false)
+      refuse_value!(module, field, inner, false)
     end)
   end
 
-  defp refuse_value!(_module, _field, _value), do: :ok
+  defp refuse_value!(_module, _field, _value, _floats?), do: :ok
+
+  # Elements by index: no `Tuple.to_list/1` copy for each `{price, quantity}` level.
+  defp refuse_tuple!(_module, _field, _tuple, _floats?, 0), do: :ok
+
+  defp refuse_tuple!(module, field, tuple, floats?, index) do
+    refuse_value!(module, field, elem(tuple, index - 1), floats?)
+    refuse_tuple!(module, field, tuple, floats?, index - 1)
+  end
 
   # Walked by hand because `Enum.each/2` raises `FunctionClauseError` on an improper list,
   # which names Enumerable and not the field a decoder built the tail of.
-  defp refuse_list!(_module, _field, []), do: :ok
+  defp refuse_list!(_module, _field, [], _floats?), do: :ok
 
-  defp refuse_list!(module, field, [head | tail]) do
-    refuse_value!(module, field, head)
-    refuse_list!(module, field, tail)
+  defp refuse_list!(module, field, [head | tail], floats?) do
+    refuse_value!(module, field, head, floats?)
+    refuse_list!(module, field, tail, floats?)
   end
 
-  defp refuse_list!(module, field, _improper_tail) do
+  defp refuse_list!(module, field, _improper_tail, _floats?) do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} holds an improper list — every " <>
             "list in this family is proper, and a tail that is not a list cannot be scanned"

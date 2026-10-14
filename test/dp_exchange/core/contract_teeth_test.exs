@@ -611,7 +611,7 @@ defmodule DpExchange.Core.ContractTeethTest do
     test "it distinguishes a refusal from an error" do
       # A symbol the venue does not carry is permanent; an unsupported timeframe is a
       # caller mistake. Collapsing them makes a delisting look like a retryable blip.
-      assert {:refused, :symbol_not_listed} = ReferenceVenue.get_price("NOPE-USD", [])
+      assert {:refused, :not_listed} = ReferenceVenue.get_price("NOPE-USD", [])
 
       assert {:error, {:unsupported_timeframe, "1w"}} =
                ReferenceVenue.get_historical_prices("BTC-USD", "1w", [], [])
