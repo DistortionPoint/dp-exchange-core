@@ -55,8 +55,11 @@ names it) but is a REFUSAL: Schwab's `{:error, {:not_an_equity_symbol, s}}` beco
 - Webull: already `{:refused, :no_quote}`.
 - Schwab `get_top_of_book` with no book: `{:error, :no_top_of_book}` (its own doc already said
   "Refused") becomes `{:refused, :no_quote}`.
-- Gemini `get_price` "'X' does not have available data yet" (`{:unknown_reason, msg}`) becomes
-  `{:refused, :no_quote}`.
+- ~~Gemini `get_price` "'X' does not have available data yet" (`{:unknown_reason, msg}`)
+  becomes `{:refused, :no_quote}`.~~ **Corrected the same day:** that text was measured live
+  (2026-09-06) for a symbol that does not exist, so it names an unlisted symbol and is
+  `{:refused, :not_listed}` (D1). Shipped wrongly in Gemini 0.2.139; conformance group 41,
+  once Gemini opted in, failed on it, and the next release corrects it.
 
 ### D3. A poll-route `:link_down` is closed by a `:link_up`
 
