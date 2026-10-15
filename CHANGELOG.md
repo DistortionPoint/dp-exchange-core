@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.96] - 2026-10-15
+
 - **Reference venue honours MD4 (tick AF).** The worked example every venue author copies
   accepted and ignored `:limit` on `get_historical_prices/4`, and `:since`/`:limit` on
   `get_trades/2`, which `Core.Venue` says are honoured or refused, never ignored. Both now
