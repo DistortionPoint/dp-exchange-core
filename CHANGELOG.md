@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.95] - 2026-10-15
+
 - **`HttpClient` `:max_retry_after_s` is validated before anything is sent (tick AE).** It
   was read only on a 429 and fed to `min/2`, so `"30"` or `:infinity` was silently ignored
   and `-5` became a negative wait handed to the limiter. A non-integer or negative value now
