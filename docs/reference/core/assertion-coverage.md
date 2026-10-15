@@ -2,7 +2,7 @@
 
 **Audited 2026-09-08. Revised 2026-09-11 and 2026-09-12 — see "Second axis", "The sweep
 completed", and the two closures below.**
-`Core.AdapterContract`'s 19 assertion groups (now **39** — see the "Gap closed" sections below) have
+`Core.AdapterContract`'s 19 assertion groups (now **41** — see the "Gap closed" sections below) have
 each caught real, shipped defects within minutes of existing. Nobody had asked the inverse
 question: which parts of `Core.Venue`, `Core.Capabilities`, `Core.Notice` and
 `Core.PollingFeed` have **no** assertion touching them at all. This is that map, done once
@@ -772,9 +772,9 @@ decision a public function in `Core.AdapterContract` shown to fail in `contract_
 | group | claim | skipped when |
 |---|---|---|
 | 36 | a non-boolean `include_partial` is `{:invalid_option, :include_partial, v}` | `get_historical_prices/4` `:unsupported`, or no timeframe declared |
-| 37 | candles strictly oldest first and aligned (strict UTC grid for crypto-only venues, and widths of 30m and under or a day and over; 30-minute grid for wider intraday widths elsewhere); `[start, end)` re-asked from the fake's own bars | `:unsupported`; an empty answer; a refused range (not evidence) |
+| 37 | candles strictly oldest first and aligned (strict UTC grid for crypto-only venues, and widths of 30m and under or a day and over; 30-minute grid for wider intraday widths elsewhere); `[start, end)` re-asked from the fake's own bars | `:unsupported`; a refused range probe (not evidence). **Since tick AE the unranged ask must return bars**: a refusal, a raise or an empty answer fails the group (`candle_ask_fault/1`) instead of skipping it |
 | 38 | `depth: 1` returns at most one level a side; `limit: 1` succeeds, is `{:unsupported_option, :limit}` or `{:invalid_option, :limit, v}`, never raises or another error | `get_order_book/2` `:unsupported`; no judgement when the baseline book is not a success |
-| 39 | Quote/Trade/Candle prices > 0; TopOfBook bid/ask nil or > 0; book level price and size > 0, sides best first | each endpoint `:unsupported`; an answer that is not `{:ok, _}` |
+| 39 | Quote/Trade/Candle prices > 0; TopOfBook bid/ask nil or > 0; book level price and size > 0, sides best first | each endpoint `:unsupported`; an answer that is not `{:ok, _}` for that endpoint. **Since tick AE at least one active endpoint must have been inspected** (`nothing_examined?/2`): a fake refusing all of them fails the group |
 
 Judgement calls: 38 does **not** require `:limit` to be refused. Core lets a venue ignore an
 option it has no use for, and the suite cannot tell a natively honoured `:limit` from an ignored
@@ -810,6 +810,26 @@ window) and the notice rules D3 to D5 (they need a feed that fails). They are do
 `Core.Venue` and `Core.Notice` and held by each venue's own tests. The reference venue now
 answers `:not_listed` (it said `:symbol_not_listed`, a tag no venue used), exports `wanted/1`,
 and refuses a padded credential, so both groups run on Core's own suite.
+
+## Fifth axis, tick AE (2026-10-15) — three groups that could pass having read nothing
+
+Re-reading every group for the question the third axis asked (can it fail?) found three more
+that could pass vacuously, and one opt-in check that skipped on the wrong evidence:
+
+- **7 (purity)** read `lib/<app>/ebin/*.beam` and judged what it found. A build path with no
+  beam left the list empty and `foreign_modules/3` answered `[]`. It now fails on an empty
+  scan, as 16, 18 and 19 already did.
+- **37 (candles)** skipped the whole group when the unranged ask was refused or empty, so a
+  fake missing an `endpoint_opts:` entry, or with no bar in its fixture, passed with no candle
+  checked. `candle_ask_fault/1` now fails it. Range probes may still be refused.
+- **39 (positive values)** skipped each refused endpoint. A fake refusing all of them passed.
+  `nothing_examined?/2` now requires one inspected answer when any endpoint is active.
+- **41 (family reasons)** treated a `nil` answer as "did not opt in" even when the option was
+  named, so a fake answering `nil` passed. The answer is now stood in for by `:nil_answer`.
+
+Still skipped by design, and now stated: group 4 does not exist for a venue that names no
+`symbol_format:` (the module is not generated), and `sample_pairs: []` is refused once, by
+group 1, rather than in each group.
 
 ## Fourth axis, 2026-10-12 — can the assertion be shown to fail?
 

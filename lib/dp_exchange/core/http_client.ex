@@ -152,7 +152,13 @@ defmodule DpExchange.Core.HttpClient do
     call. A write with an idempotency key, such as a `client_order_id`, may keep the default.
     A write without one is sent with `retry_attempts: 1`. Every venue in the family does this
     for its money-moving writes.
-  - `:retry_delay` - Base delay between retries in milliseconds (default: 1000)
+  - `:retry_delay` - Base delay between retries in milliseconds (default: 1000). The wait
+    before retry `n` is `retry_delay * n` plus up to a quarter of that again at random, so it is
+    never shorter than the configured delay. What is retried: a transport failure, a 5xx and an
+    unexpected status. What is not: a 4xx (permanent), a 3xx (`redirect` is off, so the same
+    request gets the same answer), a 429 (the venue's `Retry-After` holds the bucket and the
+    error returns at once), a body over `:max_body_bytes`, and a request that could not be
+    signed.
   - `:log_requests` - Whether to log requests (default: true)
   - `:provider` - Provider name for rate limiting (required for rate limiting)
   - `:rate_limit_per_endpoint` - Also meter this request in a bucket of its own endpoint,
@@ -163,7 +169,8 @@ defmodule DpExchange.Core.HttpClient do
     empty (default: `false`). The wait is bounded by `:timeout`.
   - `:weight` - Tokens this request costs (default: 1)
   - `:max_retry_after_s` - Ceiling, in seconds, on a venue's `Retry-After` that is
-    honoured (default: 600)
+    honoured (default: 600). A non-negative integer, or `ArgumentError` before anything is
+    sent.
   - `:account_id`, `:user_id`, `:operation` - Forwarded to the limiter, which may use them
     (optional, no defaults). `DefaultRateLimiter` ignores all three: the ceiling is per
     venue, never per key.
@@ -196,12 +203,15 @@ defmodule DpExchange.Core.HttpClient do
   @typedoc """
   Why a request did not produce a response.
 
-  Two shapes, and the spec used to name only the first — which made dialyzer tell every
-  consumer that its handling of the other was unreachable dead code.
+  Three shapes, and the spec used to name only the first — which made dialyzer tell every
+  consumer that its handling of the others was unreachable dead code.
 
     * `String.t()` — a plain message, when no `:provider` was given.
-    * `{:exchange_error, provider, reason}` — the same message tagged with the venue,
-      which is what a caller gets whenever it passes `:provider`, i.e. almost always.
+    * `{:response_too_large, limit}` — the body passed `:max_body_bytes`, when no `:provider`
+      was given.
+    * `{:exchange_error, provider, reason}` — the same message (or `{:response_too_large,
+      limit}`) tagged with the venue, which is what a caller gets whenever it passes
+      `:provider`, i.e. almost always.
 
   ## Rate limiting arrives as a two-element error, not a three-element one
 
@@ -269,6 +279,8 @@ defmodule DpExchange.Core.HttpClient do
       raise ArgumentError,
             ":max_body_bytes must be a positive integer of bytes, got #{inspect(max_body_bytes)}"
     end
+
+    max_retry_after_s!(opts)
 
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
     # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
@@ -1102,12 +1114,28 @@ defmodule DpExchange.Core.HttpClient do
   # The longest venue `Retry-After` honoured, in seconds — see `parse_retry_after_header/2`.
   @max_retry_after_s 600
 
+  # **Refused in the caller, before anything is sent.** It was read only on a 429 and fed to
+  # `min/2`, so a mistyped ceiling was never refused: `"30"` and `:infinity` sort above every
+  # integer and were silently ignored (the venue's wait honoured uncapped up to 600 s), and
+  # `-5` became a negative wait handed to the limiter.
+  defp max_retry_after_s!(opts) do
+    case Config.opt(opts, :max_retry_after_s, @max_retry_after_s) do
+      ceiling when is_integer(ceiling) and ceiling >= 0 ->
+        ceiling
+
+      other ->
+        raise ArgumentError,
+              ":max_retry_after_s must be a non-negative integer of seconds, got " <>
+                inspect(other)
+    end
+  end
+
   defp handle_rate_limit(response, method, url, opts) do
     # Parse rate limit headers to get more accurate retry timing
     retry_after =
       response.headers
       |> parse_retry_after_header(DateTime.utc_now())
-      |> min(Config.opt(opts, :max_retry_after_s, @max_retry_after_s))
+      |> min(max_retry_after_s!(opts))
 
     provider = Config.opt(opts, :provider, "unknown")
     short_url = Telemetry.endpoint(url) |> String.slice(0, 80)

@@ -1016,6 +1016,23 @@ defmodule DpExchange.Core.HttpClientTest do
       assert message =~ "retry after 30s"
     end
 
+    test "a malformed :max_retry_after_s is refused before anything is sent" do
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Plug.Conn.send_resp(conn, 429, "")
+      end
+
+      for bad <- ["30", -5, :infinity, 1.5] do
+        assert_raise ArgumentError, ~r/:max_retry_after_s/, fn ->
+          get(plug: plug, max_retry_after_s: bad)
+        end
+      end
+
+      assert :counters.get(counter, 1) == 0
+    end
+
     test "a 3xx is not retried — the same request gets the same redirect" do
       counter = :counters.new(1, [])
 

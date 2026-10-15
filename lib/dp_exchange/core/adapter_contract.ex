@@ -28,6 +28,22 @@ defmodule DpExchange.Core.AdapterContract do
           credentials: %{api_key: "test", api_secret: "test"}
       end
 
+  ## Options of `use`
+
+    * `:venue` - **required**, the facade module.
+    * `:fake` and `:sample_pairs` - not optional in practice: group 1 fails without them.
+    * `:symbol_format` - the `SymbolNormalizer` module; group 4 is generated only when named.
+    * `:credentials` - the credentials map the calls carry (default `%{}`).
+    * `:endpoint_opts` - `%{{name, arity} => keyword()}`, what the fake needs to answer.
+    * `:endpoint_symbols` - `%{{name, arity} => symbol}` for an endpoint narrower than
+      `:sample_pairs`.
+    * `:order_args` - `%{order_request | order_requests | order_changes => value}`; an unknown
+      key raises at compile time.
+    * `:absent_feed_opts` - options pointing the streaming calls at a feed nothing registered
+      (default `[feed: :dp_exchange_contract_absent_feed]`).
+    * `:package_root` - where groups 16, 18 and 19 scan compiled modules (default `"lib"`).
+    * `:unlisted_symbol` and `:padded_credentials` - the opt-in facts of group 41.
+
   ## What it asserts, and what it deliberately does not
 
   Forty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
@@ -875,6 +891,27 @@ defmodule DpExchange.Core.AdapterContract do
     (start != nil and DateTime.compare(at, start) == :lt) or
       (finish != nil and DateTime.compare(at, finish) != :lt)
   end
+
+  @doc """
+  Whether the unbounded candle ask of assertion 37 gave the group anything to check, or
+  `{:no_candles, answer}`.
+
+  Only a non-empty `{:ok, candles}` is something to check. A refusal, a raise or an empty
+  list used to skip the whole group, which then reported green having examined no candle.
+  """
+  @spec candle_ask_fault(term()) :: nil | {:no_candles, term()}
+  def candle_ask_fault({:ok, [_first | _rest]}), do: nil
+  def candle_ask_fault(answer), do: {:no_candles, answer}
+
+  @doc """
+  Whether assertion 39 examined nothing: `endpoints` were active but none of their answers
+  was checked (`examined` holds one boolean per endpoint, `true` when a value was inspected).
+
+  No active endpoint at all is not a failure (the venue declares them all `:unsupported`).
+  """
+  @spec nothing_examined?([term()], [boolean()]) :: boolean()
+  def nothing_examined?([], _examined), do: false
+  def nothing_examined?(_endpoints, examined), do: true not in examined
 
   @doc "The `:depth` assertion 38 asks for: one level per side."
   @spec book_probe_depth() :: pos_integer()
@@ -2444,7 +2481,9 @@ defmodule DpExchange.Core.AdapterContract do
 
           if @fake && @unlisted_symbol && Capabilities.active?(caps, {:get_price, 2}) do
             args = List.replace_at(endpoint_args(:get_price, 2), 0, @unlisted_symbol)
-            answer = call_on(@fake, {:get_price, 2}, args)
+            # A `nil` answer is not "did not opt in" here (the option is named): it is an
+            # answer that is not `{:refused, :not_listed}`, so it must reach the fault.
+            answer = call_on(@fake, {:get_price, 2}, args) || :nil_answer
 
             assert DpExchange.Core.AdapterContract.family_reason_fault(
                      answer,
@@ -2467,7 +2506,7 @@ defmodule DpExchange.Core.AdapterContract do
               |> List.replace_at(0, @padded_credentials)
               |> List.update_at(-1, &Keyword.put(&1, :credentials, @padded_credentials))
 
-            answer = call_on(@fake, {:get_balances, 2}, args)
+            answer = call_on(@fake, {:get_balances, 2}, args) || :nil_answer
 
             assert DpExchange.Core.AdapterContract.family_reason_fault(
                      nil,
@@ -2608,6 +2647,13 @@ defmodule DpExchange.Core.AdapterContract do
               Enum.map(imports, fn {module, _fun, _arity} -> module end)
             end)
             |> Enum.uniq()
+
+          # An empty scan is not a clean one: no beam under the build path (a wrong build
+          # path, a package not compiled here) used to leave `linked` empty and `foreign`
+          # trivially `[]`, so purity passed having read nothing.
+          assert linked != [],
+                 "no compiled #{app} module imports anything under " <>
+                   "#{Mix.Project.build_path()}/lib/#{app}/ebin, so purity examined nothing"
 
           foreign =
             DpExchange.Core.AdapterContract.foreign_modules(
@@ -3870,22 +3916,44 @@ defmodule DpExchange.Core.AdapterContract do
       end
 
       defp assert_candle_conventions(timeframe) do
-        with {:ok, [_first | _rest] = candles} <- ask_candles(timeframe, []) do
-          fault =
-            DpExchange.Core.AdapterContract.candle_series_fault(
-              candles,
-              timeframe,
-              @venue.asset_classes()
+        # **The unbounded ask must return bars.** A refusal or an empty list used to skip the
+        # whole group (`with` fell through), so a fake missing an `endpoint_opts:` entry, or
+        # one with no fixture rows, passed having checked no candle. The range asks below
+        # may still be refused (a window with no data is not evidence); this one may not.
+        answer = ask_candles(timeframe, [])
+
+        case DpExchange.Core.AdapterContract.candle_ask_fault(answer) do
+          nil ->
+            {:ok, candles} = answer
+            assert_candle_series(candles, timeframe)
+
+          {:no_candles, other} ->
+            flunk(
+              "capabilities/0 declares get_historical_prices/4 active, but asking the fake " <>
+                "for #{inspect(timeframe)} with no range answered #{inspect(other, limit: 8)}, " <>
+                "not a non-empty `{:ok, candles}`, so no candle was checked and this group " <>
+                "passes for having looked at nothing. Declare what the fake needs in " <>
+                "`endpoint_opts:`, give its fixture a bar, or declare the endpoint " <>
+                "`:unsupported`."
             )
-
-          assert fault == nil,
-                 "get_historical_prices/4 candles must be oldest first and aligned to " <>
-                   "#{timeframe} (Core.Timeframe.aligned?/2; a session-traded venue needs " <>
-                   "30-minute alignment for a wider intraday width). Got #{inspect(fault)}"
-
-          probes = DpExchange.Core.AdapterContract.candle_range_probes(candles)
-          for {range, must} <- probes, do: assert_range_kept(timeframe, range, must)
         end
+      end
+
+      defp assert_candle_series(candles, timeframe) do
+        fault =
+          DpExchange.Core.AdapterContract.candle_series_fault(
+            candles,
+            timeframe,
+            @venue.asset_classes()
+          )
+
+        assert fault == nil,
+               "get_historical_prices/4 candles must be oldest first and aligned to " <>
+                 "#{timeframe} (Core.Timeframe.aligned?/2; a session-traded venue needs " <>
+                 "30-minute alignment for a wider intraday width). Got #{inspect(fault)}"
+
+        probes = DpExchange.Core.AdapterContract.candle_range_probes(candles)
+        for {range, must} <- probes, do: assert_range_kept(timeframe, range, must)
       end
 
       defp assert_range_kept(timeframe, range, must_include) do
@@ -3945,7 +4013,17 @@ defmodule DpExchange.Core.AdapterContract do
         # answers; an answer that is not a success is skipped.
         test "every price, size and level the fake returns" do
           if @fake do
-            for endpoint <- positive_endpoints(), do: assert_positive(endpoint)
+            endpoints = positive_endpoints()
+            examined = for endpoint <- endpoints, do: assert_positive(endpoint)
+
+            # **A fake that refuses every one of these examined nothing.** Each refusal is
+            # skipped above (a refused item is not evidence), so a fake missing an
+            # `endpoint_opts:` entry passed the group having looked at no value at all.
+            refute DpExchange.Core.AdapterContract.nothing_examined?(endpoints, examined),
+                   "every active price endpoint (#{inspect(endpoints)}) was refused or " <>
+                     "failed, so no price, size or level was checked and this group passes " <>
+                     "for having looked at nothing. Declare what the fake needs in " <>
+                     "`endpoint_opts:`, or declare the endpoints `:unsupported`."
           end
         end
       end
@@ -3969,12 +4047,19 @@ defmodule DpExchange.Core.AdapterContract do
 
       defp positive_args({name, arity}), do: endpoint_args(name, arity)
 
+      # Answers whether it examined a value, so the test can refuse a run that examined none.
       defp assert_positive({name, _arity} = endpoint) do
-        with {:ok, value} <- call_on(@fake, endpoint, positive_args(endpoint)) do
-          fault = DpExchange.Core.AdapterContract.market_value_fault(value)
+        case call_on(@fake, endpoint, positive_args(endpoint)) do
+          {:ok, value} ->
+            fault = DpExchange.Core.AdapterContract.market_value_fault(value)
 
-          assert fault == nil,
-                 "#{name} returned a value that breaks the price conventions: #{inspect(fault)}"
+            assert fault == nil,
+                   "#{name} returned a value that breaks the price conventions: #{inspect(fault)}"
+
+            true
+
+          _not_a_success ->
+            false
         end
       end
     end

@@ -17,13 +17,27 @@ Forty-one assertion groups, listed in `DpExchange.Core.AdapterContract.assertion
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
-**Two groups are opt-in and skip until you name the fact only your fixture knows.** Group 41
-holds your fake to two family reasons: `unlisted_symbol: "ZZZ-USD"` (a well-formed symbol the
+**Two checks in group 41 are opt-in and skip until you name the fact only your fixture
+knows.** Group 41 holds your fake to two family reasons: `unlisted_symbol: "ZZZ-USD"` (a well-formed symbol the
 fake does not list; `get_price/2` for it must be `{:refused, :not_listed}`) and
 `padded_credentials: %{api_key: " key\n", ...}` (a credentials map with surrounding
 whitespace; `get_balances/2` with it must be `{:error, {:invalid_credentials, runtime_id}}`).
 Group 40 needs nothing: when your fake exports the optional `wanted/1`, it must hold every
 symbol subscribed and every symbol `coverage/1` reports.
+
+**The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
+(`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an
+account), `endpoint_symbols:` (`%{{name, arity} => symbol}` for an endpoint narrower than
+`sample_pairs:`), `order_args:` (`%{order_request | order_requests | order_changes => value}`,
+your venue's order rules), `absent_feed_opts:` (default `[feed: :dp_exchange_contract_absent_feed]`,
+points the streaming calls at a feed nothing registered), `package_root:` (default `"lib"`,
+where groups 16, 18 and 19 scan your compiled modules; an empty scan fails them), and
+`unlisted_symbol:` / `padded_credentials:` for group 41.
+
+**A fake that refuses is not a pass.** Groups 5, 24, 25, 31, 37 and 39 fail when a fake
+refuses every endpoint they would have inspected (a missing `endpoint_opts:` entry, or a
+fixture with no bar, no balance or no book level), rather than skipping. Group 37 needs the
+unranged `get_historical_prices/4` to return at least one bar.
 
 **`fake:` and `sample_pairs:` are not optional in practice.** Every group that calls an
 active endpoint drives the fake, never the real venue, and several skip or loop zero times

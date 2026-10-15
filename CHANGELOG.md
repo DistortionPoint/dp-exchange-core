@@ -21,6 +21,27 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`HttpClient` `:max_retry_after_s` is validated before anything is sent (tick AE).** It
+  was read only on a 429 and fed to `min/2`, so `"30"` or `:infinity` was silently ignored
+  and `-5` became a negative wait handed to the limiter. A non-integer or negative value now
+  raises `ArgumentError` in the caller.
+- **Conformance suite (tick AE): three groups that could pass having examined nothing now
+  fail.** A venue's fake that was passing them vacuously will fail on update until its
+  fixture is fixed.
+  - Group 7 (purity) fails when no compiled module of the package is found under the build
+    path, instead of reporting an empty set of foreign modules as clean.
+  - Group 37 (candles) fails when the unranged `get_historical_prices/4` ask is refused,
+    raises or returns no bars, instead of skipping the group (`candle_ask_fault/1`).
+  - Group 39 (positive values) fails when the venue has active price endpoints and the fake
+    refused every one of them (`nothing_examined?/2`).
+  - Group 41: a `nil` answer to a named `unlisted_symbol:` or `padded_credentials:` is now a
+    fault, not "did not opt in".
+- Docs: `AdapterContract` moduledoc and `usage-rules/testing.md` list every `use` option
+  (`endpoint_symbols:` and `package_root:` were undocumented); `assertion-coverage.md` now
+  says 41 groups and records the "fifth axis"; `HttpClient`'s `:retry_delay` documents the
+  backoff and exactly what is and is not retried, and `request_error/0` names its third shape,
+  `{:response_too_large, limit}`.
+
 ## [0.3.94] - 2026-10-14
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

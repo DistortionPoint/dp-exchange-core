@@ -96,6 +96,34 @@ defmodule DpExchange.Core.WantedConformanceTest do
     end
   end
 
+  describe "candle_ask_fault/1 (assertion 37)" do
+    test "only a non-empty success gives the group something to check" do
+      assert AdapterContract.candle_ask_fault({:ok, [:a_bar]}) == nil
+      assert AdapterContract.candle_ask_fault({:ok, []}) == {:no_candles, {:ok, []}}
+      assert AdapterContract.candle_ask_fault({:error, :x}) == {:no_candles, {:error, :x}}
+      assert AdapterContract.candle_ask_fault({:refused, :y}) == {:no_candles, {:refused, :y}}
+
+      assert AdapterContract.candle_ask_fault({:raised, %RuntimeError{}}) ==
+               {:no_candles, {:raised, %RuntimeError{}}}
+    end
+  end
+
+  describe "nothing_examined?/2 (assertion 39)" do
+    test "active endpoints none of which was inspected examined nothing" do
+      two = [{:get_price, 2}, {:get_trades, 2}]
+
+      assert AdapterContract.nothing_examined?([{:get_price, 2}], [false])
+      assert AdapterContract.nothing_examined?(two, [false, false])
+    end
+
+    test "one inspected answer is enough, and no active endpoint is not a failure" do
+      two = [{:get_price, 2}, {:get_trades, 2}]
+
+      refute AdapterContract.nothing_examined?(two, [false, true])
+      refute AdapterContract.nothing_examined?([], [])
+    end
+  end
+
   describe "family_reason_fault/3 (assertion 41)" do
     test "an unlisted symbol must be refused :not_listed" do
       assert AdapterContract.family_reason_fault({:refused, :not_listed}, nil, :v) == nil
@@ -122,6 +150,14 @@ defmodule DpExchange.Core.WantedConformanceTest do
 
     test "an option the venue did not opt in to is not judged" do
       assert AdapterContract.family_reason_fault(nil, nil, :v) == nil
+    end
+
+    test "a named option answered with the nil-answer stand-in is faulted, not skipped" do
+      assert AdapterContract.family_reason_fault(:nil_answer, nil, :v) ==
+               {:unlisted_symbol, :nil_answer}
+
+      assert AdapterContract.family_reason_fault(nil, :nil_answer, :v) ==
+               {:padded_credentials, :nil_answer}
     end
 
     test "the reference venue gives both reasons" do
