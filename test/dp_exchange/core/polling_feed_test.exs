@@ -166,6 +166,26 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
     end
 
+    test "callbacks and scope of the wrong shape are refused at start, naming the option" do
+      Process.flag(:trap_exit, true)
+      base = [sink: sink_to_self(), fetch: &event/1]
+
+      for {key, bad} <- [
+            on_refusal: "nope",
+            on_refusal: fn _one -> :ok end,
+            on_notice: :nope,
+            on_notice: fn _a, _b -> :ok end,
+            symbols: "BTC-USD",
+            symbols: 5,
+            symbols: [:atom_symbol],
+            symbols: [1],
+            symbols: %{"A" => 1}
+          ] do
+        assert {:error, {:invalid_option, ^key, ^bad}} =
+                 PollingFeed.start_link(Keyword.put(base, key, bad))
+      end
+    end
+
     test "a start delay of zero is still valid" do
       pid = start_feed(fetch: fn s -> {:ok, event(s)} end, symbols: ["A"], start_delay_ms: 0)
       assert Process.alive?(pid)
@@ -588,10 +608,56 @@ defmodule DpExchange.Core.PollingFeedTest do
       # The timer armed for "A" fires after "A" has left; forgetting it is what lets the
       # re-add below schedule "A" once, instead of finding it counted as already scheduled.
       PollingFeed.update_symbols(feed, [])
-      send(feed, {:poll, "A"})
+      send(feed, {:poll, "A", make_ref()})
       PollingFeed.update_symbols(feed, ~w(A))
 
       assert_receive {:fetched, "A"}, 5_000
+    end
+
+    test "a symbol that leaves scope has its pending timer cancelled, not left to fire" do
+      feed =
+        start_feed(
+          symbols: ~w(A B),
+          interval_ms: 60_000,
+          start_delay_ms: 60_000,
+          fetch: fn symbol -> {:ok, event(symbol)} end
+        )
+
+      assert %{timers: %{"A" => {_token, timer_a}, "B" => _timer_b}} = :sys.get_state(feed)
+      assert is_integer(Process.read_timer(timer_a))
+
+      PollingFeed.update_symbols(feed, ~w(B))
+      state = :sys.get_state(feed)
+
+      assert Map.keys(state.timers) == ["B"]
+      assert state.scheduled == MapSet.new(["B"])
+      assert Process.read_timer(timer_a) == false
+    end
+
+    test "a duplicate or hand-sent poll tick neither untracks the pending timer nor fetches" do
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ~w(A),
+          interval_ms: 60_000,
+          start_delay_ms: 60_000,
+          fetch: fn symbol ->
+            send(test, {:fetched, symbol})
+            {:ok, event(symbol)}
+          end
+        )
+
+      %{timers: %{"A" => {token, timer}}} = :sys.get_state(feed)
+
+      send(feed, {:poll, "A", make_ref()})
+      send(feed, {:poll, "A", nil})
+      state = :sys.get_state(feed)
+
+      assert %{"A" => {^token, ^timer}} = state.timers
+      assert is_integer(Process.read_timer(timer))
+      assert state.scheduled == MapSet.new(["A"])
+      refute_received {:fetched, _symbol}
     end
 
     test "a tick queued for a symbol that left before its turn is skipped, and a re-add is polled" do
@@ -614,7 +680,8 @@ defmodule DpExchange.Core.PollingFeedTest do
       [other] = ~w(A B) -- [first]
 
       # `other`'s tick arrives while `first` is in flight, so it queues; then it leaves scope.
-      send(feed, {:poll, other})
+      %{timers: %{^other => {token, _timer}}} = :sys.get_state(feed)
+      send(feed, {:poll, other, token})
       PollingFeed.update_symbols(feed, [first])
       _sync = PollingFeed.status(feed)
       send(first_task, :go)

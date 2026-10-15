@@ -1322,4 +1322,104 @@ defmodule DpExchange.Core.Types.ValidateTest do
       assert [%Decimal{}] = OptionChain.strikes(chain, @date)
     end
   end
+
+  describe ":symbol and :provider shape (edge table)" do
+    @ident [observed_at: @ts]
+
+    test "a symbol that is not a non-blank string is refused by every type that carries one" do
+      for bad <- ["", "   ", :btc_usd, 5, 1.5, ["BTC-USD"], %{}] do
+        assert_raise ArgumentError, ~r/:symbol/, fn ->
+          TopOfBook.new([symbol: bad, provider: :reference] ++ @ident)
+        end
+
+        assert_raise ArgumentError, ~r/:symbol/, fn ->
+          Quote.new([symbol: bad, price: 1, provider: :reference] ++ @ident)
+        end
+      end
+    end
+
+    test "a provider that is neither an atom nor a string is refused" do
+      for bad <- [5, 1.5, ["x"], %{}, {:x}] do
+        assert_raise ArgumentError, ~r/:provider/, fn ->
+          TopOfBook.new([symbol: "BTC-USD", provider: bad] ++ @ident)
+        end
+      end
+
+      assert %TopOfBook{provider: "venue"} =
+               TopOfBook.new([symbol: "BTC-USD", provider: "venue"] ++ @ident)
+    end
+
+    test "an unknown enum atom, a string for an atom and a wrong type are refused alike" do
+      trade = [
+        id: "t-1",
+        symbol: "BTC-USD",
+        side: :buy,
+        price: 1,
+        quantity: 1,
+        timestamp: @ts,
+        provider: :reference
+      ]
+
+      for bad <- [:long, :BUY, "buy", 1, %{}] do
+        assert_raise ArgumentError, ~r/side/, fn ->
+          Trade.new(Keyword.put(trade, :side, bad))
+        end
+      end
+
+      position = [symbol: "BTC-USD", side: :long, quantity: 1, provider: :reference]
+
+      for bad <- ["perp", 1, %{}] do
+        assert_raise ArgumentError, ~r/instrument_type/, fn ->
+          Position.new(Keyword.put(position, :instrument_type, bad))
+        end
+      end
+
+      assert %Position{instrument_type: :perp} =
+               Position.new(Keyword.put(position, :instrument_type, :perp))
+
+      for bad <- [:buy, :LONG, "long", 1, %{}] do
+        assert_raise ArgumentError, ~r/side/, fn ->
+          Position.new(Keyword.put(position, :side, bad))
+        end
+      end
+    end
+  end
+
+  describe "a time field holds a DateTime or nil (edge table)" do
+    @top [symbol: "BTC-USD", provider: :reference]
+
+    test "observed_at and venue_time refuse a string, an epoch integer, a Date and an atom" do
+      for field <- [:observed_at, :venue_time],
+          bad <- ["2026-09-05T12:00:00Z", "", 1_760_000_000, 0, -1, @date, :now, %{}] do
+        attrs = Keyword.merge([observed_at: @ts], [{field, bad}])
+
+        error = assert_raise ArgumentError, fn -> TopOfBook.new(@top ++ attrs) end
+        assert error.message =~ Atom.to_string(field)
+      end
+    end
+
+    test "a DateTime builds, and nil is left to presence: allowed on venue_time, not observed_at" do
+      assert %TopOfBook{venue_time: nil} = TopOfBook.new([observed_at: @ts] ++ @top)
+      built = TopOfBook.new([observed_at: @ts, venue_time: @ts] ++ @top)
+      assert built.venue_time == @ts
+
+      assert_raise ArgumentError, ~r/observed_at/, fn ->
+        TopOfBook.new([observed_at: nil] ++ @top)
+      end
+    end
+
+    test "a NaiveDateTime is still named as one" do
+      assert_raise ArgumentError, ~r/NaiveDateTime/, fn ->
+        TopOfBook.new([observed_at: ~N[2026-09-05 12:00:00]] ++ @top)
+      end
+    end
+
+    test "a Decimal field refuses an absurd exponent in either direction, and NaN" do
+      for bad <- [Decimal.new("1e5000"), Decimal.new("1e-5000"), Decimal.new("NaN")] do
+        assert_raise ArgumentError, fn ->
+          TopOfBook.new([observed_at: @ts, bid: bad] ++ @top)
+        end
+      end
+    end
+  end
 end

@@ -329,6 +329,12 @@ this same escalation, even though the call itself succeeded — a bad credential
 to an empty result set server-side looks identical to a failure from `PollingFeed`'s
 side, and is treated the same way rather than silently resetting nothing.
 
+## Options of the wrong shape stop `PollingFeed` at start
+
+`:on_refusal` must be a 2-arity function, `:on_notice` and `:sink` 1-arity, and `:symbols` a
+list or `MapSet` of binaries. Anything else returns `{:error, {:invalid_option, key, value}}`
+from `start_link/1`; none is accepted and left to fail at first use.
+
 ## A raising `:sink`, `:on_refusal` or `:on_notice` does not crash the feed
 
 All three run inside the feed's process. A raise, exit or throw in one is caught and logged

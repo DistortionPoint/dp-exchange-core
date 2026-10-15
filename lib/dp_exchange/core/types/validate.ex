@@ -227,8 +227,66 @@ defmodule DpExchange.Core.Types.Validate do
   # order book's levels twice over. `refuse_value!/4` carries `floats?` and does both in one
   # pass; it is `false` once the walk enters a plain map (see the float note below).
   defp refuse_unrepresentable!(module, attrs_map) do
-    Enum.each(attrs_map, fn {field, value} -> refuse_value!(module, field, value, true) end)
+    Enum.each(attrs_map, fn {field, value} ->
+      refuse_non_datetime!(module, field, value)
+      refuse_identity!(module, field, value)
+      refuse_value!(module, field, value, true)
+    end)
   end
+
+  # **`:symbol` is a non-blank binary and `:provider` an atom or binary, wherever they are
+  # not `nil`.** Every type's typespec says `symbol: String.t()` and `provider: atom()`, and
+  # nothing enforced either: `symbol: 5`, `symbol: :btc_usd` or `symbol: ""` built, then
+  # matched no subscription and no `Map.get` in the consumer, and a `provider` of `42` or a
+  # map was never any venue's name. A binary provider is accepted because eight types state
+  # `atom() | String.t()` and the rest are leniently read the same way here. `nil` is
+  # `new!/3`'s presence check.
+  defp refuse_identity!(_module, _field, nil), do: :ok
+
+  defp refuse_identity!(module, :symbol, value) do
+    unless is_binary(value) and String.trim(value) != "" do
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field :symbol is #{inspect(value)} — must be a " <>
+              "non-blank string"
+    end
+  end
+
+  defp refuse_identity!(module, :provider, value) do
+    unless is_atom(value) or is_binary(value) do
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field :provider is #{inspect(value)} — must be an " <>
+              "atom (or a string)"
+    end
+  end
+
+  defp refuse_identity!(_module, _field, _value), do: :ok
+
+  # **A time field holds a `DateTime` or `nil`, and nothing else.** Every time in this family
+  # is a `DateTime` (`observed_at`, `venue_time`, `timestamp`, `as_of`, every `*_at`), and the
+  # scan above refused only a `NaiveDateTime`: `observed_at: "2026-10-14T10:00:00Z"` and
+  # `venue_time: 1_760_000_000` built, and a consumer that compared them with
+  # `DateTime.compare/2` or `DateTime.diff/3` crashed in its own process. `nil` passes because
+  # presence is `new!/3`'s job. `period_start` and `period_end` are not in this rule: a
+  # filing's are `Date`s.
+  @time_fields [:venue_time, :timestamp, :as_of, :active_from]
+
+  # A `NaiveDateTime` is left to `refuse_value!/4`, which names it.
+  defp refuse_non_datetime!(_module, _field, nil), do: :ok
+
+  defp refuse_non_datetime!(module, field, value)
+       when not is_struct(value, DateTime) and
+              not is_struct(value, NaiveDateTime) and is_atom(field) do
+    if time_field?(field) do
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — every " <>
+              "time in this family is a DateTime or nil; decode the time before building"
+    end
+  end
+
+  defp refuse_non_datetime!(_module, _field, _value), do: :ok
+
+  defp time_field?(field) when field in @time_fields, do: true
+  defp time_field?(field), do: field |> Atom.to_string() |> String.ends_with?("_at")
 
   # **A float is refused too, but only where no type could mean one.** No `Types.*` field is
   # typed `float()`; every number is a `Decimal` or an integer, and a float in one is a venue

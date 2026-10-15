@@ -343,6 +343,12 @@ response, not each chunk of it (since 0.3.38). Before that, a response that tric
 never timed out. With retries on, a call can take up to `retry_attempts` times this, plus
 backoff.
 
+`HttpClient.request/5` refuses, with `ArgumentError` before anything is sent, a mistyped
+option: `:timeout` must be a non-negative integer or `:infinity`, `:weight` a positive
+integer, and `:log_requests`, `:rate_limit_per_endpoint`, `:rate_limit_blocking` and
+`:raw_status` booleans (`raw_status: "false"` would otherwise be truthy). A forwarded `nil`
+is read as absent.
+
 **`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
 it arrives and the transfer is halted at the limit, so an oversized or endless response is
 never held in memory. It returns `{:error, {:response_too_large, limit}}`, never retried.

@@ -266,6 +266,11 @@ defmodule DpExchange.Core.ReferenceVenue do
       not is_boolean(Keyword.get(opts, :include_partial, false)) ->
         {:error, {:invalid_option, :include_partial, Keyword.get(opts, :include_partial)}}
 
+      # MD4: this venue has no bar-count parameter, so `:limit` is refused, never accepted
+      # and ignored. It used to be ignored, in the worked example every author copies.
+      Keyword.has_key?(opts, :limit) ->
+        {:error, {:unsupported_option, :limit}}
+
       symbol not in @symbols ->
         {:refused, :not_listed}
 
@@ -748,7 +753,15 @@ defmodule DpExchange.Core.ReferenceVenue do
   def get_auction_imbalance(symbol, opts) do
     # The auction is required. The reference venue enforces the contract's own rule so a
     # conformance run fails a package that picked one.
-    case Keyword.get(opts, :auction) do
+    # The symbol first, as every other single-symbol read here: a `nil`, non-string or blank
+    # one is `{:invalid_symbol, value}` before the auction is looked at.
+    with :ok <- check_symbol(symbol) do
+      auction_imbalance(symbol, Keyword.get(opts, :auction))
+    end
+  end
+
+  defp auction_imbalance(symbol, auction) do
+    case auction do
       auction when auction in [:opening, :closing] ->
         {:ok,
          [
@@ -880,6 +893,29 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_trades(symbol, opts) do
+    # The single-symbol order of checks (`Core.Venue`): the symbol first, then the options.
+    # `:since` and `:limit` have no venue parameter here, so they are refused, never accepted
+    # and ignored (MD4). All three used to be skipped: a blank symbol was answered with
+    # trades stamped with it, and `include_broken: "no"` was read as true.
+    cond do
+      match?({:error, _reason}, check_symbol(symbol)) ->
+        check_symbol(symbol)
+
+      not is_boolean(Keyword.get(opts, :include_broken, false)) ->
+        {:error, {:invalid_option, :include_broken, Keyword.get(opts, :include_broken)}}
+
+      unsupported = Enum.find([:since, :limit], &Keyword.has_key?(opts, &1)) ->
+        {:error, {:unsupported_option, unsupported}}
+
+      symbol not in @symbols ->
+        {:refused, :not_listed}
+
+      true ->
+        traded(symbol, Keyword.get(opts, :include_broken, false))
+    end
+  end
+
+  defp traded(symbol, include_broken?) do
     # A broken trade in the list, excluded by default. The reference venue carries one so a
     # conformance run exercises the exclusion rather than assuming it.
     trades = [
@@ -905,7 +941,7 @@ defmodule DpExchange.Core.ReferenceVenue do
       }
     ]
 
-    if Keyword.get(opts, :include_broken, false) do
+    if include_broken? do
       {:ok, trades}
     else
       {:ok, Enum.reject(trades, & &1.broken)}

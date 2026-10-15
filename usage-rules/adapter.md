@@ -171,7 +171,14 @@ Every `Core.Types.*` module exposes a validating `new/1`, built on
 `DpExchange.Core.Types.Validate`: `struct!/2`, plus a check that every field the type's own
 `@enforce_keys` names is present **and non-`nil`**, raising `ArgumentError` naming the
 offending field when it is not. It also refuses, in any field and however deeply nested, a
-`Decimal` that is `NaN` or infinite and a `NaiveDateTime`.
+`Decimal` that is `NaN` or infinite and a `NaiveDateTime`. A time field (`observed_at`,
+`venue_time`, `timestamp`, `as_of`, `active_from` and every `*_at`) must be a `DateTime` or
+`nil`: a string, an epoch integer or a `Date` is refused. A non-`nil` `:symbol` must be a
+non-blank string and a non-`nil` `:provider` an atom or a string; `Position`'s
+`:instrument_type` must be an atom or `nil`.
+
+`CanonicalPair.to_canonical/2` and `to_exchange/2` raise `ArgumentError` for a mapping whose
+`:sep` is missing or not a string, or whose `:quotes` is not a list of strings.
 
 `@enforce_keys` alone guards presence, not `nil` — `%Candle{open: nil, high: ..., low: ...,
 close: ..., ...}` builds without complaint even though `Candle`'s typespec calls `open` a

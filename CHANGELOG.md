@@ -21,6 +21,44 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **Reference venue honours MD4 (tick AF).** The worked example every venue author copies
+  accepted and ignored `:limit` on `get_historical_prices/4`, and `:since`/`:limit` on
+  `get_trades/2`, which `Core.Venue` says are honoured or refused, never ignored. Both now
+  answer `{:error, {:unsupported_option, key}}`. `get_trades/2` also checks the symbol first,
+  refuses a non-boolean `:include_broken`, and answers `{:refused, :not_listed}` for a symbol
+  it does not list (it stamped trades with any symbol it was given).
+- **Tick AF, option and field validation parity.**
+  - `HttpClient.request/5` (and so `get/3`) now refuses, with `ArgumentError` before anything is
+    sent, a `:timeout` that is not a non-negative integer or `:infinity`, a `:weight` that is
+    not a positive integer, and a `:log_requests`, `:rate_limit_per_endpoint`,
+    `:rate_limit_blocking` or `:raw_status` that is not a boolean. `raw_status: "false"` was
+    truthy and returned a 4xx as a success. A forwarded `nil` is still read as absent.
+  - `PollingFeed` refuses at start, as `{:error, {:invalid_option, key, value}}`, an
+    `:on_refusal` that is not a 2-arity function, an `:on_notice` that is not 1-arity, and a
+    `:symbols` that is not a list or `MapSet` of binaries (a non-collection raised inside
+    `init/1`; the callbacks were swallowed by `guarded/3` at first use).
+  - `PollingFeed` keeps its per-symbol timer refs and cancels the pending timer of a symbol
+    removed by `update_symbols/2`, instead of leaving it to fire and be dropped.
+  - `Types.*` constructors (`Validate.new!/3`) refuse a time field that is not a `DateTime` or
+    `nil`: `observed_at`, `venue_time`, `timestamp`, `as_of`, `active_from` and every `*_at`.
+    A string, epoch integer or `Date` built before and crashed the consumer's `DateTime`
+    arithmetic. A venue fake that builds a type with such a value will now raise.
+  - `Validate.new!/3` also refuses a non-`nil` `:symbol` that is not a non-blank string and a
+    non-`nil` `:provider` that is neither an atom nor a string; `Position.new/1` refuses an
+    `:instrument_type` that is not an atom or `nil`. A fake building `symbol: ""` or
+    `provider: 42` will now raise.
+  - `CanonicalPair.to_canonical/2` and `to_exchange/2` raise `ArgumentError` for a mapping with
+    a missing or non-binary `:sep` (a missing one was a `KeyError` one way and silently "no
+    separator" the other) or a `:quotes` that is not a list of binaries. An absent `:quotes`
+    is read as `[]`.
+  - `PollingFeed` poll ticks carry a token (`{:poll, symbol, token}`); only the tracked token is
+    acted on, so a duplicate or hand-sent tick can no longer untrack a pending timer or start a
+    second tick chain. Internal message shape; the public API is unchanged.
+  - `Reference.get_auction_imbalance/2` (test support) refuses a bad symbol with
+    `{:invalid_symbol, v}` before looking at `:auction`.
+  - Docs: `usage-rules.md`, `usage-rules/adapter.md`, `usage-rules/feeds.md` and the
+    `PollingFeed.start_link/1` doc state the new refusals.
+
 ## [0.3.95] - 2026-10-15
 
 - **`HttpClient` `:max_retry_after_s` is validated before anything is sent (tick AE).** It

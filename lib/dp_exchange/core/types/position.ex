@@ -96,6 +96,17 @@ defmodule DpExchange.Core.Types.Position do
       :leverage
     ])
     |> Validate.one_of!(:side, [:long, :short])
+    |> atom_instrument_type!()
+  end
+
+  # `instrument_type: atom() | nil`. A string there ("perp") matches no consumer clause on the
+  # atom and no error says why; the venue's word is normalised before it reaches this type.
+  defp atom_instrument_type!(%{instrument_type: type} = built) when is_atom(type), do: built
+
+  defp atom_instrument_type!(%{instrument_type: type}) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :instrument_type is #{inspect(type)} — " <>
+            "must be an atom or nil"
   end
 
   @doc """

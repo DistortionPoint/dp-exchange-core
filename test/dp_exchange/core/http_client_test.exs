@@ -1033,6 +1033,34 @@ defmodule DpExchange.Core.HttpClientTest do
       assert :counters.get(counter, 1) == 0
     end
 
+    test ":timeout, :weight and the boolean flags are refused before anything is sent" do
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Plug.Conn.send_resp(conn, 200, "{}")
+      end
+
+      for {key, bad} <- [
+            timeout: "30000",
+            timeout: -1,
+            timeout: 1.5,
+            weight: "5",
+            weight: 0,
+            weight: -2,
+            weight: 1.0,
+            raw_status: "false",
+            raw_status: 1,
+            log_requests: "no",
+            rate_limit_blocking: :yes,
+            rate_limit_per_endpoint: "true"
+          ] do
+        assert_raise ArgumentError, ~r/#{key}/, fn -> get([{:plug, plug}, {key, bad}]) end
+      end
+
+      assert :counters.get(counter, 1) == 0
+    end
+
     test "a 3xx is not retried — the same request gets the same redirect" do
       counter = :counters.new(1, [])
 

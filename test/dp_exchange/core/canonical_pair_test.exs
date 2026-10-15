@@ -12,6 +12,35 @@ defmodule DpExchange.Core.CanonicalPairTest do
   @concat %{sep: "", quotes: ~w(USDC USDT USD EUR GBP BTC ETH)}
   @aliased %{sep: "", quotes: ~w(USD EUR BTC ETH), asset_aliases: %{"XBT" => "BTC"}}
 
+  describe "a malformed mapping is refused by both directions" do
+    test "a missing, nil or non-binary :sep raises in to_canonical and to_exchange" do
+      for bad <- [%{quotes: ["USD"]}, %{sep: nil, quotes: ["USD"]}, %{sep: :dash, quotes: []}] do
+        assert_raise ArgumentError, ~r/:sep/, fn -> CanonicalPair.to_canonical(bad, "BTCUSD") end
+        assert_raise ArgumentError, ~r/:sep/, fn -> CanonicalPair.to_exchange(bad, "BTC-USD") end
+      end
+    end
+
+    test "a :quotes that is not a list of binaries raises, in both directions" do
+      for bad <- ["USD", :usd, %{}, [:usd], [1], ["USD", nil]] do
+        mapping = %{sep: "", quotes: bad}
+
+        assert_raise ArgumentError, ~r/:quotes/, fn ->
+          CanonicalPair.to_canonical(mapping, "BTCUSD")
+        end
+
+        assert_raise ArgumentError, ~r/:quotes/, fn ->
+          CanonicalPair.to_exchange(mapping, "BTC-USD")
+        end
+      end
+    end
+
+    test "an absent :quotes is an empty list, and an empty native symbol is returned as it came" do
+      assert CanonicalPair.to_canonical(%{sep: ""}, "btcusd") == "BTCUSD"
+      assert CanonicalPair.to_canonical(@concat, "") == ""
+      assert CanonicalPair.to_exchange(@concat, "") == ""
+    end
+  end
+
   describe "to_canonical/2" do
     test "splits a separator-bearing native symbol" do
       assert "BTC-USD" = CanonicalPair.to_canonical(@dashed, "BTC-USD")

@@ -281,6 +281,7 @@ defmodule DpExchange.Core.HttpClient do
     end
 
     max_retry_after_s!(opts)
+    validate_timeout_and_flags!(opts)
 
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
     # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
@@ -1127,6 +1128,39 @@ defmodule DpExchange.Core.HttpClient do
         raise ArgumentError,
               ":max_retry_after_s must be a non-negative integer of seconds, got " <>
                 inspect(other)
+    end
+  end
+
+  @flag_options [:log_requests, :rate_limit_per_endpoint, :rate_limit_blocking, :raw_status]
+
+  # **Refused in the caller, like the numbers above.** `:timeout`, `:weight` and the four
+  # boolean flags were read with `Config.opt/3` and nothing else, so `timeout: "30000"`
+  # reached Finch and failed deep in the transport, `weight: "5"` reached the limiter only on
+  # a rate-limited call, and `raw_status: "false"` was TRUTHY, so a 4xx came back as a
+  # success the venue then decoded as data. A sibling option refused beside them accepted
+  # these silently.
+  defp validate_timeout_and_flags!(opts) do
+    timeout = Config.opt(opts, :timeout, 30_000)
+
+    unless timeout == :infinity or (is_integer(timeout) and timeout >= 0) do
+      raise ArgumentError,
+            ":timeout must be a non-negative integer or :infinity, got #{inspect(timeout)}"
+    end
+
+    weight = Config.opt(opts, :weight, 1)
+
+    unless is_integer(weight) and weight > 0 do
+      raise ArgumentError, ":weight must be a positive integer, got #{inspect(weight)}"
+    end
+
+    Enum.each(@flag_options, &flag!(opts, &1))
+  end
+
+  defp flag!(opts, key) do
+    flag = Config.opt(opts, key, false)
+
+    unless is_boolean(flag) do
+      raise ArgumentError, "#{inspect(key)} must be a boolean, got #{inspect(flag)}"
     end
   end
 

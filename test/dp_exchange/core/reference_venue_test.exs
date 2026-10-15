@@ -84,9 +84,38 @@ defmodule DpExchange.Core.ReferenceVenueTest do
                Reference.get_historical_prices(nil, "1h", {~D[2026-01-01], ~D[2026-01-02]}, [])
     end
 
+    test "get_historical_prices/4 refuses :limit, which it has no parameter for (MD4)" do
+      assert {:error, {:unsupported_option, :limit}} =
+               Reference.get_historical_prices("BTC-USD", "1h", [], limit: 5)
+    end
+
+    test "get_trades/2 checks the symbol, then its options, and refuses :since and :limit" do
+      assert {:error, {:invalid_symbol, ""}} = Reference.get_trades("", limit: 5)
+
+      assert {:error, {:invalid_option, :include_broken, "no"}} =
+               Reference.get_trades("BTC-USD", include_broken: "no")
+
+      assert {:error, {:unsupported_option, :since}} =
+               Reference.get_trades("BTC-USD", since: ~U[2026-08-28 00:00:00Z])
+
+      assert {:error, {:unsupported_option, :limit}} = Reference.get_trades("BTC-USD", limit: 1)
+      assert {:refused, :not_listed} = Reference.get_trades("NOPE-USD", [])
+      assert {:ok, [%{broken: false}]} = Reference.get_trades("BTC-USD", [])
+      assert {:ok, [_kept, _broken]} = Reference.get_trades("BTC-USD", include_broken: true)
+    end
+
     test "cancel_all_orders/2 names a scope the venue does not know" do
       assert {:error, {:unsupported_scope, :everything}} =
                Reference.cancel_all_orders(%{}, scope: :everything)
+    end
+
+    test "get_auction_imbalance/2 refuses a bad symbol before it looks at the auction" do
+      for bad <- [nil, "", "  ", :aapl, 5, ["AAPL"]] do
+        assert {:error, {:invalid_symbol, ^bad}} =
+                 Reference.get_auction_imbalance(bad, auction: :opening)
+
+        assert {:error, {:invalid_symbol, ^bad}} = Reference.get_auction_imbalance(bad, [])
+      end
     end
 
     test "get_auction_imbalance/2 serves both auctions and names one it does not know" do

@@ -47,6 +47,7 @@ defmodule DpExchange.Core.CanonicalPair do
   """
   @spec to_canonical(mapping(), String.t()) :: String.t()
   def to_canonical(mapping, native) when is_map(mapping) and is_binary(native) do
+    check_mapping!(mapping)
     upper = String.upcase(native)
 
     case split_native(mapping, upper) do
@@ -70,6 +71,8 @@ defmodule DpExchange.Core.CanonicalPair do
   """
   @spec to_exchange(mapping(), String.t()) :: String.t()
   def to_exchange(mapping, canonical) when is_map(mapping) and is_binary(canonical) do
+    check_mapping!(mapping)
+
     case split_canonical(canonical) do
       # No quote part, so this is not a pair and there is nothing to join. Returned as it
       # came, the way `to_canonical/2` returns input it cannot split — the two directions
@@ -104,6 +107,32 @@ defmodule DpExchange.Core.CanonicalPair do
   end
 
   # --- internal ----------------------------------------------------------
+
+  # **A malformed mapping is refused by both directions alike.** A missing or non-binary
+  # `:sep` was a `KeyError` in `to_exchange/2` but silently read as "no separator" by
+  # `to_canonical/2` (a missing key falls through to the concat clause), and `sep: nil` crashed
+  # inside `String.contains?/2`. A mapping that breaks the round-trip invariant by being half
+  # understood is worse than one that raises at the first symbol. `:quotes`, when present,
+  # must be a list of binaries: a string there matched nothing and every symbol came back
+  # unsplit.
+  defp check_mapping!(%{sep: sep} = mapping) when is_binary(sep) do
+    case Map.get(mapping, :quotes, []) do
+      quotes when is_list(quotes) ->
+        if Enum.all?(quotes, &is_binary/1), do: :ok, else: bad_mapping!(:quotes, quotes)
+
+      other ->
+        bad_mapping!(:quotes, other)
+    end
+  end
+
+  defp check_mapping!(mapping), do: bad_mapping!(:sep, Map.get(mapping, :sep))
+
+  defp bad_mapping!(key, value) do
+    wanted = if key == :sep, do: "a binary", else: "a list of binaries"
+
+    raise ArgumentError,
+          "CanonicalPair mapping #{inspect(key)} must be #{wanted}, got #{inspect(value)}"
+  end
 
   # Uppercased, like the input. A mapping written `%{"xbt" => "btc"}` or `quotes: ["usdt"]`
   # was compared against uppercased symbols and silently never matched, and `to_canonical/2`
@@ -217,7 +246,8 @@ defmodule DpExchange.Core.CanonicalPair do
       # An empty quote is dropped: every string ends with `""`, so it "matched" any symbol no
       # real quote did and cut it into `{symbol, ""}`, which became `"BTCXYZ-"`.
       quotes =
-        mapping.quotes
+        mapping
+        |> Map.get(:quotes, [])
         |> Enum.map(&String.upcase/1)
         |> Enum.reject(&(&1 == ""))
         |> Enum.sort_by(&byte_size/1, :desc)
