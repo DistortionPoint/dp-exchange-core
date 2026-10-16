@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.98] - 2026-10-16
+
 - **`HttpClient.request/5` no longer retries a write by default (tick AH).** The default of 3
   attempts applied to every method, so a bare `:post`, `:put` or `:delete` that hit a transport
   failure or 5xx after the venue had accepted it was silently sent again and could place or
