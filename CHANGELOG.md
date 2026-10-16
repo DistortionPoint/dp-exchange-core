@@ -21,6 +21,25 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`HttpClient.request/5` no longer retries a write by default (tick AH).** The default of 3
+  attempts applied to every method, so a bare `:post`, `:put` or `:delete` that hit a transport
+  failure or 5xx after the venue had accepted it was silently sent again and could place or
+  move twice. The default is now 3 for `:get` and 1 for every other method; a venue that has
+  an idempotency key opts in with an explicit `:retry_attempts`. Tests added for all three
+  write methods, default and opt-in. Test hygiene: every `refute_receive` guarding a
+  negative now waits at least 500 ms (was 50 to 200 ms).
+- **Conformance group 42: an ambiguous write is `:order_unconfirmed` (tick AH).** The suite
+  never asserted it, because a tier-1 fake cannot fail after sending. New optional `use`
+  option `ambiguous_place_order: fn request -> ... end`, a 1-arity function that runs the
+  venue's real `place_order/3` with a transport fault after the send. Group 42 asserts the
+  answer is `{:error, {:order_unconfirmed, id, reason}}` (`id` nil, the sent client order
+  id, or a list of ids) and that a request refused before sending (no `:order_type`) is a
+  plain or refused error, never unconfirmed. Absent, the group is skipped (the opt-in
+  pattern of group 41), so no venue breaks until it adds the option; each venue is expected
+  to supply it. `AdapterContract.ambiguous_write_fault/3` is public and unit-tested; Core's
+  own suite supplies a stub function. Documented in the moduledoc, `usage-rules/testing.md`
+  and `usage-rules/adapter.md`.
+
 ## [0.3.97] - 2026-10-16
 
 - **`PollingFeed.update_symbols/2` validates its elements (tick AG).** Only the container was

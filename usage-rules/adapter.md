@@ -772,6 +772,16 @@ fails it.
   key raises at compile time. Assertion 5 uses the same arguments.
 - **What it does not reach:** the real venue. It proves the fake is consistent with itself.
 
+## Assertion 42 — an ambiguous write is `:order_unconfirmed`
+
+A timeout, dropped connection or 5xx after `place_order/3` was sent may mean the order was
+placed. It is `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`, never a bare
+`{:error, _}` (which invites a duplicate retry) or `{:refused, _}`. A failure *before* the send
+(a malformed request, no credentials) is not unconfirmed. Prove it with the `use` option
+`ambiguous_place_order: fn request -> ... end`, which runs your real `place_order/3` path with
+a transport fault after the send; see `usage-rules/testing.md`. Each venue supplies its own
+function; the group skips until it does.
+
 ## Assertions 32 to 35 — the family conventions on bad input
 
 Every venue refuses the same malformed arguments with the same tag, **locally, before

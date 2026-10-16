@@ -145,13 +145,12 @@ defmodule DpExchange.Core.HttpClient do
   ## Options
   - `:timeout` - Request timeout in milliseconds (default: 30_000). It bounds the whole
     response, not each chunk, and it applies to each attempt when `:retry_attempts` retries.
-  - `:retry_attempts` - Number of attempts in all (default: 3). **Applied to every method,
-    POST and DELETE included.** A transport failure or 5xx after a write may mean the write
+  - `:retry_attempts` - Number of attempts in all (default: 3 for `:get`, **1 for `:post`,
+    `:put` and `:delete`**). A transport failure or 5xx after a write may mean the write
     took effect, and a retry repeats it. Whether that is safe depends on whether the venue
-    deduplicates the request, which only the venue package knows. So the venue decides per
-    call. A write with an idempotency key, such as a `client_order_id`, may keep the default.
-    A write without one is sent with `retry_attempts: 1`. Every venue in the family does this
-    for its money-moving writes.
+    deduplicates the request, which only the venue package knows. So a write is never retried
+    unless the venue says so: one with an idempotency key, such as a `client_order_id`, passes
+    an explicit `retry_attempts`. A write without one needs nothing.
   - `:retry_delay` - Base delay between retries in milliseconds (default: 1000). The wait
     before retry `n` is `retry_delay * n` plus up to a quarter of that again at random, so it is
     never shorter than the configured delay. What is retried: a transport failure, a 5xx and an
@@ -253,7 +252,7 @@ defmodule DpExchange.Core.HttpClient do
     # A forwarded `nil` silently entered the retry branch at `do_request_with_rate_limiting/6`
     # and then died computing `4 - nil`, an `ArithmeticError` that killed the CALLING venue
     # process — one this library does not supervise. See `Config.opt/3`'s moduledoc.
-    retry_attempts = Config.opt(opts, :retry_attempts, 3)
+    retry_attempts = total_attempts(method, opts)
     log_requests = Config.opt(opts, :log_requests, true)
 
     # **Refused here, in the caller, before anything is sent.** `"3"` sorts above every
@@ -750,8 +749,7 @@ defmodule DpExchange.Core.HttpClient do
           # `retry_attempts` was configured to, and identical to the old formula's
           # own numbers at the default of 3 (1, then 2), so no existing behaviour
           # changes for the common case.
-          total_attempts = Config.opt(opts, :retry_attempts, 3)
-          attempts_made = total_attempts - attempts_left + 1
+          attempts_made = total_attempts(method, opts) - attempts_left + 1
           backoff_delay = backoff_ms(retry_delay, attempts_made)
           provider = Config.opt(opts, :provider, "unknown")
           # Through `Telemetry.endpoint/1`, not a split on "?": that kept `user:pass@` and a
@@ -771,6 +769,16 @@ defmodule DpExchange.Core.HttpClient do
       {:error, reason} ->
         wrap_exchange_error(opts, reason)
     end
+  end
+
+  # **A write is never retried by default.** The default of 3 attempts applied to every
+  # method, so a bare `request(:post, ...)` that timed out after the venue had accepted the
+  # order was sent again, silently, and could place it twice. Only a read defaults to retrying;
+  # a POST, PUT or DELETE defaults to one attempt, and a venue that has an idempotency key
+  # opts in with an explicit `:retry_attempts`.
+  defp total_attempts(method, opts) do
+    default = if method == :get, do: 3, else: 1
+    Config.opt(opts, :retry_attempts, default)
   end
 
   @doc false

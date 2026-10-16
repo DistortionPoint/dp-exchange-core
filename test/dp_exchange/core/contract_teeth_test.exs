@@ -626,7 +626,7 @@ defmodule DpExchange.Core.ContractTeethTest do
       # Family convention 9: a registration is not an event. A `:link_up` here would be one
       # the real feeds never send, and a consumer's tier-1 test would certify it.
       assert :ok = ReferenceVenue.subscribe_notices(to: self())
-      refute_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{}}, 100
+      refute_receive {:dp_exchange, :reference_venue, %DpExchange.Core.Notice{}}, 500
 
       assert {:error, {:invalid_subscriber, 42}} =
                ReferenceVenue.subscribe_notices(to: 42)

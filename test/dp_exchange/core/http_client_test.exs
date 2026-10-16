@@ -1430,6 +1430,43 @@ defmodule DpExchange.Core.HttpClientTest do
       assert :counters.get(counter, 1) == 2
     end
 
+    for method <- [:post, :put, :delete] do
+      test "a #{method} is sent once by default, never silently re-sent after a 5xx" do
+        counter = :counters.new(1, [])
+
+        plug = fn conn ->
+          :counters.add(counter, 1, 1)
+          Req.Test.json(%{conn | status: 500}, %{})
+        end
+
+        assert {:error, _message} =
+                 HttpClient.request(unquote(method), "http://venue.test/x", [], "{}",
+                   plug: plug,
+                   retry_delay: 1
+                 )
+
+        assert :counters.get(counter, 1) == 1
+      end
+
+      test "a #{method} retries only when the venue opts in with retry_attempts" do
+        counter = :counters.new(1, [])
+
+        plug = fn conn ->
+          :counters.add(counter, 1, 1)
+          Req.Test.json(%{conn | status: 500}, %{})
+        end
+
+        assert {:error, _message} =
+                 HttpClient.request(unquote(method), "http://venue.test/x", [], "{}",
+                   plug: plug,
+                   retry_attempts: 2,
+                   retry_delay: 1
+                 )
+
+        assert :counters.get(counter, 1) == 2
+      end
+    end
+
     test "a retry_attempts above the hardcoded default does not crash on backoff" do
       # `backoff_delay = retry_delay * (4 - attempts_left)` hardcoded `4` as
       # `retry_attempts + 1` for the default of 3. Any caller configuring

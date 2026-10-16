@@ -296,7 +296,7 @@ defmodule DpExchange.Core.PollingFeedTest do
           on_notice: fn notice -> send(test, {:notice, notice}) end
         )
 
-      refute_receive {:fetched, _symbols}, 200
+      refute_receive {:fetched, _symbols}, 500
       refute_received {:notice, _notice}
       assert PollingFeed.status(pid).failures_since_ok == 0
 
@@ -1177,9 +1177,9 @@ defmodule DpExchange.Core.PollingFeedTest do
         start_delay_ms: 1_000
       )
 
-      # A delay of a second against a quiet window of 150 ms: the window can only be cut short
-      # by the test process being stalled for most of a second, not by a slow scheduler.
-      refute_receive {:published, _event}, 150
+      # A delay of a second against a quiet window of 500 ms: the window can only be cut short
+      # by the test process being stalled for half a second, not by a slow scheduler.
+      refute_receive {:published, _event}, 500
       assert_receive {:published, _event}, 5_000
     end
 
@@ -1478,7 +1478,7 @@ defmodule DpExchange.Core.PollingFeedTest do
       # The outage continues for two more full sweeps' worth of attempts. No second
       # notice — this is a transition, fired once, not a per-tick or per-sweep signal.
       for _attempt <- 1..6, do: assert_receive({:attempt, _symbol}, 5_000)
-      refute_receive {:notice, _}, 200
+      refute_receive {:notice, _}, 500
     end
 
     test "a failure reason holding a credential-shaped key is carried as text, not a crash" do
@@ -1547,7 +1547,7 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       # Steady-state delivery afterward raises no further notice.
       assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
-      refute_receive {:notice, _}, 200
+      refute_receive {:notice, _}, 500
     end
 
     test "an absent :on_notice does not crash the feed while it is delivering nothing" do

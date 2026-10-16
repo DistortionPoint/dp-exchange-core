@@ -169,4 +169,50 @@ defmodule DpExchange.Core.WantedConformanceTest do
       assert {:ok, [_balance]} = ReferenceVenue.get_balances(%{api_key: "k"}, [])
     end
   end
+
+  describe "ambiguous_write_fault/3 (assertion 42)" do
+    @unconfirmed {:error, {:order_unconfirmed, "cid-1", :timeout}}
+    @refused {:error, {:missing_field, :order_type}}
+
+    test "an unconfirmed answer and a plain pre-send refusal conform" do
+      assert AdapterContract.ambiguous_write_fault(@unconfirmed, @refused, "cid-1") == nil
+      assert AdapterContract.ambiguous_write_fault(@unconfirmed, {:refused, :x}, nil) == nil
+
+      nil_id = {:error, {:order_unconfirmed, nil, :timeout}}
+      assert AdapterContract.ambiguous_write_fault(nil_id, @refused, "cid-1") == nil
+
+      batch = {:error, {:order_unconfirmed, ["a", "b"], :timeout}}
+      assert AdapterContract.ambiguous_write_fault(batch, @refused, nil) == nil
+    end
+
+    test "a plain error, a refusal or a success after the send is faulted" do
+      for answer <- [{:error, "Request failed: timeout"}, {:refused, :x}, {:ok, %{}}] do
+        assert AdapterContract.ambiguous_write_fault(answer, @refused, nil) ==
+                 {:not_unconfirmed, answer}
+      end
+    end
+
+    test "an id that is not the one sent, or not an id, is faulted" do
+      wrong = {:error, {:order_unconfirmed, "other", :timeout}}
+
+      assert AdapterContract.ambiguous_write_fault(wrong, @refused, "cid-1") ==
+               {:unconfirmed_id, "other"}
+
+      bad = {:error, {:order_unconfirmed, 42, :timeout}}
+      assert AdapterContract.ambiguous_write_fault(bad, @refused, nil) == {:unconfirmed_id, 42}
+
+      mixed = {:error, {:order_unconfirmed, ["a", 1], :timeout}}
+
+      assert AdapterContract.ambiguous_write_fault(mixed, @refused, nil) ==
+               {:unconfirmed_id, ["a", 1]}
+    end
+
+    test "a pre-send failure that claims uncertainty, or succeeds, is faulted" do
+      assert AdapterContract.ambiguous_write_fault(@unconfirmed, @unconfirmed, "cid-1") ==
+               {:presend_unconfirmed, @unconfirmed}
+
+      assert AdapterContract.ambiguous_write_fault(@unconfirmed, {:ok, %{}}, "cid-1") ==
+               {:presend_not_refused, {:ok, %{}}}
+    end
+  end
 end

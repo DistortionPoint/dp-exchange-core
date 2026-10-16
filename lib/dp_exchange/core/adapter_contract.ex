@@ -43,10 +43,17 @@ defmodule DpExchange.Core.AdapterContract do
       (default `[feed: :dp_exchange_contract_absent_feed]`).
     * `:package_root` - where groups 16, 18 and 19 scan compiled modules (default `"lib"`).
     * `:unlisted_symbol` and `:padded_credentials` - the opt-in facts of group 41.
+    * `:ambiguous_place_order` - opt-in for group 42: a 1-arity function (`fn request -> ...
+      end` or `&Mod.fun/1`) that takes an order request map and runs the venue's **real**
+      `place_order/3` path, with a transport fault injected after the request is sent (a Req
+      plug that returns a transport error, or a 503 on every attempt). Group 42 asserts that
+      answer is `{:error, {:order_unconfirmed, id, reason}}`, and that the same function
+      given a request refused before sending (no `:order_type`) is a plain or refused error,
+      never `:order_unconfirmed`. Absent, group 42 is skipped, like group 41's facts.
 
   ## What it asserts, and what it deliberately does not
 
-  Forty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Forty-two groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -184,7 +191,11 @@ defmodule DpExchange.Core.AdapterContract do
       {41,
        "family reasons — opt-in by `unlisted_symbol:` and `padded_credentials:`; an unlisted " <>
          "symbol is {:refused, :not_listed} and a padded credential is " <>
-         "{:error, {:invalid_credentials, runtime_id}}"}
+         "{:error, {:invalid_credentials, runtime_id}}"},
+      {42,
+       "ambiguous write — opt-in by `ambiguous_place_order:`; a transport fault after the " <>
+         "request was sent is {:error, {:order_unconfirmed, id, reason}}, and a refusal " <>
+         "before anything was sent is not"}
     ]
   end
 
@@ -1195,6 +1206,52 @@ defmodule DpExchange.Core.AdapterContract do
   end
 
   @doc """
+  What is wrong with a venue's answers to an ambiguous write, or `nil`. Assertion 42.
+
+  `ambiguous` is what `place_order/3` answered when a transport fault came **after** the
+  request was sent (a timeout, a dropped connection, a 503 on every attempt). It must be
+  `{:error, {:order_unconfirmed, id, reason}}`: the order may have been placed, so a plain
+  `{:error, _}` invites the caller to retry into a duplicate, and `{:refused, _}` claims
+  permanence the venue never gave. `id` is `nil`, a client order id, or a list of them, and
+  when the request carried a binary `client_order_id` (`sent_id`) it is that id.
+
+  `presend` is what the same path answered for a request refused **before** anything was
+  sent. It must be an `{:error, _}` or `{:refused, _}` that is not `:order_unconfirmed`:
+  nothing left the process, so claiming uncertainty would make a caller reconcile an order
+  that never existed.
+
+  `{:not_unconfirmed, answer}`, `{:unconfirmed_id, id}`, `{:presend_unconfirmed, answer}`
+  or `{:presend_not_refused, answer}`.
+  """
+  @spec ambiguous_write_fault(term(), term(), String.t() | nil) :: nil | {atom(), term()}
+  def ambiguous_write_fault(ambiguous, presend, sent_id) do
+    case ambiguous do
+      {:error, {:order_unconfirmed, id, _reason}} ->
+        unconfirmed_id_fault(id, sent_id) || presend_fault(presend)
+
+      other ->
+        {:not_unconfirmed, other}
+    end
+  end
+
+  defp unconfirmed_id_fault(nil, _sent_id), do: nil
+  defp unconfirmed_id_fault(id, nil) when is_binary(id), do: nil
+  defp unconfirmed_id_fault(id, sent_id) when is_binary(id) and id == sent_id, do: nil
+
+  defp unconfirmed_id_fault([_first | _rest] = ids, _sent_id) do
+    if Enum.all?(ids, &is_binary/1), do: nil, else: {:unconfirmed_id, ids}
+  end
+
+  defp unconfirmed_id_fault(id, _sent_id), do: {:unconfirmed_id, id}
+
+  defp presend_fault({:error, {:order_unconfirmed, _id, _reason}} = answer),
+    do: {:presend_unconfirmed, answer}
+
+  defp presend_fault({:error, _reason}), do: nil
+  defp presend_fault({:refused, _reason}), do: nil
+  defp presend_fault(other), do: {:presend_not_refused, other}
+
+  @doc """
   What is wrong with a fake's `subscribe/2` given `to: nil`, or `nil`. Assertion 27.
 
   A forwarded `nil` is a caller that said nothing, and nothing means the caller: it must not
@@ -1576,6 +1633,7 @@ defmodule DpExchange.Core.AdapterContract do
       coverage_by_kind(),
       wanted_callback(),
       family_reasons(),
+      ambiguous_write(opts),
       top_of_book_assertion(),
       purity(),
       volume_window_stated(),
@@ -2461,6 +2519,71 @@ defmodule DpExchange.Core.AdapterContract do
                    "wanted/1 disagrees with what was subscribed or with coverage/1: " <>
                      "#{inspect(fault)}. wanted/1 is the symbols asked for, as a list or a " <>
                      "MapSet; coverage/1 is what arrived, and nothing arrives unasked."
+          end
+        end
+      end
+    end
+  end
+
+  # --- 42. an ambiguous write is :order_unconfirmed, opt-in --------------------------------
+  #
+  # A tier-1 fake has no way to fail after sending, so the venue supplies the seam:
+  # `ambiguous_place_order:`, a 1-arity function running its real `place_order/3` path with a
+  # transport fault injected after the send. Absent, the group is skipped (the pattern of
+  # group 41); named, it is judged by `ambiguous_write_fault/3`. The function is kept as a
+  # private function of the test module, because a function cannot live in a module attribute.
+  defp ambiguous_write(opts) do
+    # Built as a literal AST, not with `unquote`: unquoting a value into a quote compiles to a
+    # runtime `:elixir_quote` validation call, which group 2.10 (purity) rightly refuses in
+    # lib/. So the runner and the group are joined as a plain `__block__`.
+    runner =
+      case Keyword.get(opts, :ambiguous_place_order) do
+        nil ->
+          quote do
+            @ambiguous_given false
+            defp ambiguous_place_order(_request), do: {:error, :not_given}
+          end
+
+        fun ->
+          request = Macro.var(:request, nil)
+
+          {:__block__, [],
+           [
+             quote(do: @ambiguous_given(true)),
+             {:defp, [],
+              [{:ambiguous_place_order, [], [request]}, [do: {:apply, [], [fun, [request]]}]]}
+           ]}
+      end
+
+    {:__block__, [], [runner, ambiguous_write_group()]}
+  end
+
+  defp ambiguous_write_group do
+    quote location: :keep do
+      describe "42. ambiguous write" do
+        test "a fault after send is :order_unconfirmed, one before send is not " <>
+               "(opt-in: ambiguous_place_order:)" do
+          caps = @venue.capabilities()
+
+          if @ambiguous_given && Capabilities.active?(caps, {:place_order, 3}) do
+            [_credentials, base, _opts] = endpoint_args(:place_order, 3)
+            sent_id = if is_map(base), do: Map.get(base, :client_order_id)
+
+            ambiguous = ambiguous_place_order(base)
+            presend = ambiguous_place_order(Map.delete(base, :order_type))
+
+            fault =
+              DpExchange.Core.AdapterContract.ambiguous_write_fault(
+                ambiguous,
+                presend,
+                if(is_binary(sent_id), do: sent_id)
+              )
+
+            assert fault == nil,
+                   "place_order/3 after a transport fault past the send must answer " <>
+                     "{:error, {:order_unconfirmed, id, reason}}, and a refusal before the " <>
+                     "send must not. Fault: #{inspect(fault, limit: 8)}. Answers: " <>
+                     inspect({ambiguous, presend}, limit: 8)
           end
         end
       end

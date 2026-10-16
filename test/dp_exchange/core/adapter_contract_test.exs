@@ -16,6 +16,19 @@ defmodule DpExchange.Core.AdapterContractTest do
     # padded with whitespace.
     unlisted_symbol: "NOPE-USD",
     padded_credentials: %{api_key: " reference\n", api_secret: "reference"},
+    # Assertion 42's seam. The reference venue sends nothing, so the fault after the send is
+    # stood in for here: a request that passes its own checks is answered as a timeout that
+    # came after the send; one it refuses keeps its refusal.
+    ambiguous_place_order: fn request ->
+      case DpExchange.Core.ReferenceVenue.place_order(%{}, request, []) do
+        {:ok, _order} ->
+          client_id = if is_map(request), do: Map.get(request, :client_order_id)
+          {:error, {:order_unconfirmed, client_id, :timeout}}
+
+        refused ->
+          refused
+      end
+    end,
     # The reference venue lives in `test/support/`, not `lib/` — this package is not
     # itself venue-shaped, and assertion 16 must scope to where the fixture actually
     # is rather than to Core's own many consumer-facing modules.

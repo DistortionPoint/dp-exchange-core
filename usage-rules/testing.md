@@ -13,7 +13,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Forty-one assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Forty-two assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
@@ -24,6 +24,17 @@ fake does not list; `get_price/2` for it must be `{:refused, :not_listed}`) and
 whitespace; `get_balances/2` with it must be `{:error, {:invalid_credentials, runtime_id}}`).
 Group 40 needs nothing: when your fake exports the optional `wanted/1`, it must hold every
 symbol subscribed and every symbol `coverage/1` reports.
+
+**Group 42 is opt-in and skips until you supply the seam: `ambiguous_place_order:`.** A fake
+cannot fail after sending, so you pass a 1-arity function that takes an order request map and
+runs your **real** `place_order/3` path with a transport fault after the send, for example a
+`Req` plug that returns a transport error or a 503 on every attempt:
+
+    ambiguous_place_order: fn request -> MyVenue.place_order(creds, request, plug: down_plug) end
+
+Group 42 asserts that answer is `{:error, {:order_unconfirmed, id, reason}}` (`id` is `nil`,
+the request's `client_order_id`, or a list of ids), and that the same function given a request
+refused before sending (no `:order_type`) is a plain or refused error, never `:order_unconfirmed`.
 
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an

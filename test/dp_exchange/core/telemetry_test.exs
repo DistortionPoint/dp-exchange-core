@@ -135,7 +135,7 @@ defmodule DpExchange.Core.TelemetryTest do
 
       assert_receive {:telemetry, [:dp_exchange, :request, :exception], _measurements, metadata}
       assert metadata.reason == "boom"
-      refute_receive {:telemetry, [:dp_exchange, :request, :stop], _measurements, _metadata}, 50
+      refute_receive {:telemetry, [:dp_exchange, :request, :stop], _measurements, _metadata}, 500
     end
   end
 
@@ -345,7 +345,8 @@ defmodule DpExchange.Core.TelemetryTest do
 
       assert :ok = DefaultRateLimiter.check(provider, 1, opts)
 
-      refute_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], _measurements, _metadata}, 50
+      refute_receive {:telemetry, [:dp_exchange, :rate_limit, :hit], _measurements, _metadata},
+                     500
     end
   end
 
