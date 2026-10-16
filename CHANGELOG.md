@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.97] - 2026-10-16
+
 - **`PollingFeed.update_symbols/2` validates its elements (tick AG).** Only the container was
   checked, so an improper list (`[1 | 2]`) raised inside the feed in `MapSet.new/1` and the
   restart lost every runtime scope, and a list with a non-binary element became a scope the
