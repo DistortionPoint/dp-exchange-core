@@ -22,6 +22,17 @@ defmodule DpExchange.Core.ReferenceVenue do
   modelled on it would exercise assertion 4 barely at all. This one is chosen to be the
   hardest case the contract has to survive, not the easiest.
 
+  ## What it does NOT show: a subscriber's life
+
+  `subscribe/2` here delivers once, synchronously, to the caller and keeps no subscriber
+  set, so there is nothing to monitor, prune or double-deliver. **A real feed is not
+  like that and must not be copied from this.** It keeps a feed-wide subscriber set and
+  symbol set; it monitors a pid subscriber once (`DpExchange.Core.Fanout.watch/2`, a no-op
+  for a pid already watched, so a second `subscribe` of the same pid never doubles delivery);
+  it drops a dead pid on `:DOWN` (`Fanout.forget/2`) and releases the venue-side
+  subscription when the set empties; and it filters on the live symbol set at send time, so
+  a frame for a just-unsubscribed symbol is not sent. See `usage-rules/feeds.md`.
+
   ## What it refuses, and why that is the interesting part
 
   It declares `{:get_transfers, 2}` and `{:quantization, 1}` as `:unsupported` and returns

@@ -872,6 +872,19 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert %{symbols: 1} = PollingFeed.status(pid)
     end
 
+    test "a scope with a non-binary element or an improper tail is refused in the caller" do
+      pid = start_feed(fetch: fn symbol -> {:ok, event(symbol)} end, symbols: ~w(BTC-USD))
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+
+      for bad <- [[1 | 2], ["BTC-USD", nil], [:eth], MapSet.new([1, 2]), ["A" | "B"]] do
+        assert_raise ArgumentError, fn -> PollingFeed.update_symbols(pid, bad) end
+      end
+
+      # Same process, same scope: nothing reached the feed, so nothing was lost to a restart.
+      assert Process.alive?(pid)
+      assert %{symbols: 1} = PollingFeed.status(pid)
+    end
+
     test "an existing symbol is not rescheduled a second time" do
       # Rescheduling would stack a second timer on each symbol, doubling this
       # venue's request rate every time the scope is touched.

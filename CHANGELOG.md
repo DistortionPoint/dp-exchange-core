@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **`PollingFeed.update_symbols/2` validates its elements (tick AG).** Only the container was
+  checked, so an improper list (`[1 | 2]`) raised inside the feed in `MapSet.new/1` and the
+  restart lost every runtime scope, and a list with a non-binary element became a scope the
+  per-symbol fetch was then called with. Both now raise `ArgumentError` in the caller, as
+  `:symbols` at start is already refused. Documented the subscriber lifecycle a venue author
+  must implement (monitor once, prune on `:DOWN`, release on empty, filter at send time) in
+  `usage-rules/feeds.md` and the reference venue's moduledoc, which keeps no subscriber set.
+
 ## [0.3.96] - 2026-10-15
 
 - **Reference venue honours MD4 (tick AF).** The worked example every venue author copies

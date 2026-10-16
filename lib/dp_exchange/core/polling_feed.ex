@@ -289,6 +289,10 @@ defmodule DpExchange.Core.PollingFeed do
 
   @doc """
   Replace the symbol set without restarting the poller.
+
+  Takes a proper list or `MapSet` of binaries. Anything else is refused in the caller:
+  a non-list/`MapSet` raises `FunctionClauseError`, a list or `MapSet` holding a non-binary
+  (or an improper list) raises `ArgumentError`. The feed itself never sees a bad scope.
   """
   @spec update_symbols(pid() | atom(), [String.t()] | MapSet.t(String.t())) :: :ok
   # A list or a `MapSet`, anything else refused HERE in the caller. This is a cast, so a
@@ -296,8 +300,20 @@ defmodule DpExchange.Core.PollingFeed do
   # it: the restart started from its static start opts and lost every scope set by earlier
   # `update_symbols/2` calls, which is the incident `guarded/3` and `safely/1` exist to
   # prevent. The mistake belongs at the call.
-  def update_symbols(server, symbols) when is_list(symbols) or is_struct(symbols, MapSet),
-    do: GenServer.cast(server, {:update_symbols, symbols})
+  #
+  # **The same goes for an element that is not a binary, and for an improper list.** Only the
+  # container was checked, so `update_symbols(feed, [1 | 2])` reached `MapSet.new/1` inside the
+  # feed and raised there (the restart, and the lost scope), and `[nil, 7]` became a scope the
+  # per-symbol fetch was then called with. `:symbols` at start is held to the same rule.
+  def update_symbols(server, symbols) when is_list(symbols) or is_struct(symbols, MapSet) do
+    if valid_symbols?(symbols) do
+      GenServer.cast(server, {:update_symbols, symbols})
+    else
+      raise ArgumentError,
+            "PollingFeed.update_symbols/2 takes a proper list or MapSet of binaries, " <>
+              "got #{inspect(symbols, limit: 10)}"
+    end
+  end
 
   @impl true
   def init(opts) do

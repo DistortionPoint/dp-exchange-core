@@ -31,6 +31,33 @@ thing to leak.
 A dead subscriber stops delivery too. A venue must not accumulate events for a process that
 no longer exists.
 
+**Subscriber lifecycle, for a package author.** `unsubscribe/2` names symbols, never a
+subscriber, so the feed keeps a feed-wide subscriber set and a feed-wide symbol set. Three
+rules, all of which `Core.Fanout` already implements, so use it rather than rewriting them:
+
+- **Monitor a pid subscriber once.** `Fanout.watch/2` monitors a pid and is a no-op for a pid
+  already watched, so subscribing the same pid twice is one monitor and one delivery per
+  message, not two. A registered-name subscriber is deliberately not monitored: a consumer
+  restarting under its name must keep its subscription.
+- **Prune on `:DOWN`.** Call `Fanout.forget/2` (it demonitors with `:flush`) and drop the pid
+  from the subscriber set. A supervised consumer that restarts otherwise leaves its old pid
+  behind on every restart, and `Fanout.deliver/4` walks the whole set once per message.
+  When the last *data* subscriber's `:DOWN` empties the set, release the symbols subscribers
+  asked for through the same path `unsubscribe/2` takes: no socket, route or poll for a
+  symbol nobody is receiving. A notice-only subscriber's death releases nothing, a
+  registered name (never monitored) keeps the set alive, and symbols that are the feed's
+  own start configuration stay. Every venue in the family follows this rule.
+- **Deliver with `Fanout.deliver/4`**, which skips a dead pid or an unregistered name, applies
+  the mailbox bound, and drops the newest, never the oldest. A message for a symbol that was
+  just unsubscribed must not be sent: filter on the live symbol set at send time, not on the
+  set at the time a frame was requested.
+
+`Core.PollingFeed` follows the same shape for its own scope: `update_symbols/2` takes a proper
+list or `MapSet` of binaries and refuses anything else in the caller (`FunctionClauseError`
+for a non-collection, `ArgumentError` for a non-binary element or an improper list). A result
+that comes back for a symbol removed while its fetch was in flight is dropped, and a symbol
+removed and re-added keeps exactly one timer.
+
 ## Back-pressure is a bounded mailbox, and it is declared
 
 A venue pushing faster than you consume stops sending to you once your mailbox passes a
