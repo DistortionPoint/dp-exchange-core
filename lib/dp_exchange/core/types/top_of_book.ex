@@ -96,6 +96,7 @@ defmodule DpExchange.Core.Types.TopOfBook do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:bid, :ask, :bid_size, :ask_size])
+    |> Validate.non_negative!([:bid_size, :ask_size])
   end
 
   @doc """

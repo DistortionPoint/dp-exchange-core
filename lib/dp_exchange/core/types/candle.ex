@@ -101,6 +101,7 @@ defmodule DpExchange.Core.Types.Candle do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:open, :high, :low, :close, :volume])
+    |> Validate.non_negative!([:volume])
   end
 
   @doc """

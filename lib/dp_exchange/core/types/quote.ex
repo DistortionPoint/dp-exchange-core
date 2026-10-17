@@ -134,6 +134,7 @@ defmodule DpExchange.Core.Types.Quote do
       __MODULE__
       |> Validate.new!(@enforce_keys, attrs)
       |> Validate.decimals!([:price, :volume])
+      |> Validate.non_negative!([:volume])
 
     validate_volume_window!(built)
     built

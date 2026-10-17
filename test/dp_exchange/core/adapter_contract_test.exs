@@ -138,6 +138,26 @@ defmodule DpExchange.Core.AdapterContractTest do
     end
   end
 
+  describe "validate_use_opts!/1" do
+    test "accepts every documented option" do
+      opts = Enum.map(DpExchange.Core.AdapterContract.use_options(), &{&1, nil})
+
+      assert DpExchange.Core.AdapterContract.validate_use_opts!(opts) == opts
+    end
+
+    test "a misspelled option raises instead of being ignored" do
+      assert_raise ArgumentError, ~r/unknown option.*:fkae/, fn ->
+        DpExchange.Core.AdapterContract.validate_use_opts!(venue: Foo, fkae: Foo)
+      end
+    end
+
+    test "a non-keyword list raises" do
+      assert_raise ArgumentError, ~r/keyword list/, fn ->
+        DpExchange.Core.AdapterContract.validate_use_opts!(%{venue: Foo})
+      end
+    end
+  end
+
   # --- the call-shape table every fake-driven assertion and assertion 17 share -------
 
   describe "arg_shape/3 and credentialed_callbacks/0" do

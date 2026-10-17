@@ -119,6 +119,38 @@ defmodule DpExchange.Core.Types.Validate do
   end
 
   @doc """
+  Returns `built` if each of `fields` is `nil` or a number that is not negative, and raises
+  `ArgumentError` naming module, field and value otherwise.
+
+  For a size, quantity or volume: a negative one is never what a venue traded or quoted, it
+  is a decode bug (a sign flipped, a delta read as a level), and every value around it stays
+  plausible. Zero is allowed here, because a zero size is a real answer (an empty side, a
+  flat interval); a type that cannot carry zero says so itself. Run it after `decimals!/2`,
+  which guarantees the fields hold a `Decimal`, an integer or `nil`.
+  """
+  @spec non_negative!(struct(), [atom()]) :: struct()
+  def non_negative!(%module{} = built, fields) when is_list(fields) do
+    Enum.each(fields, fn field ->
+      case Map.fetch!(built, field) do
+        nil -> :ok
+        value -> non_negative_value!(module, field, value)
+      end
+    end)
+
+    built
+  end
+
+  defp non_negative_value!(module, field, value) do
+    if Decimal.compare(value, 0) == :lt do
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — a size, " <>
+              "quantity or volume is never negative; a negative one is a decode bug"
+    end
+
+    :ok
+  end
+
+  @doc """
   Returns `built` if each of `fields` is `nil` or a map whose values are all `Decimal`s or
   integers, and raises `ArgumentError` naming module, field and value otherwise.
 

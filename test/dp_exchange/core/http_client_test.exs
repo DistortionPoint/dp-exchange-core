@@ -1053,7 +1053,9 @@ defmodule DpExchange.Core.HttpClientTest do
             raw_status: 1,
             log_requests: "no",
             rate_limit_blocking: :yes,
-            rate_limit_per_endpoint: "true"
+            rate_limit_per_endpoint: "true",
+            decode_body: "false",
+            decode_body: 0
           ] do
         assert_raise ArgumentError, ~r/#{key}/, fn -> get([{:plug, plug}, {key, bad}]) end
       end

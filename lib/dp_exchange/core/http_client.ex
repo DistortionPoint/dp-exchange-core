@@ -1157,7 +1157,15 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
-  @flag_options [:log_requests, :rate_limit_per_endpoint, :rate_limit_blocking, :raw_status]
+  # `:decode_body` is a flag too: `decode_body: "false"` is not `false`, so it decoded when the
+  # caller asked for the raw bytes (and `get/3` then took the native-float path).
+  @flag_options [
+    :log_requests,
+    :rate_limit_per_endpoint,
+    :rate_limit_blocking,
+    :raw_status,
+    :decode_body
+  ]
 
   # **Refused in the caller, like the numbers above.** `:timeout`, `:weight` and the four
   # boolean flags were read with `Config.opt/3` and nothing else, so `timeout: "30000"`

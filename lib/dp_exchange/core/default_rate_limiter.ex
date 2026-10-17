@@ -106,6 +106,8 @@ defmodule DpExchange.Core.DefaultRateLimiter do
       Anything not listed uses `:default`, and an unconfigured `:default` uses
       10 requests per second with a burst of 10.
 
+  Any other option stops the limiter at start with `{:unknown_option, key}`.
+
   A consumer supervises this. Nothing starts it implicitly — a package that opened a
   limiter on load would be starting processes behind the application that depends on it.
   """
@@ -276,14 +278,23 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   @impl GenServer
   def init(opts) do
-    schedule_prune()
+    # **An unknown option stops the limiter at start.** `limit:` for `limits:` was ignored,
+    # and the limiter then ran on its default (10 requests a second) while the consumer
+    # believed its own ceilings applied. `:name` has already been popped by `start_link/1`.
+    case Enum.find(Keyword.keys(opts), &(&1 != :limits)) do
+      nil ->
+        schedule_prune()
 
-    {:ok,
-     %{
-       limits: opts |> Config.opt(:limits, %{}) |> validate_limits!(),
-       # provider => theoretical arrival time, in native monotonic milliseconds
-       tat: %{}
-     }}
+        {:ok,
+         %{
+           limits: opts |> Config.opt(:limits, %{}) |> validate_limits!(),
+           # provider => theoretical arrival time, in native monotonic milliseconds
+           tat: %{}
+         }}
+
+      unknown ->
+        {:stop, {:unknown_option, unknown}}
+    end
   end
 
   # **Idle keys are dropped, because per-endpoint keys are unbounded.** With

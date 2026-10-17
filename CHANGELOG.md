@@ -21,6 +21,21 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Changed (tick AJ)
+
+- `use DpExchange.Core.AdapterContract` refuses an option it does not know (`fkae:`,
+  `sample_pair:`) or a non-keyword list with `ArgumentError`, at compile time. A misspelled
+  option used to be ignored and the group it switched on ran on its default or was skipped,
+  which read as a pass. `AdapterContract.use_options/0` lists the accepted keys.
+- `DefaultRateLimiter.start_link/1` stops with `{:error, {:unknown_option, key}}` for any
+  option other than `:name` and `:limits` (`limit:` was ignored and the limiter ran on its
+  default 10 requests a second).
+- `HttpClient` validates `:decode_body` as a boolean like the other flags (`"false"` was
+  truthy and decoded when the caller asked for raw bytes).
+- `Types.Trade`, `Fill` (`quantity`), `Candle`, `Quote` (`volume`) and `TopOfBook`
+  (`bid_size`, `ask_size`) refuse a negative size, quantity or volume in `new/1` via the new
+  `Types.Validate.non_negative!/2`. Zero and `nil` stay legal.
+
 ## [0.3.99] - 2026-10-17
 
 - **Conformance: two assertions could pass without examining anything (tick AI).**

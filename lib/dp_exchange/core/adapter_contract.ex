@@ -1648,8 +1648,47 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  @use_options ~w(venue fake symbol_format sample_pairs credentials package_root endpoint_opts
+                  order_args absent_feed_opts endpoint_symbols unlisted_symbol
+                  padded_credentials ambiguous_place_order)a
+
+  @doc """
+  The options `use DpExchange.Core.AdapterContract` accepts.
+
+  Anything else is refused by `validate_use_opts!/1`: a misspelled option (`fkae:`,
+  `sample_pair:`) used to be ignored, and the group it was meant to switch on then ran against
+  its default or was skipped, which reads as a pass.
+  """
+  @spec use_options() :: [atom()]
+  def use_options, do: @use_options
+
+  @doc """
+  Validates the options given to `use DpExchange.Core.AdapterContract`, returning them.
+
+  Raises `ArgumentError` for a non-keyword list, or a key outside `use_options/0`.
+  """
+  @spec validate_use_opts!(term()) :: keyword()
+  def validate_use_opts!(opts) do
+    unless Keyword.keyword?(opts) do
+      raise ArgumentError,
+            "use DpExchange.Core.AdapterContract takes a keyword list, got: #{inspect(opts)}"
+    end
+
+    case Enum.reject(Keyword.keys(opts), &(&1 in @use_options)) do
+      [] ->
+        opts
+
+      unknown ->
+        raise ArgumentError,
+              "use DpExchange.Core.AdapterContract: unknown option(s) " <>
+                "#{inspect(Enum.uniq(unknown))}; accepted: #{inspect(@use_options)}"
+    end
+  end
+
   @doc false
   defmacro __using__(opts) do
+    validate_use_opts!(opts)
+
     [
       setup(opts),
       completeness(),

@@ -42,6 +42,15 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       Limiter.start_link(name: :"lim_#{System.unique_integer([:positive])}", limits: limits)
     end
 
+    test "an unknown option stops the limiter instead of running on the default limit" do
+      name = :"lim_#{System.unique_integer([:positive])}"
+
+      assert {:error, {:unknown_option, :limit}} =
+               Limiter.start_link(name: name, limit: %{default: %{limit: 1}})
+
+      assert Process.whereis(name) == nil
+    end
+
     test "a ceiling straight off capabilities/0, with no :burst, is refused by name" do
       assert {:error, {%ArgumentError{message: message}, _stack}} =
                start_with_limits(%{coinbase: %{limit: 10, per_ms: 1_000}})
