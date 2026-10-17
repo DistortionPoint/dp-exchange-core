@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.100] - 2026-10-17
+
 ### Changed (tick AJ)
 
 - `use DpExchange.Core.AdapterContract` refuses an option it does not know (`fkae:`,
