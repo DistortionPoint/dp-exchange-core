@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.99] - 2026-10-17
+
 - **Conformance: two assertions could pass without examining anything (tick AI).**
   Group 12's `catalog_access: :query_only` accepted any `{:error, _}` from `get_symbols/1`;
   it now needs exactly `{:error, {:query_required, venue}}` as `usage-rules.md` states
