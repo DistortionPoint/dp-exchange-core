@@ -21,6 +21,22 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`DpExchange.Core.Options`: a facade call refuses an option it does not read.**
+  `check/2` answers `:ok`, `{:error, {:unknown_option, key}}` (a key holding `nil` counts) or
+  `{:error, {:invalid_options, opts}}` for a non-keyword list; `transport_options/0` lists the
+  keys every call may carry (credentials, environment, base URL, the `Req` test seams, the
+  limiter, timeout and retry knobs). A misspelled `limt:` used to return a plausible answer to
+  a different question. Check order: positional arguments, then options, then credentials.
+- **Conformance group 43: unknown options are refused.** The Fake's `get_price/2`,
+  `get_top_of_book/2`, `get_symbols/1`, `get_order_book/2` and `get_trades/2`, called with the
+  venue's `endpoint_opts` plus `dp_contract_unknown_option: true`, must answer
+  `{:error, {:unknown_option, :dp_contract_unknown_option}}`; `{:error, :not_supported}` stays
+  legal for an unserved endpoint. **A venue whose Fake ignores a stray key now fails the
+  suite** until it adopts `Options.check/2`. `usage-rules/adapter.md` no longer says unknown
+  options are ignored.
+
 ## [0.3.100] - 2026-10-17
 
 ### Changed (tick AJ)

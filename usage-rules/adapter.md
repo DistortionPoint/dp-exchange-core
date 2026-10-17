@@ -316,14 +316,34 @@ Two things follow that are worth stating because they are easy to get backwards:
 - **Never route on an option the caller did not pass.** Webull's five categories are five
   separate endpoints with five different parameter sets; guessing which one a caller meant
   produces a plausible answer from the wrong market.
-- **An option this package does not recognise is ignored, not an error.** A consumer moving
-  between venues carries options that only one of them reads, and refusing them would make
-  the uniform facade unusable for the thing it is for.
+- **An option the call does not read is refused, not ignored.** See "Unknown options" below.
 - **A family option the venue cannot honour is refused, not ignored.** The market-data
   options below have one meaning on every venue. A venue that has no such parameter answers
   `{:error, {:unsupported_option, key}}`; one that has it but with a smaller maximum answers
   `{:error, {:invalid_option, key, value}}`. Silently dropping `limit:` or `depth:` returns a
   different amount of data than was asked for, and every value in it looks right.
+
+### Unknown options: `{:error, {:unknown_option, key}}`
+
+A misspelled `limt:` or `sinse:` that is ignored returns a plausible answer to a different
+question than the caller asked, which is the "nearby substitute" this family exists to avoid.
+(An earlier version of this file said unknown options were ignored, so a consumer could carry
+options only one venue reads. That trade is reversed: a stray key is a caller error.)
+
+Every facade function that takes a keyword `opts`, and its Fake twin, calls
+`DpExchange.Core.Options.check(opts, DpExchange.Core.Options.transport_options() ++ own_keys)`
+at the facade boundary, before an internal key such as `:limiter` is added. `own_keys` is what
+that function itself reads, plus any sub-map it forwards. It answers `:ok`,
+`{:error, {:unknown_option, key}}` (the first offender, and a key holding `nil` counts), or
+`{:error, {:invalid_options, opts}}` for something that is not a keyword list.
+
+**Check order.** Positional arguments first (subscriber, symbols, symbol, range), then the
+options, then the credentials. An option error is decided before anything is sent, so it is a
+plain `{:error, _}`, never `:order_unconfirmed`. A function that answers
+`Venue.not_supported()` keeps answering it whatever the options.
+
+Conformance group 43 holds the Fake to this on the five market-data reads; see
+`usage-rules/testing.md`.
 
 ### Market-data conventions (MD1 to MD11), binding on REST, streams and Fakes
 

@@ -36,6 +36,16 @@ Group 42 asserts that answer is `{:error, {:order_unconfirmed, id, reason}}` (`i
 the request's `client_order_id`, or a list of ids), and that the same function given a request
 refused before sending (no `:order_type`) is a plain or refused error, never `:order_unconfirmed`.
 
+**Group 43 needs nothing from you: it holds your fake to refusing an option nothing reads.**
+For each of `get_price/2`, `get_top_of_book/2`, `get_symbols/1`, `get_order_book/2` and
+`get_trades/2` that `capabilities/0` declares active, the suite calls your fake with your
+`endpoint_opts:` for that endpoint plus `dp_contract_unknown_option: true`. The answer must be
+`{:error, {:unknown_option, :dp_contract_unknown_option}}`; a success or a refusal that carried
+on as if the key were absent fails, as does any other error (a different key, another tag, a
+raise). `{:error, :not_supported}` stays legal for an endpoint the venue does not serve. Check
+the options with `DpExchange.Core.Options.check(opts, Options.transport_options() ++ own_keys)`
+after the positional arguments and before the credentials; see `usage-rules/adapter.md`.
+
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an
 account), `endpoint_symbols:` (`%{{name, arity} => symbol}` for an endpoint narrower than

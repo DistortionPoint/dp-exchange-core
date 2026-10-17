@@ -59,7 +59,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @behaviour DpExchange.Core.Venue
 
-  alias DpExchange.Core.{CanonicalPair, Capabilities, Config, Instrument, Types, Venue}
+  alias DpExchange.Core.{CanonicalPair, Capabilities, Config, Instrument, Options, Types, Venue}
 
   # Longest-first, which is the whole point: reversed, `BTCUSDC` parses as `BTC-USD`.
   # Longest-first, and `BUSD` before `USD` is the ordering that matters: `BTCBUSD` ends
@@ -206,10 +206,12 @@ defmodule DpExchange.Core.ReferenceVenue do
   # --- market data -------------------------------------------------------
 
   @impl true
-  def get_price(symbol, _opts) do
+  def get_price(symbol, opts) do
     # A symbol that is not text is refused locally, before anything else: the family
-    # convention (`Core.Venue.get_price/2`), held by conformance assertion 33.
-    with :ok <- check_symbol(symbol) do
+    # convention (`Core.Venue.get_price/2`), held by conformance assertion 33. Then the
+    # options (group 43): this read has none of its own.
+    with :ok <- check_symbol(symbol),
+         :ok <- Options.check(opts, Options.transport_options()) do
       priced(symbol)
     end
   end
@@ -327,11 +329,16 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def get_symbols(_opts), do: {:ok, @symbols}
+  def get_symbols(opts) do
+    with :ok <- Options.check(opts, Options.transport_options()) do
+      {:ok, @symbols}
+    end
+  end
 
   @impl true
   def get_order_book(symbol, opts) do
     with :ok <- check_symbol(symbol),
+         :ok <- Options.check(opts, [:depth, :limit | Options.transport_options()]),
          {:ok, depth} <- check_depth(Keyword.get(opts, :depth)) do
       booked(symbol, depth)
     end
@@ -365,8 +372,9 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def get_top_of_book(symbol, _opts) do
-    with :ok <- check_symbol(symbol) do
+  def get_top_of_book(symbol, opts) do
+    with :ok <- check_symbol(symbol),
+         :ok <- Options.check(opts, Options.transport_options()) do
       top_of(symbol)
     end
   end
@@ -912,6 +920,9 @@ defmodule DpExchange.Core.ReferenceVenue do
       match?({:error, _reason}, check_symbol(symbol)) ->
         check_symbol(symbol)
 
+      match?({:error, _reason}, trade_options(opts)) ->
+        trade_options(opts)
+
       not is_boolean(Keyword.get(opts, :include_broken, false)) ->
         {:error, {:invalid_option, :include_broken, Keyword.get(opts, :include_broken)}}
 
@@ -925,6 +936,10 @@ defmodule DpExchange.Core.ReferenceVenue do
         traded(symbol, Keyword.get(opts, :include_broken, false))
     end
   end
+
+  # Its own keys: `:since` and `:limit` are known (and then refused as unsupported, MD4).
+  defp trade_options(opts),
+    do: Options.check(opts, [:include_broken, :since, :limit | Options.transport_options()])
 
   defp traded(symbol, include_broken?) do
     # A broken trade in the list, excluded by default. The reference venue carries one so a

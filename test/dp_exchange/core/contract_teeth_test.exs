@@ -1423,6 +1423,49 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert AdapterContract.book_limit_fault({:error, :x}, {:refused, :x}) == nil
     end
 
+    test "assertion 43: an ignored unknown option is a fault, a refusal or :not_supported is not" do
+      probe = AdapterContract.unknown_option_probe()
+      assert probe == :dp_contract_unknown_option
+
+      assert AdapterContract.unknown_option_fault({:error, {:unknown_option, probe}}) == nil
+      assert AdapterContract.unknown_option_fault({:error, :not_supported}) == nil
+
+      # Ignored: the call carried on as if the key were absent.
+      assert AdapterContract.unknown_option_fault({:ok, [1]}) == {:ignored, {:ok, [1]}}
+
+      assert AdapterContract.unknown_option_fault({:refused, :not_listed}) ==
+               {:ignored, {:refused, :not_listed}}
+
+      # A refusal that names another key, another tag or a bare atom is not the family tag.
+      for wrong <- [
+            {:error, {:unknown_option, :limt}},
+            {:error, {:unsupported_option, probe}},
+            {:error, {:invalid_option, probe, true}},
+            {:error, :unknown_option},
+            :error
+          ] do
+        assert AdapterContract.unknown_option_fault(wrong) == {:wrong_error, wrong}
+      end
+
+      assert AdapterContract.unknown_option_fault({:raised, %ArgumentError{}}) ==
+               {:raised, {:raised, %ArgumentError{}}}
+
+      assert {:raised, {:exit, :boom}} = AdapterContract.unknown_option_fault({:exit, :boom})
+    end
+
+    test "the reference venue refuses an unknown option on each read, symbol checked first" do
+      probe = AdapterContract.unknown_option_probe()
+      refusal = {:error, {:unknown_option, probe}}
+
+      assert ReferenceVenue.get_price("BTC-USDC", [{probe, true}]) == refusal
+      assert ReferenceVenue.get_top_of_book("BTC-USDC", [{probe, true}]) == refusal
+      assert ReferenceVenue.get_symbols([{probe, true}]) == refusal
+      assert ReferenceVenue.get_order_book("BTC-USDC", [{probe, nil}]) == refusal
+      assert ReferenceVenue.get_trades("BTC-USDC", [{probe, true}]) == refusal
+      assert {:error, {:invalid_symbol, nil}} = ReferenceVenue.get_price(nil, [{probe, true}])
+      assert {:ok, _quote} = ReferenceVenue.get_price("BTC-USDC", credentials: %{})
+    end
+
     test "a price at or below zero is faulted on a quote, trade and candle" do
       zero = Decimal.new("0")
 

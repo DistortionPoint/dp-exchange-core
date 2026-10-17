@@ -198,7 +198,11 @@ defmodule DpExchange.Core.AdapterContract do
       {42,
        "ambiguous write — opt-in by `ambiguous_place_order:`; a transport fault after the " <>
          "request was sent is {:error, {:order_unconfirmed, id, reason}}, and a refusal " <>
-         "before anything was sent is not"}
+         "before anything was sent is not"},
+      {43,
+       "unknown options — the fake's price, top-of-book, symbols, order-book and trades reads " <>
+         "refuse a key they do not read: {:error, {:unknown_option, key}}, never ignore it; " <>
+         "{:error, :not_supported} stays legal for an unserved endpoint"}
     ]
   end
 
@@ -996,6 +1000,37 @@ defmodule DpExchange.Core.AdapterContract do
 
   def book_limit_fault(_baseline, _answer), do: nil
 
+  @doc """
+  The option key assertion 43 hands every read: one no venue reads and none can mistake for
+  its own.
+  """
+  @spec unknown_option_probe() :: :dp_contract_unknown_option
+  def unknown_option_probe, do: :dp_contract_unknown_option
+
+  @doc """
+  What is wrong with a read's answer to a call carrying `unknown_option_probe/0`, or `nil`.
+  Assertion 43.
+
+  A facade call given an option it does not read must refuse it,
+  `{:error, {:unknown_option, :dp_contract_unknown_option}}`, not ignore it: an ignored
+  misspelling (`limt:`) is a plausible answer to a different question. `{:error,
+  :not_supported}` is also fine, since an endpoint the venue does not serve answers that
+  whatever the options. `{:ignored, answer}` is a success or a refusal that carried on as if
+  the key were absent; `{:wrong_error, answer}` is any other answer, which names a different
+  key or is not the family tag; `{:raised, answer}` is a raise, exit or throw.
+  """
+  @spec unknown_option_fault(term()) ::
+          nil | {:ignored | :wrong_error | :raised, term()}
+  def unknown_option_fault({:error, {:unknown_option, :dp_contract_unknown_option}}), do: nil
+  def unknown_option_fault({:error, :not_supported}), do: nil
+
+  def unknown_option_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def unknown_option_fault({:ok, _value} = answer), do: {:ignored, answer}
+  def unknown_option_fault({:refused, _reason} = answer), do: {:ignored, answer}
+  def unknown_option_fault(answer), do: {:wrong_error, answer}
+
   # --- the decisions of the groups whose checks used to live only inside the quoted tests.
   # Each is public so a test can hand it a value that is wrong in one specific way and see it
   # named: a decision that exists only inside a `test` body in a consuming package cannot be
@@ -1728,6 +1763,7 @@ defmodule DpExchange.Core.AdapterContract do
       include_partial_refusals(),
       candle_conventions(),
       book_option_conventions(),
+      unknown_option_refusal(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -4194,6 +4230,46 @@ defmodule DpExchange.Core.AdapterContract do
                "get_order_book/2 with limit: 1 must succeed, or be refused " <>
                  "{:unsupported_option, :limit} or {:invalid_option, :limit, v}. " <>
                  "Got #{inspect(limit_fault)}"
+      end
+    end
+  end
+
+  # --- 43. an option the call does not read is refused, not ignored ------------------------
+  #
+  # Every supported read on the fake is called with the venue's own `endpoint_opts` plus a key
+  # nothing reads. The decision is `unknown_option_fault/1`, public so the teeth tests can show
+  # it bites. The answer for an endpoint the venue does not serve may stay `:not_supported`.
+  defp unknown_option_refusal do
+    quote location: :keep do
+      describe "43. unknown options are refused, not ignored" do
+        test "reads given an option nothing reads answer {:unknown_option, key}" do
+          if @fake do
+            probe = DpExchange.Core.AdapterContract.unknown_option_probe()
+
+            for {name, arity} = endpoint <- [
+                  {:get_price, 2},
+                  {:get_top_of_book, 2},
+                  {:get_symbols, 1},
+                  {:get_order_book, 2},
+                  {:get_trades, 2}
+                ],
+                Capabilities.active?(@venue.capabilities(), endpoint) do
+              args =
+                name
+                |> endpoint_args(arity)
+                |> List.update_at(-1, &Keyword.put(&1, probe, true))
+
+              answer = call_on(@fake, endpoint, args)
+              fault = DpExchange.Core.AdapterContract.unknown_option_fault(answer)
+
+              assert fault == nil,
+                     "#{name}/#{arity} given #{inspect(probe)}: true must answer " <>
+                       "{:error, {:unknown_option, #{inspect(probe)}}}, and an ignored " <>
+                       "option is how `limt:` returns the answer to a different question. " <>
+                       "Fault: #{inspect(fault, limit: 8)}"
+            end
+          end
+        end
       end
     end
   end
