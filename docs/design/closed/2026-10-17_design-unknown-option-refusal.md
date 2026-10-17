@@ -1,7 +1,7 @@
 # Unknown Option Refusal - Design Document
 
 **Date**: 2026-10-17
-**Status**: Implementing
+**Status**: Implemented
 **Version**: 1.0
 **Author(s)**: User/Claude Collaboration (unattended loop, tick AJ)
 
@@ -9,10 +9,10 @@
 
 ### Objectives
 
-- [ ] A facade call given an option it does not read answers `{:error, {:unknown_option, key}}`
+- [x] A facade call given an option it does not read answers `{:error, {:unknown_option, key}}`
       instead of silently ignoring it.
-- [ ] One shared helper in Core, so the five venues cannot drift on the tag or the check.
-- [ ] A conformance group that proves every venue's Fake does it.
+- [x] One shared helper in Core, so the five venues cannot drift on the tag or the check.
+- [x] A conformance group that proves every venue's Fake does it.
 
 ### Scope
 
@@ -53,11 +53,23 @@ as the family's recurring failure. Fail closed.
       the group runs on the Fake only and passes vacuously for a venue that declares all five
       reads unsupported. Core's `ReferenceVenue` now refuses on the five reads. Releasing this
       makes every venue's Fake fail group 43 until it adopts `Options.check/2`.
-- [ ] **Coinbase / Gemini / Webull / Robinhood / Schwab**: every facade function with opts
+- [x] **Coinbase / Gemini / Webull / Robinhood / Schwab**: every facade function with opts
       calls `Options.check(opts, transport ++ <its own keys>)` at the facade boundary (before
       any internal key such as `:limiter` is added); Fake identical (parity); usage-rules
       lists each function's options; CHANGELOG (breaking: a caller passing a stray key now
       gets an error); floor `~> 0.3.101`.
+      *Found:* each venue now keeps one per-function key table (`OptionKeys` in Coinbase and
+      Gemini, `Options` in Webull and Schwab, `Rest.function_options/1` in Robinhood) shared by
+      facade and Fake. Coinbase, Robinhood and Schwab had grown local checks earlier the same
+      tick; all three were folded onto `Core.Options`. Plain-value reads with no error channel
+      (`coverage/1`, `wanted/1`, `coverage_by_kind/1`, `status/1`, `live?/1`) raise
+      `ArgumentError`. Two traps surfaced at the gate: a family option the contract names
+      (`:limit` on `get_order_book/2`) must stay in the allowed list so its specific
+      `{:unsupported_option, :limit}` answer fires (group 38), and group 31 reuses the placed
+      order's options for `cancel_order/3` unless `endpoint_opts:` declares cancel's own.
+      About a dozen existing tests passed keys their call never read (`account_id`, `to:` on
+      `update_symbols`, the whole feed start list to streaming calls); those tests were
+      corrected, never the allow-lists widened.
 
 ## Design
 
@@ -75,3 +87,15 @@ names them, Core supplies the shared ones through `transport_options/0`.
 
 **Breaking change.** Callers that relied on a stray key being ignored now get an error. That
 is the intent; each venue's CHANGELOG says so.
+
+## Retrospective (2026-10-17)
+
+Shipped in one tick: Core 0.3.101 (`Options`, group 43) and all five venues on it. What
+worked: putting the check in Core first, with a conformance group, turned five independent
+judgement calls into one rule a gate could hold. What did not: the first per-venue passes each
+invented their own tag for a non-keyword list (`{:invalid_option, :opts, v}` in two venues)
+before the design was written — the design doc should come before the first venue edit, not
+after, which is what DDD says. Agents' instinct under a failing test was to widen an
+allow-list; the brief's explicit "fix the test, never widen to pass" was needed and held.
+Gap left open by design: group 43 only probes five reads on the Fake; each venue's own
+table-driven `unknown_option_test.exs` covers the rest of its facade.
