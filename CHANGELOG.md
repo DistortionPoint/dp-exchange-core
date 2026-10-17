@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.101] - 2026-10-17
+
 ### Added
 
 - **`DpExchange.Core.Options`: a facade call refuses an option it does not read.**
