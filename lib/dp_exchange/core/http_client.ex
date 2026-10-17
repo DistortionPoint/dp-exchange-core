@@ -124,6 +124,7 @@ defmodule DpExchange.Core.HttpClient do
   # (`Keyword.put_new_lazy/3`, `Keyword.take/2`, `Config.opt/3`) raises on one.
   @type rate_limited_request_options :: [
           {:provider, provider()}
+          | {:rate_limit_key, provider()}
           | {:account_id, account_id()}
           | {:user_id, user_id()}
           | {:operation, String.t()}
@@ -143,9 +144,10 @@ defmodule DpExchange.Core.HttpClient do
   - `opts`: Additional options including rate limiting context
 
   ## Options
-  - `:timeout` - Request timeout in milliseconds (default: 30_000). It bounds the whole
+  - `:timeout` - Request timeout in milliseconds, or `:infinity` (default: 30_000). It bounds the whole
     response, not each chunk, and it applies to each attempt when `:retry_attempts` retries.
-  - `:retry_attempts` - Number of attempts in all (default: 3 for `:get`, **1 for `:post`,
+  - `:retry_attempts` - Number of attempts in all; `0` sends once, like `1` (default: 3 for
+    `:get`, **1 for `:post`,
     `:put` and `:delete`**). A transport failure or 5xx after a write may mean the write
     took effect, and a retry repeats it. Whether that is safe depends on whether the venue
     deduplicates the request, which only the venue package knows. So a write is never retried
@@ -159,7 +161,19 @@ defmodule DpExchange.Core.HttpClient do
     error returns at once), a body over `:max_body_bytes`, and a request that could not be
     signed.
   - `:log_requests` - Whether to log requests (default: true)
-  - `:provider` - Provider name for rate limiting (required for rate limiting)
+  - `:provider` - The venue's identity: echoed in `{:exchange_error, provider, _}` and in
+    every `[:dp_exchange, :request | :rate_limit, _]` event's `provider:`. Also the limiter
+    bucket unless `:rate_limit_key` names another (no `:provider` and no `:rate_limit_key`
+    means no rate limiting).
+  - `:rate_limit_key` - The limiter bucket this request is metered in (default: `:provider`).
+    Selects ONLY the bucket: a venue that meters order writes apart from its reads passes
+    `provider: :venue, rate_limit_key: :venue_orders`, and errors and telemetry still say
+    `:venue`. The limiter is handed the key and, as `:telemetry_provider`, the identity.
+    The ceiling for the key is configured under the key (`DefaultRateLimiter` `:limits`).
+  - `:plug`, `:adapter`, `:req_adapter` - The transport seam, passed to `Req` (`:req_adapter`
+    is this package's name for `:adapter` and loses to an explicit one). For a transport that
+    never leaves the process, such as a test stub.
+  - `:headers` - `get/3` only: request headers (default: `[]`).
   - `:rate_limit_per_endpoint` - Also meter this request in a bucket of its own endpoint,
     keyed `"<provider> <path>"`, beside the provider's (default: `false`). For a venue that
     states a per-endpoint limit as well as a global one. The endpoint bucket takes the
@@ -1003,9 +1017,13 @@ defmodule DpExchange.Core.HttpClient do
       # transport with `exit/1`. It passed through here, skipped the `:exception` event and
       # exited the CALLING venue process, which this library does not supervise, in place of
       # the `{:error, _}` every other transport failure becomes. Reported with `kind: :exit`.
-      :exit, reason ->
+      #
+      # **A throw is neither, and escaped both.** A `throw/1` out of a transport callback or a
+      # plug is not an exception and not an exit, so the span opened by `:start` never closed
+      # and the throw unwound into the calling venue process. Reported with `kind: :throw`.
+      kind, reason when kind in [:exit, :throw] ->
         Telemetry.request_exception(start_time, metadata,
-          kind: :exit,
+          kind: kind,
           reason: describe(reason),
           stacktrace: scrub_stacktrace(__STACKTRACE__),
           status: nil,
@@ -1275,18 +1293,36 @@ defmodule DpExchange.Core.HttpClient do
   # nothing, and a wait beyond the timeout is refused before ANY bucket is reserved. The
   # waits can still differ by the time the first sleep takes; that narrows the window, as
   # for the non-blocking path, it does not close it.
+  #
+  # **On the blocking path the question is asked quietly.** `check/3` reports a wait as
+  # `[:dp_exchange, :rate_limit, :hit]`, and `acquire/3` then reports the same wait again once
+  # it sleeps it, so one throttled request counted twice on a hit panel. A wait within the
+  # timeout is left to `acquire/3` to report; one beyond it is refused here, so it is reported
+  # here, once. The non-blocking path has no acquire wait, so its `check/3` reports as ever.
   defp precheck([_first, _second | _rest] = keys, opts) do
-    Enum.reduce_while(keys, :ok, fn key, :ok ->
-      answer = limiter().check(key, weight(opts), limiter_opts(opts))
+    blocking = blocking?(opts)
 
-      case precheck_verdict(answer, blocking?(opts), Config.opt(opts, :timeout, 30_000)) do
-        :ok -> {:cont, :ok}
-        refused -> {:halt, refused}
+    Enum.reduce_while(keys, :ok, fn key, :ok ->
+      check_opts = Keyword.put(limiter_opts(opts, key), :telemetry, not blocking)
+      answer = limiter().check(key, weight(opts), check_opts)
+
+      case precheck_verdict(answer, blocking, Config.opt(opts, :timeout, 30_000)) do
+        :ok ->
+          {:cont, :ok}
+
+        refused ->
+          report_quiet_refusal(blocking, identity_for(key, opts), answer)
+          {:halt, refused}
       end
     end)
   end
 
   defp precheck(_one_or_none, _opts), do: :ok
+
+  defp report_quiet_refusal(true, name, {:rate_limited, wait_ms}),
+    do: Telemetry.rate_limit_hit(name, wait_ms)
+
+  defp report_quiet_refusal(_blocking, _name, _answer), do: :ok
 
   # Blocking: a wait within the timeout is what blocking is for. A wait beyond it, or any
   # timeout that is not an integer (left for `acquire/3` to refuse by name), is judged there.
@@ -1316,9 +1352,11 @@ defmodule DpExchange.Core.HttpClient do
   # how long to wait.
   defp check_rate_limit(key, opts) do
     if blocking?(opts) do
-      key |> limiter().acquire(weight(opts), limiter_opts(opts)) |> normalise_acquire()
+      key |> limiter().acquire(weight(opts), limiter_opts(opts, key)) |> normalise_acquire()
     else
-      case limiter().acquire(key, weight(opts), Keyword.put(limiter_opts(opts), :timeout, 0)) do
+      zero_wait = Keyword.put(limiter_opts(opts, key), :timeout, 0)
+
+      case limiter().acquire(key, weight(opts), zero_wait) do
         :ok -> :ok
         {:error, :rate_limit_timeout} -> key |> how_long(opts) |> normalise_check()
         {:error, _reason} -> {:error, :rate_limiter_unavailable}
@@ -1330,7 +1368,7 @@ defmodule DpExchange.Core.HttpClient do
   # reservation was not made, and a second attempt here would be a retry the caller did not
   # ask for. One second is the smallest wait `Retry-After` can state.
   defp how_long(key, opts) do
-    case limiter().check(key, weight(opts), limiter_opts(opts)) do
+    case limiter().check(key, weight(opts), limiter_opts(opts, key)) do
       :ok -> {:rate_limited, 1_000}
       answer -> answer
     end
@@ -1350,7 +1388,7 @@ defmodule DpExchange.Core.HttpClient do
   # (measured in a consumer's log, 2026-10-02: 45 `retry_after=5s` on crypto bars).
   # `:path` is the URL's path, filled in by `attempt/7` unless the caller set its own.
   defp rate_limit_keys(opts) do
-    case Keyword.get(opts, :provider) do
+    case Config.opt(opts, :rate_limit_key, Keyword.get(opts, :provider)) do
       nil ->
         []
 
@@ -1388,7 +1426,8 @@ defmodule DpExchange.Core.HttpClient do
     with [_first | _rest] = keys <- rate_limit_keys(opts),
          limiter = limiter(),
          true <- function_exported?(limiter, :penalize, 3) do
-      limiter.penalize(List.last(keys), seconds * 1_000, limiter_opts(opts))
+      key = List.last(keys)
+      limiter.penalize(key, seconds * 1_000, limiter_opts(opts, key))
     end
 
     :ok
@@ -1410,8 +1449,29 @@ defmodule DpExchange.Core.HttpClient do
   # limit is a property of the venue, not of whose key is presented; scoping per key
   # would let N keys multiply one venue's ceiling by N and get every one of them
   # throttled. A consumer needing more headroom than one venue allows runs clustered.
-  defp limiter_opts(opts) do
-    Keyword.take(opts, [:account_id, :user_id, :operation, :timeout, :limiter])
+  #
+  # `:telemetry_provider` is what the limiter's own `[:dp_exchange, :rate_limit, _]` events
+  # name: the venue's identity, not the bucket it was metered in. See `identity_for/2`.
+  defp limiter_opts(opts, key) do
+    opts
+    |> Keyword.take([:account_id, :user_id, :operation, :timeout, :limiter])
+    |> Keyword.put(:telemetry_provider, identity_for(key, opts))
+  end
+
+  # **The bucket key is not the venue.** `:rate_limit_key` selects only the limiter bucket (a
+  # venue that meters order writes apart from its reads), while `:provider` stays the identity
+  # in errors and telemetry. A key that is the bucket itself reports as `:provider`; an
+  # endpoint key (`"<bucket> <path>"`) reports as `"<provider> <path>"`. Without
+  # `:rate_limit_key` the key and the identity are the same and nothing changes.
+  defp identity_for(key, opts) do
+    bucket = Keyword.get(opts, :rate_limit_key)
+    provider = Keyword.get(opts, :provider)
+
+    cond do
+      is_nil(bucket) or is_nil(provider) -> key
+      key == bucket -> provider
+      true -> String.replace_prefix(key, to_string(bucket), to_string(provider))
+    end
   end
 
   # **Both forms RFC 9110 allows, and a ceiling.** `Retry-After` is delay-seconds OR an

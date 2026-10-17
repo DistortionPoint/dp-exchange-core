@@ -150,14 +150,15 @@ defmodule DpExchange.Core.DefaultRateLimiter do
       # the limiter binding, and a 20-second wait that only reports itself once it is over
       # is a signal that arrives 20 seconds after the thing worth knowing about. The event
       # says "this many tokens were granted, after this much wait" either way.
-      Telemetry.rate_limit_acquire(provider, weight, wait_ms)
+      named = Config.opt(opts, :telemetry_provider, provider)
+      Telemetry.rate_limit_acquire(named, weight, wait_ms)
 
       # A wait this limiter imposed is a hit as much as a venue's own 429 is — the caller
       # is being throttled, and which side decided that is a `:provider` question, not a
       # different-event-name question. Only a non-zero wait counts: reporting every
       # unthrottled acquire as a hit would make the hit rate equal the request rate.
       if wait_ms > 0 do
-        Telemetry.rate_limit_hit(provider, wait_ms)
+        Telemetry.rate_limit_hit(named, wait_ms)
         Process.sleep(wait_ms)
       end
 
@@ -171,6 +172,16 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   `{:error, reason}` when the limiter is not running or the weight is invalid — a caller
   must treat that as "do not proceed", because not knowing is not the same as having
   capacity.
+
+  ## Options
+
+    * `:limiter` - the limiter's registered name (default: this module).
+    * `:telemetry_provider` - what the `[:dp_exchange, :rate_limit, _]` events name as
+      `provider:` (default: the bucket key). `acquire/3` honours it too. `Core.HttpClient`
+      sets it so a request metered in a `:rate_limit_key` bucket reports the venue.
+    * `telemetry: false` - do not emit `[:dp_exchange, :rate_limit, :hit]` for a non-zero
+      answer. For a caller that asks first and then `acquire/3`s the same bucket, whose own
+      `:hit` would otherwise count one wait twice. Absent or `nil` means emit.
   """
   @impl DpExchange.Core.RateLimitBehaviour
   @spec check(atom() | String.t(), pos_integer(), keyword()) ::
@@ -193,7 +204,9 @@ defmodule DpExchange.Core.DefaultRateLimiter do
         # every caller checks once per request — and under-counting real throttling is the
         # worse of the two errors, since it is the one that hides an outage rather than
         # exaggerating one.
-        Telemetry.rate_limit_hit(provider, wait_ms)
+        if Config.opt(opts, :telemetry, true),
+          do: Telemetry.rate_limit_hit(Config.opt(opts, :telemetry_provider, provider), wait_ms)
+
         {:rate_limited, wait_ms}
       end
     end

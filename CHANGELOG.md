@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+- **Conformance: two assertions could pass without examining anything (tick AI).**
+  Group 12's `catalog_access: :query_only` accepted any `{:error, _}` from `get_symbols/1`;
+  it now needs exactly `{:error, {:query_required, venue}}` as `usage-rules.md` states
+  (`AdapterContract.catalog_access_fault/2`, public and unit-tested). Group 38's `:depth`
+  probe treated every refusal as a pass, so a fake that refused `depth: 1` was never checked
+  to honour it; only `{:error, {:invalid_option, :depth, _}}` (a venue minimum) is tolerated
+  now, anything else is `{:answered, _}` (`book_depth_fault/2`). A venue's fake that did
+  either will now fail its suite, which is the point. Group 10's title claimed "only the
+  facade is public", which nothing checks; it now says what is checked (required callbacks
+  exported). `usage-rules.md` and `usage-rules/adapter.md` say which refusal tags the suite
+  asserts and that groups 33 asserts two single-symbol reads, not every one.
+
+- **`HttpClient` `:rate_limit_key` (additive).** Selects only the limiter bucket (default:
+  `:provider`). A venue that meters order writes apart from reads passed a second `:provider`,
+  and Core then echoed it into `{:exchange_error, provider, _}` and into every
+  `[:dp_exchange, :request | :rate_limit, _]` event, so the venue identity was wrong. Now
+  `:provider` is always the identity; the limiter receives the key and, as
+  `:telemetry_provider`, the identity, which `DefaultRateLimiter` uses for its own events.
+  Documented in `usage-rules/adapter.md`.
+- **A blocking wait on two buckets was counted as two rate-limit hits (tick AI).** With
+  `rate_limit_per_endpoint: true` and `rate_limit_blocking: true` the pre-check `check/3` and
+  then `acquire/3` each emitted `[:dp_exchange, :rate_limit, :hit]` for the same wait.
+  `DefaultRateLimiter.check/3` takes `telemetry: false`; `HttpClient` asks quietly on the
+  blocking path and reports a wait beyond the timeout once itself.
+- **A `throw` out of the transport left a `[:request, :start]` span open (tick AI).** Only
+  raises and exits were caught, so the throw skipped `:exception` and unwound into the calling
+  venue process. It now closes the span with `kind: :throw` and returns `{:error, _}` like an
+  exit. Telemetry moduledoc now states the `:exception` metadata exactly (`kind`, `status: nil`,
+  `result: :exception`), the reconnect measurements and the pairing rule. `HttpClient` docs now
+  list `:plug`, `:adapter`, `:req_adapter`, `:headers`, `timeout: :infinity` and
+  `retry_attempts: 0`.
+
 ## [0.3.98] - 2026-10-16
 
 - **`HttpClient.request/5` no longer retries a write by default (tick AH).** The default of 3

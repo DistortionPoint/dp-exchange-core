@@ -367,6 +367,16 @@ present-and-`nil` value is treated the same as an absent one. Reach for it, not
 forwarded `opts` — deliberately not `||`, because `||` is falsy on `false` too and would
 silently turn an explicit `log_requests: false` back into its default.
 
+### A separate rate-limit bucket is `rate_limit_key:`, never a second `provider:`
+
+A venue that meters order writes apart from its reads passes
+`provider: :venue, rate_limit_key: :venue_orders` to `Core.HttpClient`. `:rate_limit_key`
+selects **only** the limiter bucket (default: `:provider`), and the ceiling is configured under
+the key. `:provider` stays the venue's identity: it is the tag in
+`{:exchange_error, provider, _}` and the `provider:` of every `[:dp_exchange, :request |
+:rate_limit, _]` event. Passing a second `provider:` for the bucket made errors and metrics
+name a venue that does not exist.
+
 ### A call with nothing waiting on it must set `rate_limit_blocking: true`
 
 `Core.HttpClient` reads `:rate_limit_blocking` to decide between `acquire/3` — wait for
@@ -794,7 +804,7 @@ to them (and, for 32, your real facade on the no-feed path). A callback you decl
 |---|---|---|
 | `subscribe/2`, `unsubscribe/2`, `update_symbols/2` | not a list, improper list, non-string or blank element | `{:error, {:invalid_symbols, value}}`, never `:ok` |
 | `subscribe/2`, `subscribe_notices/1` | `:to` that is not a pid or an atom other than `nil`/`true`/`false` | `{:error, {:invalid_subscriber, value}}` |
-| `get_price/2`, `get_top_of_book/2` (and every single-symbol read) | `nil`, a number, a blank string | `{:error, {:invalid_symbol, value}}` |
+| `get_price/2`, `get_top_of_book/2` (the suite asserts these two; hold every other single-symbol read to the same rule in your own tests) | `nil`, a number, a blank string | `{:error, {:invalid_symbol, value}}` |
 | `place_order/3` | non-map | `{:error, {:invalid_order_request, request}}` |
 | `place_order/3` | no `:order_type` | `{:error, {:missing_field, :order_type}}` |
 | `place_order/3` | a key the builder does not read | `{:error, {:unsupported_order_field, key}}` |
@@ -839,7 +849,9 @@ Candles are asked for at `"1h"` if you declare it, else your first fixed-width t
   must drop it. **A refused range is skipped, not failed** (a venue window may not reach the
   fake's fixed clock), so give the fake a few bars if you want both bounds exercised.
 - **38.** `get_order_book/2` with `depth: 1` returns at most one level per side, so the fake
-  must honour `:depth`, not only validate it. `limit: 1` must succeed or be refused
+  must honour `:depth`, not only validate it. Anything but a book is a failure, apart from
+  the venue's own minimum, `{:error, {:invalid_option, :depth, v}}`: a fake that refuses
+  `depth: 1` for another reason (a missing option, a raise) has not been examined. `limit: 1` must succeed or be refused
   `{:unsupported_option, :limit}` (Coinbase refuses it because its old `:limit` meant depth);
   a native `{:invalid_option, :limit, v}` is accepted. A fake that simply ignores `:limit`
   also passes, because the suite cannot tell a native `:limit` from an ignored one; that is

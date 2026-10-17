@@ -1,7 +1,7 @@
 defmodule DpExchange.Core.HttpClientTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{Config, HttpClient}
+  alias DpExchange.Core.{Config, DefaultRateLimiter, HttpClient}
 
   @moduletag :capture_log
 
@@ -1762,6 +1762,38 @@ defmodule DpExchange.Core.HttpClientTest do
       assert metadata.result == :exception
     end
 
+    test "a transport that throws closes the span with an :exception event, kind :throw" do
+      use_stub()
+      provider = "throw-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-throw-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:throw_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      adapter = fn _request -> throw(:transport_gone) end
+
+      assert {:error, {:exchange_error, ^provider, "Request exception: " <> _rest}} =
+               HttpClient.request(:get, "https://venue.test/x", [], nil,
+                 provider: provider,
+                 req_adapter: adapter,
+                 retry_attempts: 1
+               )
+
+      assert_receive {:throw_event, metadata}, 5_000
+      assert metadata.kind == :throw
+      assert metadata.result == :exception
+      assert metadata.status == nil
+    end
+
     test "the stacktrace carries arities, never the arguments of the failed call" do
       use_stub()
       provider = "scrub-#{System.unique_integer([:positive])}"
@@ -2086,6 +2118,144 @@ defmodule DpExchange.Core.HttpClientTest do
                )
 
       assert_receive {:query, "zeta=1&alpha=2&mid=3"}, 5_000
+    end
+  end
+
+  describe "a blocking wait on two buckets is one rate-limit hit, not two" do
+    test "the pre-check is quiet; acquire reports the wait it sleeps" do
+      # `check/3` and `acquire/3` both report a wait as `[:rate_limit, :hit]`. The pre-check
+      # asks every bucket first on the blocking path, so one throttled request counted twice.
+      suffix = System.unique_integer([:positive])
+      provider = "dbl#{suffix}"
+      endpoint = "#{provider} /x"
+      limiter = :"dbl_limiter_#{suffix}"
+
+      start_supervised!(
+        {DefaultRateLimiter,
+         name: limiter,
+         limits: %{
+           provider => %{limit: 1_000, per_ms: 1_000, burst: 1_000},
+           endpoint => %{limit: 2, per_ms: 1_000, burst: 1}
+         }}
+      )
+
+      Config.put_override(:rate_limit_module, DefaultRateLimiter)
+      test_pid = self()
+      handler_id = "dbl-hit-#{suffix}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :rate_limit, :hit],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider in [provider, endpoint], do: send(test_pid, {:hit, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      send_one = fn ->
+        HttpClient.request(:get, "https://venue.test/x", [], nil,
+          provider: provider,
+          limiter: limiter,
+          rate_limit_per_endpoint: true,
+          rate_limit_blocking: true,
+          plug: fn conn -> Req.Test.json(conn, %{"ok" => true}) end,
+          retry_attempts: 1
+        )
+      end
+
+      assert {:ok, _first} = send_one.()
+      refute_received {:hit, _metadata}
+
+      assert {:ok, _second} = send_one.()
+      assert_receive {:hit, %{provider: ^endpoint, retry_after_ms: wait}}, 5_000
+      assert wait > 0
+      refute_receive {:hit, _again}, 500
+    end
+  end
+
+  describe ":rate_limit_key selects only the bucket; :provider stays the identity" do
+    test "the limiter is handed the key, and the request event carries the provider" do
+      use_stub()
+      test_pid = self()
+      handler_id = "rlk-stop-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :stop],
+        fn _event, _measurements, metadata, _config ->
+          send(test_pid, {:rlk_stop, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, _response} =
+               HttpClient.request(:post, "https://venue.test/orders", [], "{}",
+                 provider: :rlk_venue,
+                 rate_limit_key: :rlk_venue_orders,
+                 plug: fn conn -> Req.Test.json(conn, %{"ok" => true}) end
+               )
+
+      assert_received {:counted, :rlk_venue_orders, 1}
+      refute_received {:counted, :rlk_venue, _weight}
+      assert_receive {:rlk_stop, %{provider: :rlk_venue}}, 5_000
+    end
+
+    test "a refusal is tagged with the provider, and the bucket is the key" do
+      use_stub({:rate_limited, 1_500})
+
+      assert {:error, {:exchange_error, :rlk_venue, message}} =
+               request(provider: :rlk_venue, rate_limit_key: :rlk_venue_orders)
+
+      assert message =~ "own rate limiter"
+      assert_received {:check, :key, :rlk_venue_orders}
+      refute_received {:check, :key, :rlk_venue}
+    end
+
+    test "the limiter's own hit event names the provider, not the key" do
+      suffix = System.unique_integer([:positive])
+      provider = :"rlk_#{suffix}"
+      bucket = :"rlk_#{suffix}_orders"
+      limiter = :"rlk_limiter_#{suffix}"
+
+      start_supervised!(
+        {DefaultRateLimiter,
+         name: limiter, limits: %{bucket => %{limit: 1, per_ms: 60_000, burst: 1}}}
+      )
+
+      Config.put_override(:rate_limit_module, DefaultRateLimiter)
+      test_pid = self()
+      handler_id = "rlk-hit-#{suffix}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :rate_limit, :hit],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider in [provider, bucket], do: send(test_pid, {:rlk_hit, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      send_one = fn ->
+        HttpClient.request(:get, "https://venue.test/x", [], nil,
+          provider: provider,
+          rate_limit_key: bucket,
+          limiter: limiter,
+          plug: fn conn -> Req.Test.json(conn, %{"ok" => true}) end,
+          retry_attempts: 1
+        )
+      end
+
+      assert {:ok, _first} = send_one.()
+      assert {:error, {:exchange_error, ^provider, _message}} = send_one.()
+      assert_receive {:rlk_hit, %{provider: ^provider, retry_after_ms: wait}}, 5_000
+      assert wait > 0
+      refute_receive {:rlk_hit, %{provider: ^bucket}}, 500
     end
   end
 

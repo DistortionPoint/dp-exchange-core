@@ -133,7 +133,8 @@ Reading these as "not set" loses the whole point of declaring them:
 - **`catalog_access`** — `:enumerable` means `get_symbols/1` returns everything.
   **`:query_only` means there is no list-everything call**, so you must pass a search
   term and will get `{:error, {:query_required, venue}}` without one. That is *not*
-  `:not_supported` — the endpoint works.
+  `:not_supported` — the endpoint works. The suite holds a `:query_only` venue's fake to
+  exactly that tuple (group 12); any other error does not satisfy the claim.
 
 ### Rate ceilings: read `:scope`, and do not treat zero as absent
 
@@ -234,6 +235,12 @@ never match a venue's wording. No venue text and no credential rides in a reason
 | a range starting before what the venue retains | `{:error, {:range_unavailable, timeframe, earliest: dt_or_nil, requested: dt}}` |
 | too many bars for one request | `{:error, {:range_too_wide, count}}` |
 | a reply that may be truncated | `{:error, :history_truncated}` |
+
+**Which rows the suite asserts:** `{:refused, :not_listed}` and `{:invalid_credentials, venue}`
+(group 41, opt-in), `:invalid_symbol(s)`/`:invalid_subscriber`/`:invalid_order_id` and the
+order-request tags (groups 32 to 35), `:order_unconfirmed` (group 42, opt-in) and
+`{:invalid_option, :include_partial, v}` (group 36). The others (`:no_quote`,
+`:account_not_found`, `:insecure_url`, the range tags) are held by each venue's own tests.
 
 `venue` is the venue's `runtime_id/0` atom. A refusal is permanent and an error may be worth
 retrying, so a venue that gives a retryable error for an unlisted symbol or an unknown

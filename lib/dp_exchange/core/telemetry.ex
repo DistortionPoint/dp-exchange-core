@@ -74,16 +74,21 @@ defmodule DpExchange.Core.Telemetry do
     `:rate_limited`. `Core.HttpClient` adds, where they apply: `retry_after_ms:` (on
     `:rate_limited`), and `reason: :response_too_large` with `max_body_bytes:` (on a body
     over the cap). The venue's response body is never carried.
-  - `[:dp_exchange, :request, :exception]` — request raised an
-    exception. Measurements: `%{duration: integer}`. Metadata: same
-    as `:stop` plus `%{kind:, reason:, stacktrace:}`. `reason` is bounded text, and
+  - `[:dp_exchange, :request, :exception]` — request raised, exited or threw.
+    Measurements: `%{duration: integer (native)}`. Metadata: same
+    as `:stop` plus `%{kind:, reason:, stacktrace:}`, where `kind` is `:error`, `:exit` or
+    `:throw`, `status` is `nil` and `result` is `:exception` (not one of `:stop`'s values).
+    Every `:start` is followed by exactly one `:stop` or `:exception`. `reason` is bounded text, and
     `Core.HttpClient` reduces each stacktrace frame's argument list to its arity: a frame
     that failed to match records the request's arguments, headers and signature included.
 
   ### Rate limiting
 
-  - `[:dp_exchange, :rate_limit, :hit]` — caller was rate-limited.
-    Measurements: `%{count: 1}`. Metadata: `%{provider:, retry_after_ms:}`.
+  - `[:dp_exchange, :rate_limit, :hit]` — caller was rate-limited, by this package's limiter
+    or by the venue's own 429. Once per throttled request, whichever party decided.
+    Measurements: `%{count: 1}`. Metadata: `%{provider:, retry_after_ms:}`, milliseconds
+    (`provider` is the venue's identity, never a bucket chosen with `HttpClient`'s
+    `:rate_limit_key`; a per-endpoint bucket reports `"<provider> <path>"`).
   - `[:dp_exchange, :rate_limit, :acquire]` — caller acquired tokens.
     Measurements: `%{tokens: pos_integer, wait_ms: non_neg_integer}`.
     Metadata: `%{provider:, weight:}`.
@@ -100,7 +105,7 @@ defmodule DpExchange.Core.Telemetry do
     `:bytes` from `link_event/2`, a route that cannot measure wire size. Metadata:
     `%{provider:, type:}`.
   - `[:dp_exchange, :link, :reconnect_attempt]` — re-establishing after a drop.
-    Metadata: `%{provider:, attempt: integer, delay_ms: integer}`.
+    Measurements: `%{count: 1}`. Metadata: `%{provider:, attempt: integer, delay_ms: integer}`.
 
   No `endpoint` metadata: a URL is transport, and a venue with no URL to report would
   have to invent one.

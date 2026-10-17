@@ -96,7 +96,10 @@ defmodule DpExchange.Core.AdapterContract do
       {7, "purity — the package links against no host application"},
       {8, "both endpoints answer — pull and subscribe, on every venue, with no flag"},
       {9, "fake fidelity — the fake satisfies this same suite"},
-      {10, "facade completeness and exclusivity — only the facade is public"},
+      {10,
+       "facade completeness — group 1 checks the required callbacks are exported; that no " <>
+         "OTHER function is public is not machine-checked (group 16 flags an export nothing " <>
+         "in the package calls)"},
       {11, "self-sufficiency — nothing injected but credentials and options"},
       {12, "capabilities and behaviour agree, in both directions"},
       {13, "process-scoped isolation — usable in a consumer's async suite"},
@@ -371,6 +374,23 @@ defmodule DpExchange.Core.AdapterContract do
       :error -> Map.get(@arg_shapes, {kind, arity}, List.duplicate(:opts, arity))
     end
   end
+
+  @doc """
+  What is wrong with `get_symbols/1`'s answer without a query, given the declared
+  `catalog_access`, or `nil`. Assertion 12.
+
+  `:query_only` means there is no list-everything call, so the answer must be exactly
+  `{:error, {:query_required, venue}}` (`usage-rules.md`). Any other answer is
+  `{:answered, answer}`: it was `{:error, _}`, so a fake refusing for a missing credential or
+  any unrelated reason satisfied a `:query_only` claim it never demonstrated. `:enumerable`
+  must not demand a query: `:query_required` otherwise.
+  """
+  @spec catalog_access_fault(:enumerable | :query_only, term()) ::
+          nil | :query_required | {:answered, term()}
+  def catalog_access_fault(:query_only, {:error, {:query_required, _venue}}), do: nil
+  def catalog_access_fault(:query_only, answer), do: {:answered, answer}
+  def catalog_access_fault(:enumerable, {:error, {:query_required, _venue}}), do: :query_required
+  def catalog_access_fault(:enumerable, _answer), do: nil
 
   @doc """
   What is wrong with a fake's answer to an endpoint its `capabilities/0` declares active,
@@ -930,10 +950,19 @@ defmodule DpExchange.Core.AdapterContract do
 
   @doc """
   What is wrong with the answer to a `depth` request, or `nil`: `{:too_many_levels, side, n}`
-  when a side carries more than `depth` levels. A refusal is `nil`; a venue may have a minimum.
+  when a side carries more than `depth` levels.
+
+  `{:error, {:invalid_option, :depth, _}}` is `nil`: the venue's own minimum, the family's
+  refusal for a value it cannot honour. **Any other non-success is `{:answered, answer}`.**
+  It was `nil` for every refusal, so a fake that refused `depth: 1` for an unrelated reason
+  (a missing option, a raise) passed an assertion documented as "the fake must honour
+  `:depth`" without a single book being examined. The ask is made with the same arguments as
+  the baseline book of group 25, which already succeeded.
   """
   @spec book_depth_fault(term(), pos_integer()) ::
-          nil | {:too_many_levels, :bids | :asks, non_neg_integer()}
+          nil
+          | {:too_many_levels, :bids | :asks, non_neg_integer()}
+          | {:answered, term()}
   def book_depth_fault({:ok, %DpExchange.Core.Types.OrderBook{bids: bids, asks: asks}}, depth) do
     cond do
       length(bids) > depth -> {:too_many_levels, :bids, length(bids)}
@@ -942,7 +971,8 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
-  def book_depth_fault(_answer, _depth), do: nil
+  def book_depth_fault({:error, {:invalid_option, :depth, _value}}, _depth), do: nil
+  def book_depth_fault(answer, _depth), do: {:answered, answer}
 
   @doc """
   What is wrong with the answer to a request carrying `limit:`, given the answer `baseline`
@@ -2067,15 +2097,16 @@ defmodule DpExchange.Core.AdapterContract do
             # credo:disable-for-next-line Credo.Check.Refactor.Apply
             result = apply(@fake, :get_symbols, endpoint_args(:get_symbols, 1))
 
-            case caps.catalog_access do
-              :query_only ->
-                assert match?({:error, _reason}, result),
-                       "catalog_access is :query_only but get_symbols/1 answered without a query"
+            # The decision is `AdapterContract.catalog_access_fault/2`, public so it can be
+            # shown to fail: `:query_only` needs exactly `{:error, {:query_required, venue}}`.
+            fault =
+              DpExchange.Core.AdapterContract.catalog_access_fault(caps.catalog_access, result)
 
-              :enumerable ->
-                refute match?({:error, {:query_required, _venue}}, result),
-                       "get_symbols/1 demands a query but catalog_access says :enumerable"
-            end
+            assert fault == nil,
+                   "catalog_access is #{inspect(caps.catalog_access)} but get_symbols/1 " <>
+                     "answered #{inspect(result, limit: 8)} (#{inspect(fault, limit: 8)}). " <>
+                     ":query_only demands {:error, {:query_required, venue}}; :enumerable " <>
+                     "must not demand a query"
           end
         end
 

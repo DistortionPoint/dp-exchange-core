@@ -1370,7 +1370,35 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       asks = {:ok, book([{"2", "1"}], [{"3", "1"}, {"4", "1"}])}
       assert AdapterContract.book_depth_fault(asks, 1) == {:too_many_levels, :asks, 2}
-      assert AdapterContract.book_depth_fault({:error, :nope}, 1) == nil
+      # A venue's own minimum is the family's refusal; anything else that is not a book is a
+      # fake that did not honour `:depth`, not a pass for having examined nothing.
+      assert AdapterContract.book_depth_fault({:error, {:invalid_option, :depth, 1}}, 1) == nil
+      assert AdapterContract.book_depth_fault({:error, :nope}, 1) == {:answered, {:error, :nope}}
+
+      assert AdapterContract.book_depth_fault({:refused, :no_quote}, 1) ==
+               {:answered, {:refused, :no_quote}}
+
+      assert AdapterContract.book_depth_fault({:raised, %RuntimeError{message: "x"}}, 1) ==
+               {:answered, {:raised, %RuntimeError{message: "x"}}}
+    end
+
+    test "catalog_access: :query_only needs exactly {:error, {:query_required, venue}}" do
+      required = {:error, {:query_required, :venue}}
+
+      assert AdapterContract.catalog_access_fault(:query_only, required) == nil
+
+      for other <- [
+            {:error, {:missing_credentials, :venue}},
+            {:error, :not_supported},
+            {:error, "boom"},
+            {:ok, []}
+          ] do
+        assert AdapterContract.catalog_access_fault(:query_only, other) == {:answered, other}
+      end
+
+      assert AdapterContract.catalog_access_fault(:enumerable, {:ok, []}) == nil
+      assert AdapterContract.catalog_access_fault(:enumerable, {:error, :x}) == nil
+      assert AdapterContract.catalog_access_fault(:enumerable, required) == :query_required
     end
 
     test "the reference venue honours :depth" do

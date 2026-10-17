@@ -96,7 +96,9 @@ defmodule DpExchange.Core.AdapterContractTest do
       # check lives elsewhere; "cross-cutting" is worth checking is actually true.
       #   * 6 (error discipline) is checked inside group 12's describe — `{:error,
       #     :not_supported}` as the atom, in both directions against `capabilities/0`.
-      #   * 10 (facade completeness and exclusivity) is checked inside group 1's.
+      #   * 10 (facade completeness) is checked inside group 1's. Its old title also claimed
+      #     "exclusivity — only the facade is public", which nothing checks; the title now says
+      #     so rather than listing a guarantee the suite does not make.
       #
       # Pinned so that if one of the three later grows its own describe, or stops being
       # covered where it is, this test is where the next reader finds out what was intended.
