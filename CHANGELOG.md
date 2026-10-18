@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.108] - 2026-10-18
+
 ### Documentation
 
 - Design doc "Sent-once calls and write-rule assertions" (tick AL) implemented across the
