@@ -342,6 +342,82 @@ defmodule DpExchange.Core.Notice do
   @spec kinds() :: [kind()]
   def kinds, do: @kinds
 
+  @typedoc "One way a notice breaks the documented rules. See `conformance_faults/1`."
+  @type fault ::
+          {:not_a_notice, term()}
+          | {:reason_not_matchable, term()}
+          | {:message_not_text, term()}
+          | {:symbols_not_a_list, term()}
+          | :refusal_without_symbols
+          | :data_quality_without_reason
+
+  @doc """
+  The rules in this module's documentation that `new/1` cannot enforce, checked on a built
+  notice. `[]` is conforming. Pure: it never raises and never changes the notice.
+
+  `new/3` deliberately accepts these shapes, because it runs inside venue feeds that must not
+  crash while reporting a fault. Conformance (group 45 of `DpExchange.Core.AdapterContract`)
+  is where they are held instead.
+
+    * `{:reason_not_matchable, value}` - `details.reason` is present and is not an atom (other
+      than `nil` and booleans) or a tuple whose first element is an atom. Venue free text in
+      `reason` is the fault: text goes in `details.message`.
+    * `{:message_not_text, value}` - `details.message` is present and is not a binary.
+    * `{:symbols_not_a_list, value}` - `details.symbols` is present and is not a list.
+    * `:refusal_without_symbols` - a `:refusal` whose `details.symbols` is absent.
+    * `:data_quality_without_reason` - a `:data_quality` with no matchable `details.reason`
+      (a consumer matches the kind of fault on `reason`; it has nothing else to match).
+
+  Faults are returned in the order above, each at most once.
+  """
+  @spec conformance_faults(term()) :: [fault()]
+  def conformance_faults(%Notice{kind: kind, details: details}) when is_map(details) do
+    reason = Map.fetch(details, :reason)
+
+    Enum.reject(
+      [
+        reason_fault(reason),
+        message_fault(Map.fetch(details, :message)),
+        symbols_fault(Map.fetch(details, :symbols)),
+        kind_fault(kind, reason, is_map_key(details, :symbols))
+      ],
+      &is_nil/1
+    )
+  end
+
+  def conformance_faults(%Notice{} = notice), do: [{:not_a_notice, notice}]
+  def conformance_faults(other), do: [{:not_a_notice, other}]
+
+  defp kind_fault(:refusal, _reason, false), do: :refusal_without_symbols
+
+  defp kind_fault(:data_quality, {:ok, value}, _has_symbols?) do
+    if matchable_reason?(value), do: nil, else: :data_quality_without_reason
+  end
+
+  defp kind_fault(:data_quality, :error, _has_symbols?), do: :data_quality_without_reason
+  defp kind_fault(_kind, _reason, _has_symbols?), do: nil
+
+  defp reason_fault(:error), do: nil
+
+  defp reason_fault({:ok, value}),
+    do: if(matchable_reason?(value), do: nil, else: {:reason_not_matchable, value})
+
+  defp message_fault(:error), do: nil
+  defp message_fault({:ok, value}) when is_binary(value), do: nil
+  defp message_fault({:ok, value}), do: {:message_not_text, value}
+
+  defp symbols_fault(:error), do: nil
+  defp symbols_fault({:ok, value}) when is_list(value), do: nil
+  defp symbols_fault({:ok, value}), do: {:symbols_not_a_list, value}
+
+  defp matchable_reason?(value) when value in [nil, true, false], do: false
+  defp matchable_reason?(value) when is_atom(value), do: true
+
+  defp matchable_reason?(value) when is_tuple(value) and tuple_size(value) > 0,
+    do: is_atom(elem(value, 0)) and elem(value, 0) not in [nil, true, false]
+
+  defp matchable_reason?(_value), do: false
+
   # Refused rather than redacted. Redaction implies someone chose what to hide and got it
   # right; refusing means the value never reached a struct that a consumer might log.
   #

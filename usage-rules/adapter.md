@@ -276,9 +276,9 @@ Where a moduledoc explains *why* a guard exists, that explanation is the most va
 thing in the file. Carry it when the code moves or is copied. A guard without its reason
 reads as defensive padding, and the next person tidying up deletes it.
 
-## The surface is 88 callbacks; 85 must exist and 3 may be absent
+## The surface is 89 callbacks; 85 must exist and 4 may be absent
 
-`Venue.required_callbacks/0` is the list the compiler enforces: 85 of the 88. A function for
+`Venue.required_callbacks/0` is the list the compiler enforces: 85 of the 89. A function for
 a callback your venue does not serve **must still be defined**; it declares the endpoint
 `:unsupported` and answers `{:error, :not_supported}`. **A new package does not have to
 implement 85 real endpoints.** It implements what its venue serves and declares the rest —

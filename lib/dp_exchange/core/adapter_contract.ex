@@ -53,7 +53,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Forty-two groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Forty-five groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -202,7 +202,17 @@ defmodule DpExchange.Core.AdapterContract do
       {43,
        "unknown options — the fake's price, top-of-book, symbols, order-book and trades reads " <>
          "refuse a key they do not read: {:error, {:unknown_option, key}}, never ignore it; " <>
-         "{:error, :not_supported} stays legal for an unserved endpoint"}
+         "{:error, :not_supported} stays legal for an unserved endpoint"},
+      {44,
+       "fake export parity — every public function of the facade is exported by the fake at " <>
+         "the same arity, so a consumer's suite can fake whatever it can call"},
+      {45,
+       "notice shapes — every Core.Notice the fake delivers during subscribe_notices/1, " <>
+         "subscribe/2 (sample_pairs, plus unlisted_symbol when named) and unsubscribe/2 has " <>
+         "an atom or tagged-tuple details.reason, text only in details.message, a :refusal " <>
+         "with details.symbols and a :data_quality with a reason. It judges only what the " <>
+         "fake emits: the fakes in this family emit no notice today, so it is a tripwire, " <>
+         "not evidence the real feeds conform (their own tests hold those)"}
     ]
   end
 
@@ -1497,6 +1507,85 @@ defmodule DpExchange.Core.AdapterContract do
         do: {name, arity, other}
   end
 
+  @doc """
+  The public functions of `venue` that `fake` does not export, as a sorted list of
+  `{name, arity}`. Assertion 44.
+
+  A function on the facade and not on the Fake is an `UndefinedFunctionError` in a consumer's
+  `async: true` suite and an answer in production: the consumer cannot fake what the Fake
+  does not have. `[]` is conforming. The Fake may export more (test helpers); that is not
+  judged here.
+  """
+  @spec missing_fake_exports(module(), module()) :: [{atom(), arity()}]
+  def missing_fake_exports(venue, fake) do
+    Code.ensure_loaded!(venue)
+    Code.ensure_loaded!(fake)
+
+    Enum.sort(venue.__info__(:functions) -- fake.__info__(:functions))
+  end
+
+  @doc """
+  The rule violations in `notices`, as `{kind, fault}` pairs, judged by
+  `DpExchange.Core.Notice.conformance_faults/1`. `[]` is conforming, and so is an empty list:
+  judging nothing is not a fault, which is why group 45 also reports how many it judged.
+  """
+  @spec notice_batch_faults([term()]) :: [{atom() | nil, DpExchange.Core.Notice.fault()}]
+  def notice_batch_faults(notices) do
+    Enum.flat_map(notices, fn notice ->
+      kind = if is_map(notice), do: Map.get(notice, :kind)
+      for fault <- DpExchange.Core.Notice.conformance_faults(notice), do: {kind, fault}
+    end)
+  end
+
+  @doc """
+  Drives `fake` through `subscribe_notices/1`, `subscribe/2` of `pairs`, `subscribe/2` of
+  `unlisted` when given, and `unsubscribe/2`, then collects every `Core.Notice` delivered to
+  this process until none arrives for `wait` milliseconds. Assertion 45.
+
+  Returns `{judged, faults}`: how many notices were captured, and `notice_batch_faults/1` of
+  them. A call that raises is `{0, [{:raised, error}]}`. **`judged` of `0` means the fake
+  emitted nothing and the group verified nothing**; the fakes in this family register a notice
+  subscriber silently, so that is the usual case, and it must not be read as coverage.
+  """
+  @spec captured_notice_faults(module(), [String.t()], keyword(), String.t() | nil, timeout()) ::
+          {non_neg_integer(), list()}
+  def captured_notice_faults(fake, pairs, opts, unlisted, wait) do
+    fake.subscribe_notices(to: self())
+    fake.subscribe(pairs, Keyword.put(opts, :to, self()))
+    subscribe_unlisted(fake, unlisted, opts)
+    fake.unsubscribe(pairs, opts)
+
+    notices = drain_notices(wait, [])
+    {length(notices), notice_batch_faults(notices)}
+  rescue
+    error -> {0, [{:raised, error}]}
+  catch
+    kind, reason -> {0, [{kind, reason}]}
+  end
+
+  # The symbol the fake does not list is an extra chance to provoke a notice, not the thing
+  # under test: a fake that refuses or raises on it is judged by its own groups (41), so the
+  # outcome is ignored here rather than failing a group about notice shapes.
+  defp subscribe_unlisted(_fake, nil, _opts), do: :ok
+
+  defp subscribe_unlisted(fake, unlisted, opts) do
+    fake.subscribe([unlisted], Keyword.put(opts, :to, self()))
+    :ok
+  rescue
+    _error -> :ok
+  catch
+    _kind, _reason -> :ok
+  end
+
+  defp drain_notices(wait, acc) do
+    receive do
+      {:dp_exchange, _venue, %DpExchange.Core.Notice{} = notice} ->
+        drain_notices(wait, [notice | acc])
+    after
+      wait -> Enum.reverse(acc)
+    end
+  end
+
   @positive_fields %{
     DpExchange.Core.Types.Quote => [:price],
     DpExchange.Core.Types.Trade => [:price],
@@ -1764,6 +1853,8 @@ defmodule DpExchange.Core.AdapterContract do
       candle_conventions(),
       book_option_conventions(),
       unknown_option_refusal(),
+      fake_export_parity(),
+      notice_shapes(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -3817,7 +3908,7 @@ defmodule DpExchange.Core.AdapterContract do
         # **The expectation comes from `Core.Venue`'s own `@callback` specs**, read with
         # `Code.Typespec.fetch_callbacks/1`, not from a table here — so a callback added later
         # is checked the day it is added, and a table cannot drift from the contract it
-        # restates. Of the 88 callbacks, those whose success type names a `Core.Types` struct
+        # restates. Of the 89 callbacks, those whose success type names a `Core.Types` struct
         # are checked; an answer that is not `{:ok, _}` is left to the assertions that own
         # refusals (6 and 12). What fails is a success of the wrong kind: a raw map, or a list
         # holding anything but the promised struct.
@@ -4268,6 +4359,59 @@ defmodule DpExchange.Core.AdapterContract do
                        "option is how `limt:` returns the answer to a different question. " <>
                        "Fault: #{inspect(fault, limit: 8)}"
             end
+          end
+        end
+      end
+    end
+  end
+
+  # --- 44. the fake exports everything the facade does ------------------------------------
+  #
+  # Each venue's own tests held this (`facade -- fake == []`), so a sixth venue could ship a
+  # Fake with a hole in it and nothing in the shared suite would say so. The decision is
+  # `missing_fake_exports/2`, public so the teeth tests can show it bites. Skipped, not
+  # failed, with no `fake:`: group 1 already fails that configuration by name.
+  defp fake_export_parity do
+    quote location: :keep do
+      describe "44. fake export parity" do
+        test "the fake exports every public function the facade does" do
+          if @fake do
+            missing = DpExchange.Core.AdapterContract.missing_fake_exports(@venue, @fake)
+
+            assert missing == [],
+                   "#{inspect(@fake)} does not export #{inspect(missing)}, which " <>
+                     "#{inspect(@venue)} does. A consumer calling the Fake for it gets an " <>
+                     "UndefinedFunctionError in its suite and an answer in production."
+          end
+        end
+      end
+    end
+  end
+
+  # --- 45. the notices the fake emits follow the documented shapes ------------------------
+  #
+  # `Notice.new/3` accepts these shapes on purpose (a feed must not crash while reporting), so
+  # they are held here. The wait is a quiet-period drain, not a negative assertion: nothing
+  # below depends on a notice NOT arriving. Zero captured is a pass that proves nothing, and
+  # the group's name in `assertions/0` says so rather than claiming coverage.
+  defp notice_shapes do
+    quote location: :keep do
+      describe "45. notice shapes" do
+        test "every notice the fake delivers follows the documented shapes" do
+          if @fake do
+            {_judged, faults} =
+              DpExchange.Core.AdapterContract.captured_notice_faults(
+                @fake,
+                @sample_pairs,
+                arg_value(:opts, {:subscribe, 2}),
+                @unlisted_symbol,
+                500
+              )
+
+            assert faults == [],
+                   "the fake delivered notices that break the shapes `Core.Notice` documents " <>
+                     "(`{kind, fault}`): #{inspect(faults, limit: 8)}. `details.reason` is an " <>
+                     "atom or a tagged tuple, never text; text is `details.message`."
           end
         end
       end

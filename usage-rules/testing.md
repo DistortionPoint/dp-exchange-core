@@ -13,7 +13,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Forty-two assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Forty-five assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
@@ -45,6 +45,18 @@ on as if the key were absent fails, as does any other error (a different key, an
 raise). `{:error, :not_supported}` stays legal for an endpoint the venue does not serve. Check
 the options with `DpExchange.Core.Options.check(opts, Options.transport_options() ++ own_keys)`
 after the positional arguments and before the credentials; see `usage-rules/adapter.md`.
+
+**Group 44 needs nothing from you: your fake must export every public function your facade does.**
+`facade.__info__(:functions) -- fake.__info__(:functions)` must be `[]`, at the same arities
+(default-argument arities included). A function the consumer can call and cannot fake is an
+`UndefinedFunctionError` in their suite. The fake may export more.
+
+**Group 45 needs nothing from you: it judges the notices your fake emits.** It subscribes to
+notices, subscribes and unsubscribes `sample_pairs:` (and `unlisted_symbol:` when named), and
+holds each `Core.Notice` delivered to `Notice.conformance_faults/1`: `details.reason` an atom or
+a tagged tuple (text goes in `details.message`), a `:refusal` with `details.symbols`, a
+`:data_quality` with a `reason`. The fakes in this family emit no notice, so today it judges
+nothing; it is a tripwire, and **not** evidence that a real feed conforms.
 
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an
@@ -218,7 +230,7 @@ Three things worth stating because they have each cost a debugging session here:
 
 ## Which tier each capability group can actually be verified at
 
-The surface grew to 88 callbacks. **Most of the new ones cannot be verified above tier 1
+The surface grew to 89 callbacks. **Most of the new ones cannot be verified above tier 1
 here, and saying which is which is the point of this table** — a group that CI cannot reach
 is a group whose correctness rests on the reference documentation and a consumer's
 production use, and a package author should know that before shipping it.

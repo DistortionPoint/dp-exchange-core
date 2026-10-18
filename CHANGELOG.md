@@ -21,6 +21,37 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance group 44: the fake exports every public function the facade does.**
+  `AdapterContract.missing_fake_exports/2` is `venue.__info__(:functions) --
+  fake.__info__(:functions)`, sorted; the group fails with the missing `{name, arity}` list. Each
+  venue already held this in its own tests (`facade -- fake == []`), so a sixth venue could ship
+  a Fake with a hole and nothing shared would say so. The Fake may export more. Skipped when no
+  `fake:` is given (group 1 fails that configuration by name). **All five venues' own tests
+  assert the same expression, so none is expected to newly fail.**
+
+- **`Notice.conformance_faults/1` and conformance group 45: the documented notice shapes are
+  now checkable.** Pure, never raises, and `Notice.new/3` still accepts every shape (a feed must
+  not crash while reporting). Faults: `{:reason_not_matchable, v}` (`details.reason` present and
+  neither an atom nor a tuple led by an atom: venue text belongs in `details.message`),
+  `{:message_not_text, v}`, `{:symbols_not_a_list, v}`, `:refusal_without_symbols`,
+  `:data_quality_without_reason`. Group 45 judges every notice a Fake delivers during
+  `subscribe_notices/1`, `subscribe/2` and `unsubscribe/2`. **Every Fake in the family emits no
+  notice today, so it judges nothing and is a tripwire, not evidence the real feeds conform**;
+  the real call sites are for each venue's own tests.
+
+### Fixed
+
+- **Docs stated the opposite of the contract for unknown options.** `usage-rules.md` said "an
+  option a package does not recognise is ignored, not an error"; since 0.3.101 a facade call
+  answers `{:error, {:unknown_option, key}}` (or `{:invalid_options, opts}`). It now says so, and
+  lists group 43 among the rows the suite asserts.
+- **Callback counts and the group count had drifted.** `usage-rules/adapter.md` and
+  `usage-rules/testing.md` said 88 callbacks with 3 optional; it is 89 with 4 (`list_instruments/1`,
+  `quantization/1`, `coverage_by_kind/1`, `wanted/1`). The suite is forty-five groups, not
+  forty-two (`AdapterContract` moduledoc and `usage-rules/testing.md`).
+
 ## [0.3.102] - 2026-10-17
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

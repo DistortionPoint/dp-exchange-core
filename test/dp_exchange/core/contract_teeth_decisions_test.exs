@@ -26,6 +26,32 @@ defmodule Broken.Teeth.NoOptionals do
   def provider_name, do: "no-optionals"
 end
 
+defmodule Broken.Teeth.NoisyFake do
+  @moduledoc false
+  # Delivers one conforming notice and one that puts venue text in `details.reason`, the way
+  # a feed that quotes an error into `reason` does. Sent from `subscribe/2`, to the caller.
+  alias DpExchange.Core.Notice
+
+  @spec subscribe_notices(keyword()) :: :ok
+  def subscribe_notices(_opts), do: :ok
+
+  @spec subscribe([String.t()], keyword()) :: :ok
+  def subscribe(_symbols, opts) do
+    to = Keyword.fetch!(opts, :to)
+    send(to, {:dp_exchange, :noisy, Notice.new(:link_up, :noisy)})
+
+    send(
+      to,
+      {:dp_exchange, :noisy, Notice.new(:link_down, :noisy, details: %{reason: "econnrefused"})}
+    )
+
+    :ok
+  end
+
+  @spec unsubscribe([String.t()], keyword()) :: :ok
+  def unsubscribe(_symbols, _opts), do: :ok
+end
+
 defmodule Broken.Teeth.SetFake do
   @moduledoc false
   # A fake whose subscription set misbehaves in the way `opts[:mode]` names. The set lives in
@@ -98,7 +124,7 @@ end
 defmodule DpExchange.Core.ContractTeethDecisionsTest do
   use ExUnit.Case, async: true
 
-  alias DpExchange.Core.{AdapterContract, Capabilities, ReferenceVenue}
+  alias DpExchange.Core.{AdapterContract, Capabilities, Notice, ReferenceVenue}
   alias DpExchange.Core.Types.{Balance, OrderBook, TopOfBook}
   alias DpExchange.Core.Types.Quote, as: Q
 
@@ -137,6 +163,81 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     test "a whole implementation and an absent one are not faulted" do
       assert AdapterContract.half_implemented_optionals(Broken.Teeth.WholeOptional) == []
       assert AdapterContract.half_implemented_optionals(Broken.Teeth.NoOptionals) == []
+    end
+  end
+
+  describe "assertion 44: the fake exports every public function the facade does" do
+    test "a function the fake lacks is named, at the arity it is missing" do
+      assert AdapterContract.missing_fake_exports(
+               Broken.Teeth.HalfOptional,
+               Broken.Teeth.NoOptionals
+             ) == [{:list_instruments, 2}]
+
+      assert AdapterContract.missing_fake_exports(
+               Broken.Teeth.HalfOptional,
+               Broken.Teeth.WholeOptional
+             ) == [{:list_instruments, 2}]
+    end
+
+    test "the same name at another arity does not stand in for the facade's" do
+      assert AdapterContract.missing_fake_exports(
+               Broken.Teeth.WholeOptional,
+               Broken.Teeth.HalfOptional
+             ) == [{:list_instruments, 1}]
+    end
+
+    test "a fake exporting the same functions, or the same module, is not faulted" do
+      assert AdapterContract.missing_fake_exports(
+               Broken.Teeth.WholeOptional,
+               Broken.Teeth.WholeOptional
+             ) == []
+
+      assert AdapterContract.missing_fake_exports(ReferenceVenue, ReferenceVenue) == []
+    end
+  end
+
+  describe "assertion 45: the notices a fake delivers follow the documented shapes" do
+    test "a batch is judged notice by notice, naming the kind" do
+      notices = [
+        Notice.new(:link_up, :v),
+        Notice.new(:link_down, :v, details: %{reason: "text"}),
+        Notice.new(:refusal, :v)
+      ]
+
+      assert AdapterContract.notice_batch_faults(notices) == [
+               {:link_down, {:reason_not_matchable, "text"}},
+               {:refusal, :refusal_without_symbols}
+             ]
+
+      assert AdapterContract.notice_batch_faults([]) == []
+      assert AdapterContract.notice_batch_faults([:nope]) == [{nil, {:not_a_notice, :nope}}]
+    end
+
+    test "a fake delivering a text reason is caught, and the count says what was judged" do
+      assert {2, [{:link_down, {:reason_not_matchable, "econnrefused"}}]} =
+               AdapterContract.captured_notice_faults(
+                 Broken.Teeth.NoisyFake,
+                 ["BTC-USD"],
+                 [],
+                 nil,
+                 50
+               )
+    end
+
+    test "a fake that delivers no notice is judged on nothing, and says so with a zero" do
+      assert AdapterContract.captured_notice_faults(ReferenceVenue, ["ETH-USD"], [], nil, 50) ==
+               {0, []}
+    end
+
+    test "a call that raises is a fault, not a pass" do
+      assert {0, [{:raised, %UndefinedFunctionError{}}]} =
+               AdapterContract.captured_notice_faults(
+                 Broken.Teeth.NoOptionals,
+                 ["BTC-USD"],
+                 [],
+                 nil,
+                 50
+               )
     end
   end
 

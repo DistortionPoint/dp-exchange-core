@@ -239,7 +239,8 @@ never match a venue's wording. No venue text and no credential rides in a reason
 **Which rows the suite asserts:** `{:refused, :not_listed}` and `{:invalid_credentials, venue}`
 (group 41, opt-in), `:invalid_symbol(s)`/`:invalid_subscriber`/`:invalid_order_id` and the
 order-request tags (groups 32 to 35), `:order_unconfirmed` (group 42, opt-in) and
-`{:invalid_option, :include_partial, v}` (group 36). The others (`:no_quote`,
+`{:invalid_option, :include_partial, v}` (group 36), and `{:unknown_option, key}` on the five
+market-data reads (group 43). The others (`:no_quote`,
 `:account_not_found`, `:insecure_url`, the range tags) are held by each venue's own tests.
 
 `venue` is the venue's `runtime_id/0` atom. A refusal is permanent and an error may be worth
@@ -339,10 +340,14 @@ offers; they never carry something the call cannot work without. Where a venue g
 requires a parameter this contract has no word for, the package refuses **locally and by
 name** rather than sending a request the venue will reject less clearly.
 
-An option a package does not recognise is ignored, not an error — a consumer moving between
-venues carries options only one of them reads. The exception is a **family** option the
-venue cannot honour (`limit:`, `depth:`, `since:`, `include_partial:` and the other
-market-data options): that is refused, never ignored. See `usage-rules/adapter.md`.
+An option the call does not read is **refused, not ignored**: `{:error, {:unknown_option, key}}`
+(the first offender, and a key holding `nil` counts), or `{:error, {:invalid_options, opts}}`
+for something that is not a keyword list. A misspelled `limt:` that was ignored would return
+the answer to a different question than the one asked. So a consumer moving between venues
+must not carry an option only one of them reads. A **family** option the venue cannot honour
+(`limit:`, `depth:`, `since:`, `include_partial:` and the other market-data options) is
+refused too, as `{:unsupported_option, key}` or `{:invalid_option, key, value}`. See
+`usage-rules/adapter.md`.
 
 **`timeout:` bounds a whole response, per attempt.** Every package makes its HTTP calls
 through `DpExchange.Core.HttpClient`, where `:timeout` (default 30 s) now caps the entire

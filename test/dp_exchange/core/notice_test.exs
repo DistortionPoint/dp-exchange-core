@@ -331,4 +331,57 @@ defmodule DpExchange.Core.NoticeTest do
       assert Notice.new(:link_up, :gemini, message: nil).message == nil
     end
   end
+
+  describe "conformance_faults/1" do
+    test "a notice following the documented shapes has no faults" do
+      assert Notice.conformance_faults(Notice.new(:link_up, :v)) == []
+
+      assert Notice.conformance_faults(
+               Notice.new(:link_down, :v, details: %{reason: {:http_status, 503}, message: "x"})
+             ) == []
+
+      assert Notice.conformance_faults(
+               Notice.new(:refusal, :v, details: %{reason: :refused, symbols: ["A"]})
+             ) == []
+
+      assert Notice.conformance_faults(
+               Notice.new(:data_quality, :v, details: %{reason: :sequence_gap})
+             ) == []
+    end
+
+    test "free text or a non-matchable value in reason is named" do
+      for bad <- ["{:remote, :closed}", nil, true, 5, %{a: 1}, {"text", 1}, {}, [:a]] do
+        assert Notice.conformance_faults(Notice.new(:link_down, :v, details: %{reason: bad})) ==
+                 [{:reason_not_matchable, bad}]
+      end
+    end
+
+    test "a message that is not text, and symbols that are not a list, are named" do
+      notice = Notice.new(:degraded, :v, details: %{message: :oops, symbols: "A"})
+
+      assert Notice.conformance_faults(notice) ==
+               [{:message_not_text, :oops}, {:symbols_not_a_list, "A"}]
+    end
+
+    test "a refusal needs details.symbols, even an empty list" do
+      assert Notice.conformance_faults(Notice.new(:refusal, :v)) == [:refusal_without_symbols]
+      assert Notice.conformance_faults(Notice.new(:refusal, :v, details: %{symbols: []})) == []
+    end
+
+    test "a data_quality notice needs a matchable reason" do
+      assert Notice.conformance_faults(Notice.new(:data_quality, :v)) ==
+               [:data_quality_without_reason]
+
+      assert Notice.conformance_faults(Notice.new(:data_quality, :v, details: %{reason: "text"})) ==
+               [{:reason_not_matchable, "text"}, :data_quality_without_reason]
+    end
+
+    test "anything that is not a notice is a fault, not a raise" do
+      assert Notice.conformance_faults(nil) == [{:not_a_notice, nil}]
+      assert Notice.conformance_faults(%{kind: :link_up}) == [{:not_a_notice, %{kind: :link_up}}]
+
+      broken = %Notice{kind: :link_up, provider: :v, severity: :info, at: nil, details: nil}
+      assert Notice.conformance_faults(broken) == [{:not_a_notice, broken}]
+    end
+  end
 end
