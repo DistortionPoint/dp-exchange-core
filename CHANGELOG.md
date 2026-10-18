@@ -21,6 +21,11 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- Design doc "Sent-once calls and write-rule assertions" (tick AL) implemented across the
+  family, retrospective appended, moved to `docs/design/closed/`.
+
 ## [0.3.107] - 2026-10-18
 
 ### Added
