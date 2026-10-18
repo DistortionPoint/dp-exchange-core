@@ -13,7 +13,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Forty-five assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Forty-six assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
@@ -57,6 +57,12 @@ holds each `Core.Notice` delivered to `Notice.conformance_faults/1`: `details.re
 a tagged tuple (text goes in `details.message`), a `:refusal` with `details.symbols`, a
 `:data_quality` with a `reason`. The fakes in this family emit no notice, so today it judges
 nothing; it is a tripwire, and **not** evidence that a real feed conforms.
+
+**Group 46 needs nothing from you either.** It calls `subscribe_notices(to: self(),
+timeout: 5_000)` and `subscribe(sample_pairs, opts ++ [to: self(), timeout: 5_000])` on the
+fake and expects `{:error, {:unknown_option, :timeout}}` from both: neither sends a request, so
+nothing reads `:timeout` there (`usage-rules/adapter.md`, "Transport keys only where read"). It
+unsubscribes afterwards so a fake that wrongly accepts leaves nothing behind.
 
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an

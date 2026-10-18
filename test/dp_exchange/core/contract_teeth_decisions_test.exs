@@ -166,6 +166,29 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     end
   end
 
+  describe "assertion 46: a no-request call refuses a transport key" do
+    test "the refusal naming :timeout is the only conforming answer" do
+      assert AdapterContract.no_request_transport_fault({:error, {:unknown_option, :timeout}}) ==
+               nil
+    end
+
+    test "an answer that carried on is ignored, not conforming" do
+      assert AdapterContract.no_request_transport_fault(:ok) == {:ignored, :ok}
+      assert AdapterContract.no_request_transport_fault({:ok, []}) == {:ignored, {:ok, []}}
+    end
+
+    test "a raise, and a refusal naming another key, are faults of their own" do
+      raised = {:raised, %ArgumentError{message: "boom"}}
+      assert AdapterContract.no_request_transport_fault(raised) == {:raised, raised}
+
+      other = {:error, {:unknown_option, :to}}
+      assert AdapterContract.no_request_transport_fault(other) == {:wrong_error, other}
+
+      assert AdapterContract.no_request_transport_fault({:exit, :noproc}) ==
+               {:raised, {:exit, :noproc}}
+    end
+  end
+
   describe "assertion 44: the fake exports every public function the facade does" do
     test "a function the fake lacks is named, at the arity it is missing" do
       assert AdapterContract.missing_fake_exports(

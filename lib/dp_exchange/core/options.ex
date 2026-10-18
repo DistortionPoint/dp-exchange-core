@@ -18,10 +18,20 @@ defmodule DpExchange.Core.Options do
 
   ## What is allowed
 
-  A function's allowed list is `transport_options/0` plus the keys it reads itself. The
-  transport keys are shared because every venue forwards them to `Core.HttpClient` or reads
-  them as test seams; the venue names the rest. A nil-valued key is still a key: a forwarded
-  `limt: nil` is refused too, because a caller who typed the key meant something by it.
+  `transport_options/0` is the shared vocabulary, not a list every call accepts. A call that
+  sends an HTTP request allows `transport_options() -- not_read` plus the keys it reads
+  itself, where `not_read` names each shared key that call cannot honour (no sandbox:
+  `:environment`; no URL override: `:base_url`), and every key it allows reaches
+  `Core.HttpClient` or the seam that reads it. A call that sends no request (the feed and
+  local reads) allows its own keys plus `:credentials` only. `:credentials` is exempt because
+  a consumer hands one credential set to every call, and one a call does not need changes no
+  answer. A nil-valued key is still a key: a forwarded `limt: nil` is refused too, because a
+  caller who typed the key meant something by it.
+
+  The earlier rule, "every call allows every transport key", rested on a claim that every
+  venue forwards them all. Measured in tick AK, it was false in three: `environment: :sandbox`
+  sent Robinhood orders to production, Schwab ignored `base_url:` while sending a live token,
+  and `max_body_bytes:` bounded nothing on two venues' REST calls.
 
   ## What it answers
 
@@ -66,11 +76,12 @@ defmodule DpExchange.Core.Options do
   ]
 
   @doc """
-  The option keys every facade call may carry, whatever the venue.
+  The shared transport keys, whatever the venue: their names and meanings.
 
   Credentials, the environment and base URL, the `Req` test seams (`:plug`, `:adapter`,
-  `:req_adapter`), and the limiter, timeout and retry knobs `Core.HttpClient` reads. A venue
-  checks `opts` against `transport_options() ++ its_own_keys`.
+  `:req_adapter`), and the limiter, timeout and retry knobs `Core.HttpClient` reads. A call
+  that sends a request checks `opts` against `(transport_options() -- not_read) ++ own_keys`;
+  a call that sends none against `[:credentials | own_keys]` (see the moduledoc).
   """
   @spec transport_options() :: [atom()]
   def transport_options, do: @transport_options

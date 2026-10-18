@@ -73,6 +73,10 @@ defmodule DpExchange.Core.ReferenceVenue do
   # What `subscribe/2` has actually delivered in THIS process — see `coverage/1`.
   @covered_key {__MODULE__, :covered}
 
+  # A call that sends no request reads its own keys and `:credentials` only
+  # (`DpExchange.Core.Options`, "What is allowed"); group 46 holds it.
+  @no_request_options [:to, :feed, :credentials]
+
   # The reference venue does not stake — `has_staking: false` below, and these six
   # declared `:unsupported` so assertion 12 sees the declaration and the behaviour agree.
   @unsupported [
@@ -1024,8 +1028,11 @@ defmodule DpExchange.Core.ReferenceVenue do
   def subscribe(symbols, opts) do
     # Arguments first, symbols before subscriber (assertion 32); upper-cased on the way in,
     # as every real facade does (assertion 29).
+    # Then the options (group 46): no request is sent, so no transport key but
+    # `:credentials` is read here.
     with {:ok, symbols} <- check_symbols(symbols),
-         {:ok, target} <- check_subscriber(Config.opt(opts, :to, self())) do
+         {:ok, target} <- check_subscriber(Config.opt(opts, :to, self())),
+         :ok <- Options.check(opts, @no_request_options) do
       deliver_subscription(symbols, target)
     end
   end
@@ -1120,7 +1127,8 @@ defmodule DpExchange.Core.ReferenceVenue do
   def subscribe_notices(opts) do
     # Registers and sends nothing: this reference has no feed, so it raises no notice, and a
     # `:link_up` on registration is one the real feeds do not send (family convention 9).
-    with {:ok, _target} <- check_subscriber(Config.opt(opts, :to, self())) do
+    with {:ok, _target} <- check_subscriber(Config.opt(opts, :to, self())),
+         :ok <- Options.check(opts, @no_request_options) do
       :ok
     end
   end

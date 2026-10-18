@@ -53,7 +53,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Forty-five groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Forty-six groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -212,7 +212,11 @@ defmodule DpExchange.Core.AdapterContract do
          "an atom or tagged-tuple details.reason, text only in details.message, a :refusal " <>
          "with details.symbols and a :data_quality with a reason. It judges only what the " <>
          "fake emits: the fakes in this family emit no notice today, so it is a tripwire, " <>
-         "not evidence the real feeds conform (their own tests hold those)"}
+         "not evidence the real feeds conform (their own tests hold those)"},
+      {46,
+       "transport keys only where read — subscribe_notices/1 and subscribe/2 on the fake send " <>
+         "no request, so `timeout: 5_000` there is {:error, {:unknown_option, :timeout}}, " <>
+         "never accepted and ignored"}
     ]
   end
 
@@ -1041,6 +1045,27 @@ defmodule DpExchange.Core.AdapterContract do
   def unknown_option_fault({:refused, _reason} = answer), do: {:ignored, answer}
   def unknown_option_fault(answer), do: {:wrong_error, answer}
 
+  @doc """
+  What is wrong with a no-request call's answer to `timeout: 5_000`, or `nil`. Assertion 46.
+
+  `subscribe_notices/1` and `subscribe/2` send no HTTP request, so a transport key there is
+  read by nothing: a caller who passed `timeout:` believed the call was bounded and it was
+  not. It must be `{:error, {:unknown_option, :timeout}}`. `{:ignored, answer}` is any
+  answer that carried on (`:ok`, `{:ok, _}`); `{:raised, answer}` a raise, exit or throw;
+  `{:wrong_error, answer}` anything else.
+  """
+  @spec no_request_transport_fault(term()) ::
+          nil | {:ignored | :wrong_error | :raised, term()}
+  def no_request_transport_fault({:error, {:unknown_option, :timeout}}), do: nil
+
+  def no_request_transport_fault({kind, _reason} = answer)
+      when kind in [:raised, :exit, :throw],
+      do: {:raised, answer}
+
+  def no_request_transport_fault(:ok = answer), do: {:ignored, answer}
+  def no_request_transport_fault({:ok, _value} = answer), do: {:ignored, answer}
+  def no_request_transport_fault(answer), do: {:wrong_error, answer}
+
   # --- the decisions of the groups whose checks used to live only inside the quoted tests.
   # Each is public so a test can hand it a value that is wrong in one specific way and see it
   # named: a decision that exists only inside a `test` body in a consuming package cannot be
@@ -1855,6 +1880,7 @@ defmodule DpExchange.Core.AdapterContract do
       unknown_option_refusal(),
       fake_export_parity(),
       notice_shapes(),
+      no_request_transport_refusal(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -4412,6 +4438,46 @@ defmodule DpExchange.Core.AdapterContract do
                    "the fake delivered notices that break the shapes `Core.Notice` documents " <>
                      "(`{kind, fault}`): #{inspect(faults, limit: 8)}. `details.reason` is an " <>
                      "atom or a tagged tuple, never text; text is `details.message`."
+          end
+        end
+      end
+    end
+  end
+
+  # --- 46. a call that sends no request takes no transport key ----------------------------
+  #
+  # Tick AK measured venues accepting the HTTP keys on feed calls that read none of them. The
+  # decision is `no_request_transport_fault/1`, public so the teeth tests can show it bites.
+  # The subscriber is this test process and is released again, so a fake that wrongly accepts
+  # leaves nothing registered behind.
+  defp no_request_transport_refusal do
+    quote location: :keep do
+      describe "46. transport keys only where read" do
+        test "no-request calls refuse a transport key they cannot read" do
+          if @fake do
+            sub_opts = arg_value(:opts, {:subscribe, 2})
+
+            answers = [
+              {:subscribe_notices,
+               call_on(@fake, {:subscribe_notices, 1}, [[to: self(), timeout: 5_000]])},
+              {:subscribe,
+               call_on(@fake, {:subscribe, 2}, [
+                 @sample_pairs,
+                 sub_opts ++ [to: self(), timeout: 5_000]
+               ])}
+            ]
+
+            call_on(@fake, {:unsubscribe, 2}, [@sample_pairs, sub_opts])
+
+            faults =
+              for {name, answer} <- answers,
+                  fault = DpExchange.Core.AdapterContract.no_request_transport_fault(answer),
+                  do: {name, fault}
+
+            assert faults == [],
+                   "a call that sends no request accepted `timeout:`, which nothing reads: " <>
+                     "#{inspect(faults, limit: 8)}. Refuse it as " <>
+                     "{:error, {:unknown_option, :timeout}}."
           end
         end
       end

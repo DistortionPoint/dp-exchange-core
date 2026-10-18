@@ -21,6 +21,25 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance group 46: a call that sends no request takes no transport key.**
+  `subscribe_notices/1` and `subscribe/2` on the Fake, given `timeout: 5_000`, must answer
+  `{:error, {:unknown_option, :timeout}}`. The decision is
+  `AdapterContract.no_request_transport_fault/1`. Tick AK measured every venue accepting the
+  HTTP keys on feed calls that read none of them.
+
+### Changed
+
+- **`transport_options/0` is the shared vocabulary, not a list every call accepts**
+  (`DpExchange.Core.Options` moduledoc, `usage-rules/adapter.md`, design doc
+  `docs/design/2026-10-18_design-transport-keys-only-where-read.md`). A call that sends a
+  request allows the shared keys it actually forwards, and refuses one it cannot honour; a call
+  that sends none allows only its own keys and `:credentials`. The old premise, that every venue
+  forwards every key, was false in three venues: `environment: :sandbox` sent Robinhood orders
+  to production, Schwab ignored `base_url:` with a live token, and `max_body_bytes:` bounded
+  nothing on two venues' REST calls.
+
 ## [0.3.103] - 2026-10-18
 
 ### Added
