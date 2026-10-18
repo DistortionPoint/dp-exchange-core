@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.103] - 2026-10-18
+
 ### Added
 
 - **Conformance group 44: the fake exports every public function the facade does.**
