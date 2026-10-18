@@ -350,7 +350,7 @@ is not a list every call accepts. A call that sends an HTTP request allows
 `transport_options() -- not_read`, naming each key it cannot honour (a venue with no sandbox
 cannot honour `:environment`; a venue with no URL override cannot honour `:base_url`), and
 every key it allows is actually forwarded to `Core.HttpClient`. A call that sends no request
-(`subscribe/2`, `subscribe_notices/1`, `coverage/1` and the other feed and local reads) allows
+(`subscribe_notices/1`, `coverage/1` and the other feed and local reads; `subscribe/2` too where it sends no subscription request of its own) allows
 only its own keys plus `:credentials`. `:credentials` is the one exemption: a consumer, and this
 suite, hands one credential set to every call, and a credential a call does not need changes no
 answer. Tick AK measured the opposite in three venues: `environment: :sandbox` sent orders to

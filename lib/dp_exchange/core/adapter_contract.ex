@@ -214,8 +214,8 @@ defmodule DpExchange.Core.AdapterContract do
          "fake emits: the fakes in this family emit no notice today, so it is a tripwire, " <>
          "not evidence the real feeds conform (their own tests hold those)"},
       {46,
-       "transport keys only where read — subscribe_notices/1 and subscribe/2 on the fake send " <>
-         "no request, so `timeout: 5_000` there is {:error, {:unknown_option, :timeout}}, " <>
+       "transport keys only where read — subscribe_notices/1 on the fake sends no request, " <>
+         "so `timeout: 5_000` there is {:error, {:unknown_option, :timeout}}, " <>
          "never accepted and ignored"}
     ]
   end
@@ -1048,7 +1048,7 @@ defmodule DpExchange.Core.AdapterContract do
   @doc """
   What is wrong with a no-request call's answer to `timeout: 5_000`, or `nil`. Assertion 46.
 
-  `subscribe_notices/1` and `subscribe/2` send no HTTP request, so a transport key there is
+  `subscribe_notices/1` sends no HTTP request, so a transport key there is
   read by nothing: a caller who passed `timeout:` believed the call was bounded and it was
   not. It must be `{:error, {:unknown_option, :timeout}}`. `{:ignored, answer}` is any
   answer that carried on (`:ok`, `{:ok, _}`); `{:raised, answer}` a raise, exit or throw;
@@ -4455,19 +4455,14 @@ defmodule DpExchange.Core.AdapterContract do
       describe "46. transport keys only where read" do
         test "no-request calls refuse a transport key they cannot read" do
           if @fake do
-            sub_opts = arg_value(:opts, {:subscribe, 2})
-
+            # `subscribe_notices/1` only. `subscribe/2` was probed too in 0.3.104, and that was
+            # wrong: Webull's subscribe sends the venue's subscription request, so it reads the
+            # HTTP keys and is right to accept them. Registering for notices sends nothing on
+            # any venue.
             answers = [
               {:subscribe_notices,
-               call_on(@fake, {:subscribe_notices, 1}, [[to: self(), timeout: 5_000]])},
-              {:subscribe,
-               call_on(@fake, {:subscribe, 2}, [
-                 @sample_pairs,
-                 sub_opts ++ [to: self(), timeout: 5_000]
-               ])}
+               call_on(@fake, {:subscribe_notices, 1}, [[to: self(), timeout: 5_000]])}
             ]
-
-            call_on(@fake, {:unsubscribe, 2}, [@sample_pairs, sub_opts])
 
             faults =
               for {name, answer} <- answers,

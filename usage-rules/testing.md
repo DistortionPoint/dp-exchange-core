@@ -59,10 +59,10 @@ a tagged tuple (text goes in `details.message`), a `:refusal` with `details.symb
 nothing; it is a tripwire, and **not** evidence that a real feed conforms.
 
 **Group 46 needs nothing from you either.** It calls `subscribe_notices(to: self(),
-timeout: 5_000)` and `subscribe(sample_pairs, opts ++ [to: self(), timeout: 5_000])` on the
-fake and expects `{:error, {:unknown_option, :timeout}}` from both: neither sends a request, so
-nothing reads `:timeout` there (`usage-rules/adapter.md`, "Transport keys only where read"). It
-unsubscribes afterwards so a fake that wrongly accepts leaves nothing behind.
+timeout: 5_000)` on the fake and expects `{:error, {:unknown_option, :timeout}}`: registering
+for notices sends no request on any venue, so nothing reads `:timeout` there
+(`usage-rules/adapter.md`, "Transport keys only where read"). `subscribe/2` is not probed: a
+venue whose subscribe sends a subscription request (Webull) reads the HTTP keys there.
 
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an

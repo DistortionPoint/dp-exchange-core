@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conformance group 46 no longer probes `subscribe/2`.** 0.3.104 required `timeout:` to be
+  refused there too, on the premise that subscribing sends no request. Webull's subscribe
+  sends the venue's subscription request and reads the HTTP keys, so the group would have
+  failed a venue for honouring them. It now probes `subscribe_notices/1` only, which sends
+  nothing on any venue.
+
 ## [0.3.104] - 2026-10-18
 
 ### Added
