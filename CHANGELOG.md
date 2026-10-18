@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.104] - 2026-10-18
+
 ### Added
 
 - **Conformance group 46: a call that sends no request takes no transport key.**
