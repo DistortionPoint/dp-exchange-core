@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.105] - 2026-10-18
+
 ### Fixed
 
 - **Conformance group 46 no longer probes `subscribe/2`.** 0.3.104 required `timeout:` to be
