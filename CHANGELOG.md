@@ -21,6 +21,13 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **Design doc closed: transport keys only where read** (`docs/design/closed/`). Every
+  checklist item now records what each venue found, and a retrospective is appended. It notes
+  that group 46 shipped wrong in 0.3.104, written from four venues instead of five, and that
+  the 2026-10-17 premise that every venue forwards every key had never been measured.
+
 ## [0.3.105] - 2026-10-18
 
 ### Fixed
