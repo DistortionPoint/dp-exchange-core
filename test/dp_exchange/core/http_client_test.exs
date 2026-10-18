@@ -1147,6 +1147,99 @@ defmodule DpExchange.Core.HttpClientTest do
       end
     end
 
+    # A body labelled JSON that is not JSON. Req used to return its decode exception in place
+    # of the response, taking the status with it.
+    defp bad_json(status, counter, headers \\ []) do
+      fn conn ->
+        :counters.add(counter, 1, 1)
+
+        conn =
+          Enum.reduce(headers, conn, fn {k, v}, acc -> Plug.Conn.put_resp_header(acc, k, v) end)
+
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(status, "{bad json")
+      end
+    end
+
+    test "a 429 with an undecodable JSON body is still a rate-limit answer carrying its wait" do
+      use_stub()
+
+      for method <- [:get, :post] do
+        counter = :counters.new(1, [])
+
+        assert {:error, {:exchange_error, "v", message}} =
+                 HttpClient.request(method, "http://venue.test/x", [], nil,
+                   plug: bad_json(429, counter, [{"retry-after", "7"}]),
+                   provider: "v",
+                   retry_attempts: 3,
+                   retry_delay: 1
+                 )
+
+        assert message =~ "Rate limited by the venue"
+        assert message =~ "retry after 7s"
+        assert :counters.get(counter, 1) == 1
+
+        # The bucket is held for the venue's 7 s, whatever the body looked like.
+        assert_received {:penalized, "v", 7_000}
+      end
+    end
+
+    test "a 400 with an undecodable JSON body is permanent: sent once, not retried" do
+      counter = :counters.new(1, [])
+
+      assert {:error, message} =
+               get(plug: bad_json(400, counter), retry_attempts: 3, retry_delay: 1)
+
+      assert message =~ "Client error (400)"
+      assert message =~ "{bad json"
+      assert :counters.get(counter, 1) == 1
+    end
+
+    test "a 503 with an undecodable JSON body on a GET is retried as before" do
+      counter = :counters.new(1, [])
+
+      assert {:error, message} =
+               get(plug: bad_json(503, counter), retry_attempts: 3, retry_delay: 1)
+
+      assert message =~ "Server error (503)"
+      assert message =~ "{bad json"
+      assert :counters.get(counter, 1) == 3
+    end
+
+    test "a 503 with an undecodable JSON body on a write is one attempt, with its status" do
+      counter = :counters.new(1, [])
+
+      assert {:error, message} =
+               HttpClient.request(:post, "http://venue.test/x", [], "{}",
+                 plug: bad_json(503, counter)
+               )
+
+      assert message =~ "Server error (503)"
+      assert :counters.get(counter, 1) == 1
+    end
+
+    test "raw_status hands an undecodable error body back as bytes, a decodable one decoded" do
+      counter = :counters.new(1, [])
+
+      assert {:ok, %{status: 400, body: "{bad json"}} =
+               get(plug: bad_json(400, counter), raw_status: true)
+
+      assert {:ok, %{status: 400, body: %{"code" => "x"}}} =
+               get(plug: responding(400, %{code: "x"}), raw_status: true)
+
+      assert {:ok, %{status: 400, body: ~s({"code":"x"})}} =
+               get(plug: responding(400, %{code: "x"}), raw_status: true, decode_body: false)
+    end
+
+    test "a 2xx with an undecodable JSON body keeps failing as a request failure" do
+      counter = :counters.new(1, [])
+
+      assert {:error, message} = get(plug: bad_json(200, counter))
+      assert message =~ "Request failed"
+      assert :counters.get(counter, 1) == 1
+    end
+
     test "a small error body is carried whole" do
       assert {:error, message} = get(plug: responding(500, %{"reason" => "down"}))
       assert message =~ ~s("reason" => "down")

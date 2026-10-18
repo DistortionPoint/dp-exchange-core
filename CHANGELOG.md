@@ -49,6 +49,15 @@ an acceptable changelog line.
 
 ### Fixed
 
+- `HttpClient`: **an undecodable non-2xx body labelled JSON no longer costs the response its
+  status.** Req returned its decode exception in place of the response, so a 429 with
+  `{bad json` lost its `Retry-After` and bucket hold and was retried as a transport failure,
+  a 400 was retried, and a write's 503 read "Request failed". A non-2xx body is now held aside
+  while it streams and decoded leniently afterwards (JSON by content type, unless
+  `decode_body: false`); if it does not decode it is passed through as the bytes. The 429 is a
+  rate-limit answer with its wait, a 4xx is permanent, a 5xx is what it is, and with
+  `raw_status: true` an undecodable error body arrives as a binary. A 2xx with an undecodable
+  body is unchanged.
 - `HttpClient`: an error body that is not valid UTF-8 (binary page, cut multi-byte sequence)
   is shown as `inspect/2`ed bytes in the `"Client error"`/`"Server error"` message instead of
   putting invalid text into the error tuple.

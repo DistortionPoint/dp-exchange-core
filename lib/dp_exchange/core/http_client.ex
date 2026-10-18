@@ -77,6 +77,9 @@ defmodule DpExchange.Core.HttpClient do
   # Marks a response whose body was cut at the limit, so `make_http_request/5` can turn it
   # into an error after Req's response steps have run over the (emptied) body.
   @too_large_key :dp_exchange_response_too_large
+
+  # Where a non-2xx body is held until `settled_body/2` decodes it. See `capped_into/1`.
+  @raw_body_key :dp_exchange_raw_body
   @type http_method :: :get | :post | :put | :delete
   @type headers :: [{String.t(), String.t()}]
 
@@ -937,7 +940,9 @@ defmodule DpExchange.Core.HttpClient do
           {:too_large, status} ->
             {too_large(max_body_bytes, url, opts), status}
 
-          {:ok, %Req.Response{status: status, headers: resp_headers, body: resp_body}} ->
+          {:ok, %Req.Response{status: status, headers: resp_headers} = raw_response} ->
+            resp_body = settled_body(raw_response, opts)
+
             response = %{
               status: status,
               headers: resp_headers,
@@ -1088,16 +1093,53 @@ defmodule DpExchange.Core.HttpClient do
   # constant time), so everything below the limit reaches Req's decode step exactly as the
   # buffered path delivered it. Past the limit the partial body is dropped, so the decode
   # step never runs over truncated JSON, and the response is marked for `make_http_request/5`.
+  #
+  # **A non-2xx body is held aside, not given to Req's decoder.** Req decodes a body by its
+  # content type and, when that fails, returns the decode exception INSTEAD of the response,
+  # so the status went with it: a 429 whose body was `{bad json` lost its `Retry-After` and
+  # was retried as a transport failure, a 400 was retried as one, and a write's 503 became
+  # "Request failed". The raw bytes are kept in the response's private data, the body is left
+  # empty (which Req's decode step skips), and `settled_body/2` decodes them leniently after.
   defp capped_into(limit) do
     fn {:data, data}, {request, response} ->
-      if byte_size(response.body) + byte_size(data) > limit do
+      if held_bytes(response) + byte_size(data) > limit do
         marked = %{response | body: ""} |> Req.Response.put_private(@too_large_key, limit)
         {:halt, {request, marked}}
       else
-        {:cont, {request, %{response | body: response.body <> data}}}
+        {:cont, {request, hold(response, data)}}
       end
     end
   end
+
+  defp held_bytes(%{status: status, body: body}) when status in 200..299, do: byte_size(body)
+  defp held_bytes(%{private: private}), do: byte_size(Map.get(private, @raw_body_key, ""))
+
+  defp hold(%{status: status, body: body} = response, data) when status in 200..299,
+    do: %{response | body: body <> data}
+
+  defp hold(%{private: private} = response, data) do
+    held = Map.get(private, @raw_body_key, "")
+    Req.Response.put_private(response, @raw_body_key, held <> data)
+  end
+
+  # The body of a response whose bytes were held aside: decoded as Req would have decoded it
+  # (JSON, by content type, unless `decode_body: false`), and left as the bytes when they do
+  # not decode. Any other response keeps the body Req gave it.
+  defp settled_body(%Req.Response{private: %{@raw_body_key => raw}} = response, opts) do
+    json? =
+      response
+      |> Req.Response.get_header("content-type")
+      |> Enum.any?(&String.contains?(String.downcase(&1), "json"))
+
+    with true <- json? and Config.opt(opts, :decode_body, true) != false,
+         {:ok, decoded} <- Jason.decode(raw) do
+      decoded
+    else
+      _undecoded -> raw
+    end
+  end
+
+  defp settled_body(%Req.Response{body: body}, _opts), do: body
 
   # `{:too_large, status}` when the body crossed the limit: marked by `capped_into/1` as it
   # streamed, or, from an adapter that ignores `:into`, found whole and over the limit after

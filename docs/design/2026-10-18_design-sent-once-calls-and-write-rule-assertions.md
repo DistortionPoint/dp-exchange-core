@@ -65,9 +65,29 @@ own tests held them.
 
 ## Checklist
 
-- [ ] Core: group 43 extended; groups for W4, W5 and W6; reference venue passes; teeth tests;
+- [x] Core: group 43 extended; groups for W4, W5 and W6; reference venue passes; teeth tests;
       usage-rules/testing.md; venue.ex W-rule sentence; CHANGELOG.
-- [ ] Core: HttpClient Retry-After and error-body review.
+      Found:
+      - Group 43 now probes every active callback the Fake defines. The five original reads are
+        judged on the probe alone. Every other endpoint is judged only when the same call
+        without the probe succeeds, because a Fake refusing generated args never reached its
+        options. Exclusions are listed with reasons in `unknown_option_exclusions/0`.
+      - New groups: 47 (W4 amounts), 48 (W5 staking returns) and 49 (W6 unknown order id).
+        Group 49 needed a new `unknown_order_id:` option, because Gemini and Schwab ids are
+        numeric and a malformed id is rightly `:invalid_order_id`.
+      - W1, W2, W3 and W7 stay unasserted. They need a fault injected after the send, or a venue
+        body to decode. `Venue` now says so.
+      - The reference venue checked no options on most calls, and its W6 answers were wrong.
+        Both are fixed.
+- [x] Core: HttpClient Retry-After and error-body review.
+      Found:
+      - Retry-After parsing was correct. Tests now pin garbage, empty, negative, huge and
+        year-9999 values.
+      - A non-UTF-8 error body put invalid text in the error tuple. It is now inspected.
+      - A non-2xx body labelled JSON that did not decode lost its HTTP status: Req replaced the
+        response with a decode error. So a 429 lost its Retry-After and bucket hold and was
+        retried, and a 4xx was retried. Non-2xx bodies are now held back from Req's decoder and
+        decoded leniently afterwards.
 - [ ] Coinbase: sent-once tables; error mapping; hot paths; vacuous tests; REST vs vendor spec.
 - [ ] Gemini: same.
 - [ ] Webull: same, with the first full REST read against the vendor spec.
