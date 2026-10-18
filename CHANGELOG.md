@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.107] - 2026-10-18
+
 ### Added
 
 - **Conformance group 43 probes every endpoint, not five reads.** Each callback of
