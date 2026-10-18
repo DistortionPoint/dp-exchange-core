@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.106] - 2026-10-18
+
 ### Documentation
 
 - **Design doc closed: transport keys only where read** (`docs/design/closed/`). Every
