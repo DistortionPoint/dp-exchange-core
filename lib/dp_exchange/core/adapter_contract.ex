@@ -43,6 +43,8 @@ defmodule DpExchange.Core.AdapterContract do
       (default `[feed: :dp_exchange_contract_absent_feed]`).
     * `:package_root` - where groups 16, 18 and 19 scan compiled modules (default `"lib"`).
     * `:unlisted_symbol` and `:padded_credentials` - the opt-in facts of group 41.
+    * `:unknown_order_id` - group 49's order id nobody placed, in the venue's own id format
+      (default: a text id; a venue with numeric ids names a number).
     * `:ambiguous_place_order` - opt-in for group 42: a 1-arity function (`fn request -> ...
       end` or `&Mod.fun/1`) that takes an order request map and runs the venue's **real**
       `place_order/3` path, with a transport fault injected after the request is sent (a Req
@@ -53,7 +55,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Forty-six groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Forty-nine groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -200,9 +202,11 @@ defmodule DpExchange.Core.AdapterContract do
          "request was sent is {:error, {:order_unconfirmed, id, reason}}, and a refusal " <>
          "before anything was sent is not"},
       {43,
-       "unknown options — the fake's price, top-of-book, symbols, order-book and trades reads " <>
-         "refuse a key they do not read: {:error, {:unknown_option, key}}, never ignore it; " <>
-         "{:error, :not_supported} stays legal for an unserved endpoint"},
+       "unknown options — every endpoint the fake serves, reads, writes and feed calls " <>
+         "alike, refuses a key it does not read before anything is sent: " <>
+         "{:error, {:unknown_option, key}}, never ignore it; {:error, :not_supported} stays " <>
+         "legal for an unserved endpoint, and the callbacks that cannot take the probe are " <>
+         "listed with a reason in unknown_option_exclusions/0"},
       {44,
        "fake export parity — every public function of the facade is exported by the fake at " <>
          "the same arity, so a consumer's suite can fake whatever it can call"},
@@ -216,7 +220,17 @@ defmodule DpExchange.Core.AdapterContract do
       {46,
        "transport keys only where read — subscribe_notices/1 on the fake sends no request, " <>
          "so `timeout: 5_000` there is {:error, {:unknown_option, :timeout}}, " <>
-         "never accepted and ignored"}
+         "never accepted and ignored"},
+      {47,
+       "venue rule W4, amounts — a float, zero, a negative, NaN or infinity as the amount of " <>
+         "stake/3, unstake/3, convert/4, withdraw/5 or transfer_internal/4 (each when active) " <>
+         "is {:error, {:invalid_amount, value}}, with the value as given, never a success"},
+      {48,
+       "venue rule W5, staking return — stake/3 and unstake/3, when active, answer " <>
+         "{:ok, %Types.StakingTransaction{}} to a valid call; a refusal is not a pass"},
+      {49,
+       "venue rule W6, unknown id — get_order/3 and cancel_order/3 on the fake answer an id " <>
+         "nobody placed with {:refused, :not_found}, never an order made up for it"}
     ]
   end
 
@@ -1041,9 +1055,229 @@ defmodule DpExchange.Core.AdapterContract do
   def unknown_option_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
     do: {:raised, answer}
 
+  def unknown_option_fault(:ok = answer), do: {:ignored, answer}
   def unknown_option_fault({:ok, _value} = answer), do: {:ignored, answer}
   def unknown_option_fault({:refused, _reason} = answer), do: {:ignored, answer}
   def unknown_option_fault(answer), do: {:wrong_error, answer}
+
+  @unknown_option_exclusions %{
+    {:provider_name, 0} => "takes no arguments, so there is no option list to probe",
+    {:runtime_id, 0} => "takes no arguments, so there is no option list to probe",
+    {:asset_classes, 0} => "takes no arguments, so there is no option list to probe",
+    {:capabilities, 0} => "takes no arguments, so there is no option list to probe",
+    {:quantization, 1} => "takes a symbol only, so there is no option list to probe",
+    {:child_spec, 1} =>
+      "builds a supervisor child spec from start-up options; it starts nothing and is not " <>
+        "an endpoint the fake answers",
+    {:start_link, 1} =>
+      "starts the venue's processes; probing it on a fake would start them, and it is not " <>
+        "an endpoint the fake answers",
+    {:coverage, 1} =>
+      "a plain-value read: an unknown key raises ArgumentError (Core.Options), which this " <>
+        "group would read as a crash",
+    {:coverage_by_kind, 1} =>
+      "a plain-value read: an unknown key raises ArgumentError (Core.Options), which this " <>
+        "group would read as a crash",
+    {:wanted, 1} =>
+      "a plain-value read: an unknown key raises ArgumentError (Core.Options), which this " <>
+        "group would read as a crash"
+  }
+
+  @unknown_option_strict [
+    {:get_price, 2},
+    {:get_top_of_book, 2},
+    {:get_symbols, 1},
+    {:get_order_book, 2},
+    {:get_trades, 2}
+  ]
+
+  @doc """
+  The callbacks assertion 43 cannot hand an unknown option, each with the written reason.
+
+  Everything else the facade declares is probed. An exclusion is a decision, so it is listed
+  here rather than skipped inside the group: a callback absent from both `unknown_option_probed/1`
+  and this map would be silently unprobed, and the teeth tests hold that the two cover the
+  whole behaviour.
+  """
+  @spec unknown_option_exclusions() :: %{{atom(), non_neg_integer()} => String.t()}
+  def unknown_option_exclusions, do: @unknown_option_exclusions
+
+  @doc """
+  The callbacks of `callbacks` assertion 43 probes: all of them, less
+  `unknown_option_exclusions/0`.
+  """
+  @spec unknown_option_probed([{atom(), non_neg_integer()}]) :: [{atom(), non_neg_integer()}]
+  def unknown_option_probed(callbacks),
+    do: Enum.reject(callbacks, &Map.has_key?(@unknown_option_exclusions, &1))
+
+  @doc """
+  The five reads assertion 43 judged before it covered every endpoint. They are judged on the
+  probe alone, with no baseline call: a refusal of the probe key there is a fault whatever the
+  plain call would have answered.
+  """
+  @spec unknown_option_strict() :: [{atom(), non_neg_integer()}]
+  def unknown_option_strict, do: @unknown_option_strict
+
+  @doc """
+  Whether assertion 43 could judge an endpoint's answer to the probe.
+
+  `mode` is `:strict` (judged on the probe alone) or the answer the same call gave without the
+  probe. A write or a read the fake refuses for its own reasons before it reads the options (a
+  venue-specific refusal of the generated arguments) gives no evidence about the options, so it
+  is not judged; the group requires at least one judged answer.
+  """
+  @spec unknown_option_judged?(:strict | term()) :: boolean()
+  def unknown_option_judged?(:strict), do: true
+  def unknown_option_judged?(:ok), do: true
+  def unknown_option_judged?({:ok, _value}), do: true
+  def unknown_option_judged?(_baseline), do: false
+
+  @doc """
+  Whether an endpoint's answer to the probe is evidence the options were checked: it could be
+  judged (`unknown_option_judged?/1`), or it is the `{:unknown_option, key}` refusal itself.
+
+  A refusal of the probe is proof whatever the plain call did, so an endpoint the fake
+  refuses for a venue reason (an order id it has not placed) still counts when it refused the
+  option too. Assertion 43 requires at least one such answer.
+  """
+  @spec unknown_option_evidence?(:strict | term(), term()) :: boolean()
+  def unknown_option_evidence?(_mode, {:error, {:unknown_option, _key}}), do: true
+  def unknown_option_evidence?(mode, _answer), do: unknown_option_judged?(mode)
+
+  @doc """
+  `unknown_option_fault/1`, for an endpoint whose plain call is the `baseline`.
+
+  With `:strict` or a baseline that succeeded, the answer is judged by `unknown_option_fault/1`.
+  With any other baseline the fake refused the generated call for its own reason, so the
+  options were never reached and only two things are faults: a raise, and a success (a probe
+  cannot turn a refusal into a success).
+  """
+  @spec unknown_option_fault(:strict | term(), term()) ::
+          nil | {:ignored | :wrong_error | :raised, term()}
+  def unknown_option_fault(mode, answer) do
+    if unknown_option_judged?(mode) do
+      unknown_option_fault(answer)
+    else
+      unjudged_fault(answer)
+    end
+  end
+
+  defp unjudged_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  defp unjudged_fault(:ok = answer), do: {:ignored, answer}
+  defp unjudged_fault({:ok, _value} = answer), do: {:ignored, answer}
+  defp unjudged_fault(_answer), do: nil
+
+  @doc """
+  The invalid amounts assertion 47 hands every amount-taking write: `{label, value}`.
+
+  Venue rule W4 (`DpExchange.Core.Venue`): a float, zero, a negative, NaN and infinity are
+  each `{:error, {:invalid_amount, value}}`. NaN and infinity are `Decimal`s, which is how a
+  validator that compares with `Decimal.gt?/2` before checking `Decimal.nan?/1` raises.
+  """
+  @spec invalid_amounts() :: [{atom(), term()}]
+  def invalid_amounts do
+    [
+      float: 1.5,
+      zero: Decimal.new("0"),
+      negative: Decimal.new("-1"),
+      nan: Decimal.new("NaN"),
+      infinity: Decimal.new("Infinity")
+    ]
+  end
+
+  @doc """
+  The writes whose amount assertion 47 checks, when `capabilities/0` declares them active.
+  """
+  @spec amount_write_endpoints() :: [{atom(), non_neg_integer()}]
+  def amount_write_endpoints,
+    do: [{:stake, 3}, {:unstake, 3}, {:convert, 4}, {:withdraw, 5}, {:transfer_internal, 4}]
+
+  @doc """
+  The position of the amount among `name/arity`'s arguments, from the suite's own argument
+  table (`arg_shape/3`), or `nil` when the call takes none.
+  """
+  @spec amount_position(atom(), non_neg_integer()) :: non_neg_integer() | nil
+  def amount_position(name, arity),
+    do: name |> arg_shape(arity, false) |> Enum.find_index(&(&1 == :amount))
+
+  @doc """
+  What is wrong with a write's answer to the invalid `value` as its amount, or `nil`.
+  Assertion 47, venue rule W4.
+
+  The answer must be exactly `{:error, {:invalid_amount, value}}`, the value as given: a venue
+  that echoes a different term has rewritten what the caller sent. `{:accepted, answer}` is a
+  success, the dangerous one (a withdrawal of NaN was sent); `{:wrong_error, answer}` is any
+  other answer, which names another reason or another tag; `{:raised, answer}` is a raise,
+  exit or throw.
+  """
+  @spec invalid_amount_fault(term(), term()) ::
+          nil | {:accepted | :wrong_error | :raised, term()}
+  def invalid_amount_fault({:error, {:invalid_amount, value}}, value), do: nil
+
+  def invalid_amount_fault({kind, _reason} = answer, _given)
+      when kind in [:raised, :exit, :throw],
+      do: {:raised, answer}
+
+  def invalid_amount_fault(:ok = answer, _value), do: {:accepted, answer}
+  def invalid_amount_fault({:ok, _value} = answer, _given), do: {:accepted, answer}
+  def invalid_amount_fault(answer, _value), do: {:wrong_error, answer}
+
+  @doc """
+  What is wrong with a staking write's answer to a valid call, or `nil`. Assertion 48, venue
+  rule W5.
+
+  `stake/3` and `unstake/3` are typed `result(Types.StakingTransaction.t())`, and the Fake
+  returns that struct as the real path does. `{:not_a_staking_transaction, answer}` is a
+  success of another kind (a raw map); `{:unexamined, answer}` is a refusal or error, which
+  proves nothing about the return and is how a fake that cannot be asked passes unseen (declare
+  what it needs in `endpoint_opts:`, or declare the endpoint `:unsupported`);
+  `{:raised, answer}` a raise, exit or throw.
+  """
+  @spec staking_return_fault(term()) ::
+          nil | {:not_a_staking_transaction | :unexamined | :raised, term()}
+  def staking_return_fault({:ok, %DpExchange.Core.Types.StakingTransaction{}}), do: nil
+
+  def staking_return_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def staking_return_fault({:ok, _other} = answer), do: {:not_a_staking_transaction, answer}
+  def staking_return_fault(answer), do: {:unexamined, answer}
+
+  @doc """
+  The order id assertion 49 asks about: one no write of the suite ever minted.
+  """
+  @spec unknown_order_id() :: String.t()
+  def unknown_order_id, do: "dp-contract-never-placed-0f3c9a"
+
+  @doc """
+  The reads and cancels assertion 49 asks about an unknown id: the order callbacks `Core.Venue`
+  documents `{:refused, :not_found}` for. Other id-taking callbacks (`get_conversion/2`,
+  `get_payment_method/3`, `get_watchlist/2`) have no documented answer for an unknown id, so
+  none is asserted.
+  """
+  @spec unknown_id_endpoints() :: [{atom(), non_neg_integer()}]
+  def unknown_id_endpoints, do: [{:get_order, 3}, {:cancel_order, 3}]
+
+  @doc """
+  What is wrong with a fake's answer to an order id nobody placed, or `nil`. Assertion 49,
+  venue rule W6.
+
+  The real path answers a 404 `{:refused, :not_found}` (`c:DpExchange.Core.Venue.cancel_order/3`).
+  `{:invented, answer}` is a success: the fake made up an order for an id it never issued, so a
+  consumer's test of its not-found handling can never run. `{:wrong_answer, answer}` is any
+  other answer, including a refusal with another reason, or an error from a call the fake could
+  not place for lack of `endpoint_opts:`; `{:raised, answer}` a raise, exit or throw.
+  """
+  @spec unknown_id_fault(term()) :: nil | {:invented | :wrong_answer | :raised, term()}
+  def unknown_id_fault({:refused, :not_found}), do: nil
+
+  def unknown_id_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def unknown_id_fault({:ok, _value} = answer), do: {:invented, answer}
+  def unknown_id_fault(answer), do: {:wrong_answer, answer}
 
   @doc """
   What is wrong with a no-request call's answer to `timeout: 5_000`, or `nil`. Assertion 46.
@@ -1799,7 +2033,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   @use_options ~w(venue fake symbol_format sample_pairs credentials package_root endpoint_opts
                   order_args absent_feed_opts endpoint_symbols unlisted_symbol
-                  padded_credentials ambiguous_place_order)a
+                  padded_credentials ambiguous_place_order unknown_order_id)a
 
   @doc """
   The options `use DpExchange.Core.AdapterContract` accepts.
@@ -1881,6 +2115,9 @@ defmodule DpExchange.Core.AdapterContract do
       fake_export_parity(),
       notice_shapes(),
       no_request_transport_refusal(),
+      invalid_amount_refusals(),
+      staking_return(),
+      unknown_id_refusals(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -1983,6 +2220,15 @@ defmodule DpExchange.Core.AdapterContract do
       #     `{:error, {:invalid_credentials, runtime_id}}`.
       @unlisted_symbol Keyword.get(opts, :unlisted_symbol)
       @padded_credentials Keyword.get(opts, :padded_credentials)
+
+      # Group 49's id. A well-formed order id nobody placed; the default is text, and a venue
+      # whose ids have a format (Gemini's are integers) names one in that format, because
+      # refusing a malformed id as `:invalid_order_id` is right and says nothing about W6.
+      @unknown_order_id Keyword.get(
+                          opts,
+                          :unknown_order_id,
+                          DpExchange.Core.AdapterContract.unknown_order_id()
+                        )
     end
   end
 
@@ -4353,40 +4599,181 @@ defmodule DpExchange.Core.AdapterContract do
 
   # --- 43. an option the call does not read is refused, not ignored ------------------------
   #
-  # Every supported read on the fake is called with the venue's own `endpoint_opts` plus a key
-  # nothing reads. The decision is `unknown_option_fault/1`, public so the teeth tests can show
-  # it bites. The answer for an endpoint the venue does not serve may stay `:not_supported`.
+  # Every endpoint the fake serves is called with the venue's own `endpoint_opts` plus a key
+  # nothing reads: the five reads first judged here, and now the credentialed reads, the writes
+  # and the feed calls too, because a write that ignores `retry_attemps:` is the same bug with
+  # money attached. "Every endpoint" is the callbacks `Core.Venue` declares, less the ones in
+  # `unknown_option_exclusions/0`, each with a written reason; the group does not skip one
+  # silently.
+  #
+  # The decision is `unknown_option_fault/2`, public so the teeth tests can show it bites. The
+  # five original reads are judged on the probe alone. Any other endpoint is also called
+  # WITHOUT the probe, and judged only when that plain call succeeded: a fake that refuses the
+  # suite's generated arguments for a venue reason (a withdrawal to an address it has not
+  # approved) never reached its options, and saying nothing about them is not a fault. The group
+  # fails when it judged nothing at all, so a fake that refuses everything cannot pass it.
+  # The answer for an endpoint the venue does not serve may stay `:not_supported`.
   defp unknown_option_refusal do
     quote location: :keep do
       describe "43. unknown options are refused, not ignored" do
-        test "reads given an option nothing reads answer {:unknown_option, key}" do
+        test "every endpoint given an option nothing reads answers {:unknown_option, key}" do
           if @fake do
             probe = DpExchange.Core.AdapterContract.unknown_option_probe()
+            results = Enum.map(unknown_option_endpoints(), &probe_unknown_option(&1, probe))
 
-            for {name, arity} = endpoint <- [
-                  {:get_price, 2},
-                  {:get_top_of_book, 2},
-                  {:get_symbols, 1},
-                  {:get_order_book, 2},
-                  {:get_trades, 2}
-                ],
-                Capabilities.active?(@venue.capabilities(), endpoint) do
-              args =
-                name
-                |> endpoint_args(arity)
-                |> List.update_at(-1, &Keyword.put(&1, probe, true))
+            faults = for {endpoint, _judged, fault} <- results, fault, do: {endpoint, fault}
 
-              answer = call_on(@fake, endpoint, args)
-              fault = DpExchange.Core.AdapterContract.unknown_option_fault(answer)
+            assert faults == [],
+                   "given #{inspect(probe)}: true these endpoints did not answer " <>
+                     "{:error, {:unknown_option, #{inspect(probe)}}}, and an ignored option " <>
+                     "is how `limt:` returns the answer to a different question. " <>
+                     "Faults: #{inspect(faults, limit: 12)}"
 
-              assert fault == nil,
-                     "#{name}/#{arity} given #{inspect(probe)}: true must answer " <>
-                       "{:error, {:unknown_option, #{inspect(probe)}}}, and an ignored " <>
-                       "option is how `limt:` returns the answer to a different question. " <>
-                       "Fault: #{inspect(fault, limit: 8)}"
-            end
+            judged = Enum.count(results, fn {_endpoint, judged?, _fault} -> judged? end)
+
+            assert judged > 0,
+                   "no endpoint's answer to the unknown option could be judged: the fake " <>
+                     "refused every generated call before its options. Declare what it needs " <>
+                     "in `endpoint_opts:`. Probed: #{inspect(Enum.map(results, &elem(&1, 0)))}"
           end
         end
+      end
+
+      # The callbacks to probe: every one `Core.Venue` declares, less
+      # `unknown_option_exclusions/0`, that `capabilities/0` makes active and the fake defines
+      # (an optional callback it does not export is what "optional" allows, as in group 12).
+      defp unknown_option_endpoints do
+        probed =
+          DpExchange.Core.AdapterContract.unknown_option_probed(Venue.behaviour_info(:callbacks))
+
+        active_on_fake(probed)
+      end
+
+      defp probe_unknown_option({name, arity} = endpoint, probe) do
+        args = endpoint_args(name, arity)
+
+        mode =
+          if endpoint in DpExchange.Core.AdapterContract.unknown_option_strict(),
+            do: :strict,
+            else: call_on(@fake, endpoint, args)
+
+        answer = call_on(@fake, endpoint, List.update_at(args, -1, &Keyword.put(&1, probe, true)))
+
+        {endpoint, DpExchange.Core.AdapterContract.unknown_option_evidence?(mode, answer),
+         DpExchange.Core.AdapterContract.unknown_option_fault(mode, answer)}
+      end
+    end
+  end
+
+  # --- 47. venue rule W4: an amount that is not a positive finite number ---------------------
+  #
+  # Each amount-taking write the fake serves is handed a float, zero, a negative, NaN and
+  # infinity in the amount position. The decision is `invalid_amount_fault/2`, public so the
+  # teeth tests can show it bites. No baseline is needed: an amount is a positional argument,
+  # and positional arguments are checked first, so the answer must be the amount's refusal
+  # whatever else about the generated call a fake dislikes.
+  defp invalid_amount_refusals do
+    quote location: :keep do
+      describe "47. W4: an amount that is not a positive finite number is refused" do
+        test "every amount-taking write answers {:invalid_amount, value}" do
+          if @fake do
+            writes = active_on_fake(DpExchange.Core.AdapterContract.amount_write_endpoints())
+
+            faults =
+              for endpoint <- writes,
+                  {label, value} <- DpExchange.Core.AdapterContract.invalid_amounts(),
+                  fault = invalid_amount_answer(endpoint, value),
+                  do: {endpoint, label, fault}
+
+            assert faults == [],
+                   "an amount that is a float, zero, negative, NaN or infinite must be " <>
+                     "{:error, {:invalid_amount, value}} with the value as given, before " <>
+                     "anything is sent (venue rule W4). Faults: #{inspect(faults, limit: 12)}"
+          end
+        end
+      end
+
+      defp invalid_amount_answer({name, arity} = endpoint, value) do
+        position = DpExchange.Core.AdapterContract.amount_position(name, arity)
+        args = name |> endpoint_args(arity) |> List.replace_at(position, value)
+        answer = call_on(@fake, endpoint, args)
+        DpExchange.Core.AdapterContract.invalid_amount_fault(answer, value)
+      end
+
+      # The endpoints of `candidates` that `capabilities/0` makes active and the fake defines.
+      defp active_on_fake(candidates) do
+        optional = Venue.behaviour_info(:optional_callbacks)
+        Code.ensure_loaded(@fake)
+        caps = @venue.capabilities()
+
+        for {name, arity} = endpoint <- candidates,
+            Capabilities.active?(caps, endpoint),
+            endpoint not in optional or function_exported?(@fake, name, arity),
+            do: endpoint
+      end
+    end
+  end
+
+  # --- 48. venue rule W5: stake/3 and unstake/3 return a StakingTransaction ----------------
+  #
+  # Group 5 already holds a SUCCESS to the struct its spec names, and takes a refusal as
+  # nothing to compare. Here a refusal is a fault, as in group 31: a fake that cannot be asked a
+  # staking question passes group 5 having looked at nothing. The decision is
+  # `staking_return_fault/1`.
+  defp staking_return do
+    quote location: :keep do
+      describe "48. W5: stake/3 and unstake/3 return a StakingTransaction" do
+        test "a valid stake and unstake answer {:ok, %Types.StakingTransaction{}}" do
+          if @fake do
+            faults =
+              for {name, arity} = endpoint <- active_on_fake([{:stake, 3}, {:unstake, 3}]),
+                  fault =
+                    DpExchange.Core.AdapterContract.staking_return_fault(
+                      call_on(@fake, endpoint, endpoint_args(name, arity))
+                    ),
+                  do: {endpoint, fault}
+
+            assert faults == [],
+                   "stake/3 and unstake/3 declared active must answer a valid call with " <>
+                     "{:ok, %DpExchange.Core.Types.StakingTransaction{}} (venue rule W5). A " <>
+                     "refusal is not a pass: declare what the fake needs in `endpoint_opts:`, " <>
+                     "or declare the endpoint :unsupported. Faults: " <>
+                     inspect(faults, limit: 12)
+          end
+        end
+      end
+    end
+  end
+
+  # --- 49. venue rule W6: an id nobody placed is {:refused, :not_found} --------------------
+  #
+  # `get_order/3` and `cancel_order/3` are asked about an id no write of the suite minted.
+  # The decision is `unknown_id_fault/1`. Only these two are asked: they are the id-taking
+  # callbacks `Core.Venue` documents an unknown-id answer for.
+  defp unknown_id_refusals do
+    quote location: :keep do
+      describe "49. W6: an unknown order id is {:refused, :not_found}" do
+        test "get_order/3 and cancel_order/3 do not make up an order" do
+          if @fake do
+            id = @unknown_order_id
+
+            reads = active_on_fake(DpExchange.Core.AdapterContract.unknown_id_endpoints())
+
+            faults =
+              for endpoint <- reads,
+                  fault = unknown_id_answer(endpoint, id),
+                  do: {endpoint, fault}
+
+            assert faults == [],
+                   "an order id nobody placed must be {:refused, :not_found} on the fake, as " <>
+                     "on the real path (venue rule W6). Faults: #{inspect(faults, limit: 12)}"
+          end
+        end
+      end
+
+      defp unknown_id_answer({name, arity} = endpoint, id) do
+        args = name |> endpoint_args(arity) |> List.replace_at(1, id)
+        DpExchange.Core.AdapterContract.unknown_id_fault(call_on(@fake, endpoint, args))
       end
     end
   end

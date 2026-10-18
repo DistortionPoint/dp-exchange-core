@@ -1104,6 +1104,49 @@ defmodule DpExchange.Core.HttpClientTest do
       assert String.valid?(message)
     end
 
+    test "an error body that is not text is shown as bytes, so the message stays valid text" do
+      binary = <<255, 254, 0, 1, 200>>
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/octet-stream")
+        |> Plug.Conn.resp(500, binary)
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: 1)
+      assert message =~ "Server error (500)"
+      assert String.valid?(message)
+      assert message =~ "255"
+
+      big = :binary.copy(<<255>>, 10_000)
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/octet-stream")
+        |> Plug.Conn.resp(502, big)
+      end
+
+      assert {:error, message} = get(plug: plug, retry_attempts: 1)
+      assert String.valid?(message)
+      assert message =~ "(10000 bytes)"
+      assert byte_size(message) < 2_200
+    end
+
+    test "garbage, empty and zero Retry-After values never crash and never exceed the ceiling" do
+      for {value, expected} <- [
+            {"soon", "5s"},
+            {"", "5s"},
+            {"12abc", "5s"},
+            {"1e3", "5s"},
+            {"Sun, 06 Foo 1994 08:49:37 GMT", "5s"},
+            {"99999999999999999999999999", "600s"},
+            {"Fri, 31 Dec 9999 23:59:59 GMT", "600s"}
+          ] do
+        assert {:error, message} = get(plug: responding(429, %{}, [{"retry-after", value}]))
+        assert message =~ "retry after #{expected}", "Retry-After #{inspect(value)}: #{message}"
+      end
+    end
+
     test "a small error body is carried whole" do
       assert {:error, message} = get(plug: responding(500, %{"reason" => "down"}))
       assert message =~ ~s("reason" => "down")

@@ -12,6 +12,14 @@ defmodule DpExchange.Core.AdapterContractTest do
     symbol_format: DpExchange.Core.ReferenceVenue.SymbolFormat,
     sample_pairs: ~w(BTC-USDC ETH-USD BTC-USDT),
     credentials: %{api_key: "reference", api_secret: "reference"},
+    # What the reference needs before it answers at all, so group 43 can judge these three
+    # endpoints against a plain call that succeeds: a cancel-all scope, the two accounts of a
+    # transfer, and the auction an imbalance is asked for.
+    endpoint_opts: %{
+      {:cancel_all_orders, 2} => [scope: :account],
+      {:transfer_internal, 4} => [from: "acct-a", to: "acct-b"],
+      {:get_auction_imbalance, 2} => [auction: :opening]
+    },
     # Opt-in facts for assertion 41: a symbol the reference does not list, and a credential
     # padded with whitespace.
     unlisted_symbol: "NOPE-USD",

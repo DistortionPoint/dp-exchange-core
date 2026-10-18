@@ -610,6 +610,315 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     end
   end
 
+  describe "assertion 43: every endpoint is probed, and every exclusion has a written reason" do
+    test "the probed endpoints and the exclusions partition the whole behaviour" do
+      callbacks = DpExchange.Core.Venue.behaviour_info(:callbacks)
+      excluded = AdapterContract.unknown_option_exclusions()
+      probed = AdapterContract.unknown_option_probed(callbacks)
+
+      assert Enum.sort(probed ++ Map.keys(excluded)) == Enum.sort(callbacks)
+      assert probed -- Map.keys(excluded) == probed
+
+      # An exclusion for a callback that no longer exists would be a stale decision.
+      assert Map.keys(excluded) -- callbacks == []
+    end
+
+    test "each exclusion states a reason, and a write is never one of them" do
+      for {{name, arity}, reason} <- AdapterContract.unknown_option_exclusions() do
+        assert is_binary(reason) and String.length(reason) > 20,
+               "#{name}/#{arity} is excluded without a reason"
+      end
+
+      excluded = Map.keys(AdapterContract.unknown_option_exclusions())
+
+      for write <- [{:place_order, 3}, {:withdraw, 5}, {:convert, 4}, {:cancel_all_orders, 2}] do
+        refute write in excluded
+      end
+
+      for read <- AdapterContract.unknown_option_strict(), do: refute(read in excluded)
+    end
+
+    test "the five original reads stay judged on the probe alone" do
+      assert Enum.sort(AdapterContract.unknown_option_strict()) ==
+               Enum.sort([
+                 {:get_price, 2},
+                 {:get_top_of_book, 2},
+                 {:get_symbols, 1},
+                 {:get_order_book, 2},
+                 {:get_trades, 2}
+               ])
+
+      assert AdapterContract.unknown_option_fault(:strict, {:refused, :not_listed}) ==
+               {:ignored, {:refused, :not_listed}}
+
+      assert AdapterContract.unknown_option_fault(:strict, {:ok, 1}) == {:ignored, {:ok, 1}}
+      assert AdapterContract.unknown_option_fault(:strict, :ok) == {:ignored, :ok}
+    end
+
+    test "a write whose plain call succeeded is judged: ignoring the key is a fault" do
+      probe = AdapterContract.unknown_option_probe()
+      refusal = {:error, {:unknown_option, probe}}
+
+      for baseline <- [{:ok, %{id: 1}}, :ok] do
+        assert AdapterContract.unknown_option_fault(baseline, refusal) == nil
+        assert AdapterContract.unknown_option_fault(baseline, {:ok, 1}) == {:ignored, {:ok, 1}}
+        assert AdapterContract.unknown_option_fault(baseline, :ok) == {:ignored, :ok}
+
+        assert AdapterContract.unknown_option_fault(baseline, {:error, :not_supported}) == nil
+
+        assert AdapterContract.unknown_option_fault(baseline, {:error, {:invalid_amount, 1}}) ==
+                 {:wrong_error, {:error, {:invalid_amount, 1}}}
+
+        assert {:raised, {:exit, :boom}} =
+                 AdapterContract.unknown_option_fault(baseline, {:exit, :boom})
+      end
+    end
+
+    test "a call the fake refused for its own reason is not judged, but cannot succeed or raise" do
+      baseline = {:refused, :not_found}
+      other = {:error, {:invalid_address, "x"}}
+
+      assert AdapterContract.unknown_option_fault(baseline, {:refused, :not_found}) == nil
+      assert AdapterContract.unknown_option_fault(other, other) == nil
+
+      # A probe cannot turn a refusal into a success.
+      assert AdapterContract.unknown_option_fault(baseline, {:ok, 1}) == {:ignored, {:ok, 1}}
+      assert AdapterContract.unknown_option_fault(baseline, :ok) == {:ignored, :ok}
+
+      assert {:raised, {:raised, %ArgumentError{}}} =
+               AdapterContract.unknown_option_fault(baseline, {:raised, %ArgumentError{}})
+    end
+
+    test "evidence is a judged answer, or the refusal of the probe itself" do
+      refusal = {:error, {:unknown_option, AdapterContract.unknown_option_probe()}}
+
+      assert AdapterContract.unknown_option_evidence?(:strict, {:ok, 1})
+      assert AdapterContract.unknown_option_evidence?({:ok, 1}, {:ok, 1})
+      assert AdapterContract.unknown_option_evidence?(:ok, :ok)
+      assert AdapterContract.unknown_option_evidence?({:refused, :not_found}, refusal)
+
+      refute AdapterContract.unknown_option_evidence?({:refused, :not_found}, {:refused, :x})
+      refute AdapterContract.unknown_option_evidence?({:error, :x}, {:error, :x})
+      refute AdapterContract.unknown_option_judged?({:raised, %ArgumentError{}})
+    end
+
+    test "the reference venue refuses the probe on every write and feed call it serves" do
+      probe = AdapterContract.unknown_option_probe()
+      refusal = {:error, {:unknown_option, probe}}
+      extra = [{probe, true}]
+      order = %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+
+      assert ReferenceVenue.place_order(%{}, order, extra) == refusal
+      assert ReferenceVenue.place_orders(%{}, [order], extra) == refusal
+      assert ReferenceVenue.preview_order(%{}, order, extra) == refusal
+      assert ReferenceVenue.preview_replace(%{}, "id", %{}, extra) == refusal
+      assert ReferenceVenue.close_position(%{}, "BTC-USD", extra) == refusal
+      assert ReferenceVenue.cancel_all_orders(%{}, extra ++ [scope: :account]) == refusal
+      assert ReferenceVenue.convert("BTC", "USD", d("1"), extra) == refusal
+      assert ReferenceVenue.transfer_internal("BTC", d("1"), [], extra) == refusal
+      assert ReferenceVenue.get_order(%{}, "id", extra) == refusal
+      assert ReferenceVenue.get_balances(%{}, extra) == refusal
+      assert ReferenceVenue.get_orders(%{}, extra) == refusal
+      assert ReferenceVenue.unsubscribe(["BTC-USD"], extra) == refusal
+      assert ReferenceVenue.market_status(extra) == refusal
+      assert ReferenceVenue.get_historical_prices("BTC-USD", "1h", [], extra) == refusal
+    end
+
+    test "update_symbols/2 refuses an unknown option before it touches the live set" do
+      probe = AdapterContract.unknown_option_probe()
+      assert :ok = ReferenceVenue.subscribe(["BTC-USD"], to: self())
+      assert map_size(ReferenceVenue.coverage([])) == 1
+
+      assert {:error, {:unknown_option, ^probe}} =
+               ReferenceVenue.update_symbols(["ETH-USD"], [{probe, true}])
+
+      assert Map.keys(ReferenceVenue.coverage([])) == ["BTC-USD"]
+    end
+  end
+
+  describe "assertion 47 (venue rule W4): an amount that is not a positive finite number" do
+    test "the invalid amounts cover a float, zero, a negative, NaN and infinity" do
+      amounts = AdapterContract.invalid_amounts()
+
+      assert Keyword.keys(amounts) == [:float, :zero, :negative, :nan, :infinity]
+      assert is_float(amounts[:float])
+      assert Decimal.eq?(amounts[:zero], 0)
+      assert Decimal.lt?(amounts[:negative], 0)
+      assert Decimal.nan?(amounts[:nan])
+      assert Decimal.inf?(amounts[:infinity])
+    end
+
+    test "the amount sits where the suite's own argument table puts it" do
+      assert AdapterContract.amount_write_endpoints() ==
+               [
+                 {:stake, 3},
+                 {:unstake, 3},
+                 {:convert, 4},
+                 {:withdraw, 5},
+                 {:transfer_internal, 4}
+               ]
+
+      assert AdapterContract.amount_position(:stake, 3) == 1
+      assert AdapterContract.amount_position(:convert, 4) == 2
+      assert AdapterContract.amount_position(:withdraw, 5) == 2
+      assert AdapterContract.amount_position(:transfer_internal, 4) == 1
+      assert AdapterContract.amount_position(:get_price, 2) == nil
+
+      for {name, arity} <- AdapterContract.amount_write_endpoints() do
+        refute AdapterContract.amount_position(name, arity) == nil
+      end
+    end
+
+    test "only the refusal that echoes the value as given conforms" do
+      for {_label, value} <- AdapterContract.invalid_amounts() do
+        assert AdapterContract.invalid_amount_fault({:error, {:invalid_amount, value}}, value) ==
+                 nil
+      end
+    end
+
+    test "a success is the dangerous fault, and it is named as accepted" do
+      accepted = {:ok, %{id: "w-1"}}
+      assert AdapterContract.invalid_amount_fault(accepted, 1.5) == {:accepted, accepted}
+      assert AdapterContract.invalid_amount_fault(:ok, d("0")) == {:accepted, :ok}
+    end
+
+    test "another reason, another tag, a rewritten value or a raise are faults of their own" do
+      for wrong <- [
+            {:error, {:invalid_amount, "1.5"}},
+            {:error, {:invalid_quantity, 1.5}},
+            {:error, :invalid_amount},
+            {:error, :not_supported},
+            {:refused, :nope}
+          ] do
+        assert AdapterContract.invalid_amount_fault(wrong, 1.5) == {:wrong_error, wrong}
+      end
+
+      assert AdapterContract.invalid_amount_fault({:raised, %FunctionClauseError{}}, 1.5) ==
+               {:raised, {:raised, %FunctionClauseError{}}}
+
+      assert {:raised, {:exit, :boom}} = AdapterContract.invalid_amount_fault({:exit, :boom}, 1.5)
+    end
+
+    test "the reference venue refuses each invalid amount on convert/4 and transfer_internal/4" do
+      for {_label, value} <- AdapterContract.invalid_amounts() do
+        refusal = {:error, {:invalid_amount, value}}
+
+        assert ReferenceVenue.convert("BTC", "USD", value, []) == refusal
+
+        assert ReferenceVenue.transfer_internal("BTC", value, [from: "a", to: "b"], []) ==
+                 refusal
+      end
+    end
+
+    test "the reference venue takes a Decimal, an integer or a numeric string as an amount" do
+      for amount <- [d("0.5"), 2, "3.25"] do
+        assert {:ok, %DpExchange.Core.Types.Conversion{from_amount: %Decimal{}}} =
+                 ReferenceVenue.convert("BTC", "USD", amount, [])
+      end
+
+      assert {:error, {:invalid_amount, "abc"}} = ReferenceVenue.convert("BTC", "USD", "abc", [])
+      assert {:error, {:invalid_amount, nil}} = ReferenceVenue.convert("BTC", "USD", nil, [])
+    end
+
+    test "a transfer whose source is its destination is refused, after the amount" do
+      assert {:error, {:invalid_transfer, :same_account}} =
+               ReferenceVenue.transfer_internal("BTC", d("1"), [from: "a", to: "a"], [])
+
+      assert {:error, {:invalid_amount, +0.0}} =
+               ReferenceVenue.transfer_internal("BTC", 0.0, [from: "a", to: "a"], [])
+    end
+  end
+
+  describe "assertion 48 (venue rule W5): stake and unstake return a StakingTransaction" do
+    test "the struct is the only conforming success" do
+      staking = struct(DpExchange.Core.Types.StakingTransaction, id: "s-1")
+
+      assert AdapterContract.staking_return_fault({:ok, staking}) == nil
+    end
+
+    test "a raw map is named, a refusal is unexamined, a raise is a raise" do
+      raw = {:ok, %{"id" => "1"}}
+      assert AdapterContract.staking_return_fault(raw) == {:not_a_staking_transaction, raw}
+
+      for unexamined <- [
+            {:error, :not_supported},
+            {:error, {:missing_credentials, :x}},
+            {:refused, :no_such_asset},
+            :ok
+          ] do
+        assert AdapterContract.staking_return_fault(unexamined) == {:unexamined, unexamined}
+      end
+
+      assert AdapterContract.staking_return_fault({:raised, %ArgumentError{}}) ==
+               {:raised, {:raised, %ArgumentError{}}}
+
+      assert {:raised, {:throw, :x}} = AdapterContract.staking_return_fault({:throw, :x})
+    end
+  end
+
+  describe "assertion 49 (venue rule W6): an order id nobody placed is {:refused, :not_found}" do
+    test "the unknown id is never one the reference venue mints, and two callbacks are asked" do
+      id = AdapterContract.unknown_order_id()
+      assert is_binary(id) and id != ""
+      refute String.starts_with?(id, "order-")
+
+      assert AdapterContract.unknown_id_endpoints() == [{:get_order, 3}, {:cancel_order, 3}]
+    end
+
+    test "the documented refusal conforms; an invented order is named" do
+      assert AdapterContract.unknown_id_fault({:refused, :not_found}) == nil
+
+      order = {:ok, struct(DpExchange.Core.Types.Order, id: "made-up")}
+      assert AdapterContract.unknown_id_fault(order) == {:invented, order}
+    end
+
+    test "another refusal, an error, and a raise are faults of their own" do
+      for wrong <- [
+            {:refused, :other},
+            {:error, :not_found},
+            {:error, {:missing_option, :account_id}},
+            :ok
+          ] do
+        assert AdapterContract.unknown_id_fault(wrong) == {:wrong_answer, wrong}
+      end
+
+      assert {:raised, {:raised, %ArgumentError{}}} =
+               AdapterContract.unknown_id_fault({:raised, %ArgumentError{}})
+    end
+
+    test "the reference venue knows an order it placed, once, and refuses every other id" do
+      request = %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+
+      assert {:ok, %{id: first}} = ReferenceVenue.place_order(%{}, request, [])
+      assert {:ok, %{id: second}} = ReferenceVenue.place_order(%{}, request, [])
+      refute first == second
+
+      assert {:ok, %{id: ^first, status: :open}} = ReferenceVenue.get_order(%{}, first, [])
+      assert {:ok, %{status: :cancelled}} = ReferenceVenue.cancel_order(%{}, first, [])
+      assert {:ok, %{status: :cancelled}} = ReferenceVenue.get_order(%{}, first, [])
+
+      unknown = AdapterContract.unknown_order_id()
+      assert ReferenceVenue.get_order(%{}, unknown, []) == {:refused, :not_found}
+      assert ReferenceVenue.cancel_order(%{}, unknown, []) == {:refused, :not_found}
+      assert ReferenceVenue.replace_order(%{}, unknown, %{}, []) == {:refused, :not_found}
+      assert {:error, {:invalid_order_id, nil}} = ReferenceVenue.get_order(%{}, nil, [])
+    end
+
+    test "an order placed in one process is not known in another" do
+      request = %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+      {:ok, %{id: id}} = ReferenceVenue.place_order(%{}, request, [])
+
+      task = Task.async(fn -> ReferenceVenue.get_order(%{}, id, []) end)
+
+      assert Task.await(task, 5_000) == {:refused, :not_found}
+    end
+
+    test "a closing order is minted with its own id and is then readable" do
+      assert {:ok, %{id: id, side: :sell}} = ReferenceVenue.close_position(%{}, "BTC-USD", [])
+      assert {:ok, %{id: ^id}} = ReferenceVenue.get_order(%{}, id, [])
+    end
+  end
+
   describe "assertion 30: a quote's volume states its window" do
     test "no volume and no window, or a volume and a stated window, are not faulted" do
       assert AdapterContract.volume_window_fault(quote_with([])) == nil

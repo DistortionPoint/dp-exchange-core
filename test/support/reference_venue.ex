@@ -77,6 +77,12 @@ defmodule DpExchange.Core.ReferenceVenue do
   # (`DpExchange.Core.Options`, "What is allowed"); group 46 holds it.
   @no_request_options [:to, :feed, :credentials]
 
+  # The orders this process has placed, `%{id => Types.Order}`. A fake that answers any id it is
+  # asked about has invented an order nobody placed (venue rule W6): an unknown id is
+  # `{:refused, :not_found}`, as on the real path. Process-scoped, like `@covered_key`, for the
+  # same reason: the suite runs `async: true`.
+  @orders_key {__MODULE__, :orders}
+
   # The reference venue does not stake — `has_staking: false` below, and these six
   # declared `:unsupported` so assertion 12 sees the declaration and the behaviour agree.
   @unsupported [
@@ -256,6 +262,41 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   defp check_order_id(other), do: {:error, {:invalid_order_id, other}}
 
+  # The options of a call that sends no request: its own keys and `:credentials` only
+  # (`DpExchange.Core.Options`, "What is allowed"), checked after the positional arguments and
+  # before the credentials. Group 43 holds it for every endpoint.
+  defp check_options(opts, own \\ []), do: Options.check(opts, [:credentials | own])
+
+  # An amount is a `Decimal`, an integer or a numeric string, finite and above zero. A float
+  # has already lost digits; zero, a negative, NaN and infinity are not amounts. Anything else
+  # is `{:invalid_amount, value}` with the value as the caller gave it (venue rule W4).
+  defp check_amount(value) when is_float(value), do: {:error, {:invalid_amount, value}}
+
+  defp check_amount(value) do
+    with {:ok, decimal} <- cast_amount(value),
+         true <- not Decimal.nan?(decimal) and not Decimal.inf?(decimal),
+         true <- Decimal.gt?(decimal, 0) do
+      {:ok, decimal}
+    else
+      _invalid -> {:error, {:invalid_amount, value}}
+    end
+  end
+
+  # An order the venue has no record of is a permanent answer, not an error (`cancel_order/3`).
+  defp fetch_order(id) do
+    case Map.fetch(Process.get(@orders_key, %{}), id) do
+      {:ok, order} -> {:ok, order}
+      :error -> {:refused, :not_found}
+    end
+  end
+
+  defp remember_order(%Types.Order{id: id} = order) do
+    Process.put(@orders_key, Map.put(Process.get(@orders_key, %{}), id, order))
+    order
+  end
+
+  defp next_order_id, do: "order-#{System.unique_integer([:positive])}"
+
   # A symbol list is a proper list of non-blank strings, else `{:invalid_symbols, value}`.
   # Returns the list upper-cased, as every real facade does (assertion 29).
   defp check_symbols(symbols) do
@@ -279,6 +320,9 @@ defmodule DpExchange.Core.ReferenceVenue do
     cond do
       match?({:error, _reason}, check_symbol(symbol)) ->
         check_symbol(symbol)
+
+      match?({:error, _reason}, historical_options(opts)) ->
+        historical_options(opts)
 
       not is_boolean(Keyword.get(opts, :include_partial, false)) ->
         {:error, {:invalid_option, :include_partial, Keyword.get(opts, :include_partial)}}
@@ -322,6 +366,10 @@ defmodule DpExchange.Core.ReferenceVenue do
         {:ok, Enum.filter([bar], &in_range?(&1.opened_at, range))}
     end
   end
+
+  # Its own keys: `:limit` is known (and then refused as unsupported, MD4).
+  defp historical_options(opts),
+    do: Options.check(opts, [:include_partial, :limit | Options.transport_options()])
 
   # `:start` inclusive, `:end` exclusive, on `opened_at` (MD2).
   defp in_range?(at, range) do
@@ -506,31 +554,36 @@ defmodule DpExchange.Core.ReferenceVenue do
   def unstake(_asset, _amount, _opts), do: Venue.not_supported()
 
   @impl true
-  def get_market_overview(_opts) do
-    {:ok, Map.new(@symbols, fn symbol -> {symbol, Decimal.new("42000.50")} end)}
+  def get_market_overview(opts) do
+    with :ok <- check_options(opts) do
+      {:ok, Map.new(@symbols, fn symbol -> {symbol, Decimal.new("42000.50")} end)}
+    end
   end
 
   @impl true
-  def list_instruments(_opts) do
-    {:ok,
-     Enum.map(@symbols, fn symbol ->
-       [base, quote_asset] = String.split(symbol, "-")
+  def list_instruments(opts) do
+    with :ok <- check_options(opts) do
+      {:ok,
+       Enum.map(@symbols, fn symbol ->
+         [base, quote_asset] = String.split(symbol, "-")
 
-       Instrument.new(
-         symbol: symbol,
-         base: base,
-         quote: quote_asset,
-         instrument: :spot,
-         status: :tradable
-       )
-     end)}
+         Instrument.new(
+           symbol: symbol,
+           base: base,
+           quote: quote_asset,
+           instrument: :spot,
+           status: :tradable
+         )
+       end)}
+    end
   end
 
   # --- account and trading -----------------------------------------------
 
   @impl true
-  def get_balances(credentials, _opts) do
-    with :ok <- check_credentials(credentials) do
+  def get_balances(credentials, opts) do
+    with :ok <- check_options(opts),
+         :ok <- check_credentials(credentials) do
       {:ok, balances()}
     end
   end
@@ -564,33 +617,42 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def get_accounts(_credentials, _opts), do: {:ok, [%{id: "acct-1", currency: "USD"}]}
+  def get_accounts(_credentials, opts) do
+    with :ok <- check_options(opts), do: {:ok, [%{id: "acct-1", currency: "USD"}]}
+  end
 
   @impl true
-  def get_fees(_credentials, _opts),
-    do: {:ok, %{maker: Decimal.new("0.004"), taker: Decimal.new("0.006")}}
+  def get_fees(_credentials, opts) do
+    with :ok <- check_options(opts),
+         do: {:ok, %{maker: Decimal.new("0.004"), taker: Decimal.new("0.006")}}
+  end
 
   @impl true
   def get_transfers(_credentials, _opts), do: DpExchange.Core.Venue.not_supported()
 
   @impl true
-  def place_order(_credentials, request, _opts) do
+  def place_order(_credentials, request, opts) do
     # The refusals of `Core.Venue.place_order/3`, in its order, before anything is built. The
     # order that comes back is the one asked for: a side atom (never the caller's string),
     # `Decimal` amounts, and no price on a market order (which is refused above, not dropped).
-    with {:ok, plan} <- plan_order(request) do
-      {:ok,
-       %Types.Order{
-         id: "order-1",
-         symbol: plan.symbol,
-         side: plan.side,
-         order_type: plan.order_type,
-         quantity: plan.quantity,
-         price: plan.price,
-         status: :open,
-         created_at: ~U[2026-08-27 12:00:00Z],
-         provider: runtime_id()
-       }}
+    # Its id is generated and unique per write (venue rule W6), and remembered, so the same
+    # process can read and cancel it and no other id is known.
+    with {:ok, plan} <- plan_order(request),
+         :ok <- check_options(opts) do
+      order =
+        remember_order(%Types.Order{
+          id: next_order_id(),
+          symbol: plan.symbol,
+          side: plan.side,
+          order_type: plan.order_type,
+          quantity: plan.quantity,
+          price: plan.price,
+          status: :open,
+          created_at: ~U[2026-08-27 12:00:00Z],
+          provider: runtime_id()
+        })
+
+      {:ok, order}
     end
   end
 
@@ -697,7 +759,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   @impl true
   def cancel_order(credentials, id, opts) do
     with {:ok, order} <- get_order(credentials, id, opts) do
-      {:ok, %{order | status: :cancelled}}
+      {:ok, remember_order(%{order | status: :cancelled})}
     end
   end
 
@@ -705,28 +767,45 @@ defmodule DpExchange.Core.ReferenceVenue do
   # venue that genuinely has neither returns `Venue.not_supported()` and declares
   # `supports_order_preview: false` / `supports_order_replace: false`.
   @impl true
-  def preview_order(_credentials, request, _opts) do
-    {:ok, %{estimated_commission: Decimal.new("0.00"), request: request}}
+  def preview_order(_credentials, request, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, %{estimated_commission: Decimal.new("0.00"), request: request}}
+    end
   end
 
   @impl true
   def replace_order(credentials, id, _request, opts) do
     with {:ok, order} <- get_order(credentials, id, opts) do
-      {:ok, %{order | status: :open}}
+      {:ok, remember_order(%{order | status: :open})}
     end
   end
 
   @impl true
-  def preview_replace(_credentials, id, changes, _opts) do
+  def preview_replace(_credentials, id, changes, opts) do
     # Priced against the resting order, which is the whole difference from preview_order/3.
-    {:ok, %{order_id: id, estimated_commission: Decimal.new("0.00"), changes: changes}}
+    with :ok <- check_options(opts) do
+      {:ok, %{order_id: id, estimated_commission: Decimal.new("0.00"), changes: changes}}
+    end
   end
 
   @impl true
-  def close_position(credentials, symbol, opts) do
-    # The venue picks the side and the size; a caller never states them.
-    with {:ok, order} <- get_order(credentials, "close-#{symbol}", opts) do
-      {:ok, %{order | symbol: symbol, side: :sell, status: :pending}}
+  def close_position(_credentials, symbol, opts) do
+    # The venue picks the side and the size; a caller never states them. The suite opens no
+    # position, so the order that closes one is minted here, with its own generated id.
+    with :ok <- check_symbol(symbol),
+         :ok <- check_options(opts) do
+      order =
+        remember_order(%Types.Order{
+          id: next_order_id(),
+          symbol: symbol,
+          side: :sell,
+          order_type: :market,
+          quantity: Decimal.new("1"),
+          status: :pending,
+          provider: runtime_id()
+        })
+
+      {:ok, order}
     end
   end
 
@@ -734,42 +813,43 @@ defmodule DpExchange.Core.ReferenceVenue do
   def cancel_all_orders(_credentials, opts) do
     # No default scope. The reference venue enforces the contract's own rule, so a
     # conformance run against it fails a package that quietly picked one.
-    case Keyword.get(opts, :scope) do
-      :session ->
-        # One order already gone: a non-empty `rejected` is a partial success, not a failure.
-        {:ok, %{cancelled: ["ref-order-1"], rejected: ["ref-order-2"]}}
+    with :ok <- check_options(opts, [:scope]) do
+      cancel_scope(Keyword.get(opts, :scope))
+    end
+  end
 
-      :account ->
-        {:ok, %{cancelled: ["ref-order-1"], rejected: []}}
+  # One order already gone in the session: a non-empty `rejected` is a partial success.
+  defp cancel_scope(:session), do: {:ok, %{cancelled: ["ref-order-1"], rejected: ["ref-order-2"]}}
+  defp cancel_scope(:account), do: {:ok, %{cancelled: ["ref-order-1"], rejected: []}}
+  defp cancel_scope(nil), do: {:error, :scope_required}
+  defp cancel_scope(other), do: {:error, {:unsupported_scope, other}}
 
-      nil ->
-        {:error, :scope_required}
-
-      other ->
-        {:error, {:unsupported_scope, other}}
+  @impl true
+  def convert(from, to, amount, opts) do
+    # One step, already settled. The reference venue offers both forms so a conformance run
+    # exercises each; a real venue usually has one. The amount is checked first (venue rule
+    # W4) and comes back as the `Decimal` it was cast to.
+    with {:ok, amount} <- check_amount(amount),
+         :ok <- check_options(opts) do
+      {:ok,
+       %Types.Conversion{
+         id: "ref-convert-#{System.unique_integer([:positive])}",
+         status: :settled,
+         from_asset: from,
+         to_asset: to,
+         from_amount: amount,
+         to_amount: amount,
+         rate: Decimal.new("1"),
+         provider: runtime_id()
+       }}
     end
   end
 
   @impl true
-  def convert(from, to, amount, _opts) do
-    # One step, already settled. The reference venue offers both forms so a conformance run
-    # exercises each; a real venue usually has one.
-    {:ok,
-     %Types.Conversion{
-       id: "ref-convert-1",
-       status: :settled,
-       from_asset: from,
-       to_asset: to,
-       from_amount: amount,
-       to_amount: amount,
-       rate: Decimal.new("1"),
-       provider: runtime_id()
-     }}
-  end
-
-  @impl true
-  def get_trade_volume(_credentials, _opts) do
-    {:ok, [%{symbol: "BTC-USD", total_volume_base: Decimal.new("10.5")}]}
+  def get_trade_volume(_credentials, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, [%{symbol: "BTC-USD", total_volume_base: Decimal.new("10.5")}]}
+    end
   end
 
   @impl true
@@ -778,7 +858,8 @@ defmodule DpExchange.Core.ReferenceVenue do
     # conformance run fails a package that picked one.
     # The symbol first, as every other single-symbol read here: a `nil`, non-string or blank
     # one is `{:invalid_symbol, value}` before the auction is looked at.
-    with :ok <- check_symbol(symbol) do
+    with :ok <- check_symbol(symbol),
+         :ok <- check_options(opts, [:auction]) do
       auction_imbalance(symbol, Keyword.get(opts, :auction))
     end
   end
@@ -813,95 +894,147 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def list_payment_methods(_credentials, _opts) do
+  def list_payment_methods(_credentials, opts) do
     # One usable and one pending, because a caller filtering on presence rather than status
     # picks one the venue will refuse.
-    {:ok,
-     [
-       %{"id" => "bank-1", "type" => "bank", "status" => "verified"},
-       %{"id" => "bank-2", "type" => "bank", "status" => "pending"}
-     ]}
-  end
-
-  @impl true
-  def add_payment_method(details, _opts),
-    do: {:ok, Map.merge(%{"id" => "bank-3", "status" => "pending"}, details)}
-
-  @impl true
-  def place_orders(_credentials, requests, _opts) do
-    # One entry per request, and the second one refused. A batch that reported a single
-    # ok-or-error would let a consumer ship code that believes "the batch failed" when four
-    # of five were placed.
-    {:ok,
-     requests
-     |> Enum.with_index()
-     |> Enum.map(fn
-       {_request, 1} -> %{"error" => "INSUFFICIENT_BUYING_POWER"}
-       {request, index} -> %{"order_id" => "batch-#{index}", "symbol" => request[:symbol]}
-     end)}
-  end
-
-  @impl true
-  def get_payment_method(_credentials, id, _opts),
-    do: {:ok, %{"id" => id, "status" => "verified", "type" => "bank"}}
-
-  @impl true
-  def get_notional_balances(_credentials, currency, _opts) do
-    # The quantity and its valuation are separate keys, and stay that way. Merging them is
-    # the mistake the callback's doc is about.
-    {:ok,
-     [
-       %{"currency" => "BTC", "amount" => "1", "amountNotional" => "40000", "in" => currency}
-     ]}
-  end
-
-  @impl true
-  def list_custody_fees(_credentials, _opts),
-    do: {:ok, [%{"currency" => "BTC", "amount" => "0.0001", "timestampms" => 1_700_000_000_000}]}
-
-  @impl true
-  def transfer_internal(asset, amount, opts, _request_opts) do
-    case {Keyword.get(opts, :from), Keyword.get(opts, :to)} do
-      {nil, _to} -> {:error, {:missing_option, :from}}
-      {_from, nil} -> {:error, {:missing_option, :to}}
-      {from, to} -> {:ok, %{"asset" => asset, "amount" => amount, "from" => from, "to" => to}}
+    with :ok <- check_options(opts) do
+      {:ok,
+       [
+         %{"id" => "bank-1", "type" => "bank", "status" => "verified"},
+         %{"id" => "bank-2", "type" => "bank", "status" => "pending"}
+       ]}
     end
   end
 
   @impl true
-  def request_approved_address(network, address, label, _opts) do
-    # `pending` and nothing else. A successful response is not permission to withdraw.
-    {:ok, %{"network" => network, "address" => address, "label" => label, "status" => "pending"}}
+  def add_payment_method(details, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, Map.merge(%{"id" => "bank-3", "status" => "pending"}, details)}
+    end
   end
 
   @impl true
-  def remove_approved_address(network, address, _opts),
-    do: {:ok, %{"network" => network, "address" => address, "status" => "removed"}}
+  def place_orders(_credentials, requests, opts) do
+    # One entry per request, and the second one refused. A batch that reported a single
+    # ok-or-error would let a consumer ship code that believes "the batch failed" when four
+    # of five were placed. Each id is generated, so none repeats across writes (venue rule W6).
+    with :ok <- check_options(opts) do
+      {:ok,
+       requests
+       |> Enum.with_index()
+       |> Enum.map(fn
+         {_request, 1} ->
+           %{"error" => "INSUFFICIENT_BUYING_POWER"}
+
+         {request, _index} ->
+           %{"order_id" => next_order_id(), "symbol" => request[:symbol]}
+       end)}
+    end
+  end
 
   @impl true
-  def get_transactions(_credentials, _opts) do
-    {:ok,
-     [
-       %{"type" => "Trade", "amount" => "1"},
-       %{"type" => "Deposit", "amount" => "100"},
-       %{"type" => "Fee", "amount" => "-0.5"}
-     ]}
+  def get_payment_method(_credentials, id, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, %{"id" => id, "status" => "verified", "type" => "bank"}}
+    end
+  end
+
+  @impl true
+  def get_notional_balances(_credentials, currency, opts) do
+    # The quantity and its valuation are separate keys, and stay that way. Merging them is
+    # the mistake the callback's doc is about.
+    with :ok <- check_options(opts) do
+      {:ok,
+       [
+         %{"currency" => "BTC", "amount" => "1", "amountNotional" => "40000", "in" => currency}
+       ]}
+    end
+  end
+
+  @impl true
+  def list_custody_fees(_credentials, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, [%{"currency" => "BTC", "amount" => "0.0001", "timestampms" => 1_700_000_000_000}]}
+    end
+  end
+
+  @impl true
+  def transfer_internal(asset, amount, opts, request_opts) do
+    # The amount first (venue rule W4), then both option lists. `:from` and `:to` are the
+    # transfer's own keys; the suite hands the same `endpoint_opts:` to both lists, so both are
+    # checked against them. A transfer whose source is its destination is refused (W4).
+    with {:ok, _decimal} <- check_amount(amount),
+         :ok <- check_options(opts, [:from, :to]),
+         :ok <- check_options(request_opts, [:from, :to]) do
+      transfer(asset, amount, Keyword.get(opts, :from), Keyword.get(opts, :to))
+    end
+  end
+
+  defp transfer(_asset, _amount, nil, _to), do: {:error, {:missing_option, :from}}
+  defp transfer(_asset, _amount, _from, nil), do: {:error, {:missing_option, :to}}
+  defp transfer(_asset, _amount, same, same), do: {:error, {:invalid_transfer, :same_account}}
+
+  defp transfer(asset, amount, from, to),
+    do: {:ok, %{"asset" => asset, "amount" => amount, "from" => from, "to" => to}}
+
+  @impl true
+  def request_approved_address(network, address, label, opts) do
+    # `pending` and nothing else. A successful response is not permission to withdraw.
+    with :ok <- check_options(opts) do
+      {:ok,
+       %{"network" => network, "address" => address, "label" => label, "status" => "pending"}}
+    end
+  end
+
+  @impl true
+  def remove_approved_address(network, address, opts) do
+    with :ok <- check_options(opts) do
+      {:ok, %{"network" => network, "address" => address, "status" => "removed"}}
+    end
+  end
+
+  @impl true
+  def get_transactions(_credentials, opts) do
+    with :ok <- check_options(opts) do
+      {:ok,
+       [
+         %{"type" => "Trade", "amount" => "1"},
+         %{"type" => "Deposit", "amount" => "100"},
+         %{"type" => "Fee", "amount" => "-0.5"}
+       ]}
+    end
   end
 
   @impl true
   def list_networks(asset, opts) do
-    case {asset, Keyword.get(opts, :network)} do
-      {nil, nil} -> {:error, :asset_or_network_required}
-      {nil, network} -> {:ok, [%{"network" => network, "assets" => ["USDC", "USDT"]}]}
-      {asset, _network} -> {:ok, [%{"asset" => asset, "networks" => ["ethereum", "solana"]}]}
+    with :ok <- check_options(opts, [:network]) do
+      networks_for(asset, Keyword.get(opts, :network))
+    end
+  end
+
+  defp networks_for(nil, nil), do: {:error, :asset_or_network_required}
+
+  defp networks_for(nil, network),
+    do: {:ok, [%{"network" => network, "assets" => ["USDC", "USDT"]}]}
+
+  defp networks_for(asset, _network),
+    do: {:ok, [%{"asset" => asset, "networks" => ["ethereum", "solana"]}]}
+
+  @impl true
+  def list_fee_promos(opts) do
+    with :ok <- check_options(opts) do
+      {:ok, [%{"symbol" => "BTCUSD", "maker_fee_bps" => 0}]}
     end
   end
 
   @impl true
-  def list_fee_promos(_opts), do: {:ok, [%{"symbol" => "BTCUSD", "maker_fee_bps" => 0}]}
+  def get_fx_rate(pair, at, opts) do
+    with :ok <- check_options(opts) do
+      fx_rate(pair, at)
+    end
+  end
 
-  @impl true
-  def get_fx_rate(pair, at, _opts) do
+  defp fx_rate(pair, at) do
     {:ok,
      %Types.FxRate{
        pair: pair,
@@ -979,48 +1112,48 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def get_volume_profile(symbol, timeframe, _opts) do
-    {:ok,
-     [
-       %Types.VolumeProfile{
-         symbol: symbol,
-         timeframe: timeframe,
-         opened_at: ~U[2026-08-28 12:00:00Z],
-         total_volume: Decimal.new("1000"),
-         delta: Decimal.new("200"),
-         buy_volume: Decimal.new("600"),
-         sell_volume: Decimal.new("400"),
-         buy_at_price: %{"24.20" => Decimal.new("100"), "24.21" => Decimal.new("500")},
-         sell_at_price: %{"24.20" => Decimal.new("350"), "24.21" => Decimal.new("50")},
-         session: :regular,
-         provider: runtime_id()
-       }
-     ]}
-  end
-
-  @impl true
-  def get_order(_credentials, id, _opts) do
-    # The id first: `nil`, a non-string or a blank one is `{:invalid_order_id, id}`, before
-    # anything else is looked at. `cancel_order/3` and `replace_order/4` read through here.
-    with :ok <- check_order_id(id) do
+  def get_volume_profile(symbol, timeframe, opts) do
+    with :ok <- check_options(opts) do
       {:ok,
-       %Types.Order{
-         id: id,
-         symbol: "BTC-USD",
-         side: :buy,
-         order_type: :limit,
-         quantity: Decimal.new("1"),
-         status: :open,
-         provider: runtime_id()
-       }}
+       [
+         %Types.VolumeProfile{
+           symbol: symbol,
+           timeframe: timeframe,
+           opened_at: ~U[2026-08-28 12:00:00Z],
+           total_volume: Decimal.new("1000"),
+           delta: Decimal.new("200"),
+           buy_volume: Decimal.new("600"),
+           sell_volume: Decimal.new("400"),
+           buy_at_price: %{"24.20" => Decimal.new("100"), "24.21" => Decimal.new("500")},
+           sell_at_price: %{"24.20" => Decimal.new("350"), "24.21" => Decimal.new("50")},
+           session: :regular,
+           provider: runtime_id()
+         }
+       ]}
     end
   end
 
   @impl true
-  def get_orders(_credentials, _opts), do: {:ok, []}
+  def get_order(_credentials, id, opts) do
+    # The id first: `nil`, a non-string or a blank one is `{:invalid_order_id, id}`, before
+    # anything else is looked at; then the options. An id this process never placed is
+    # `{:refused, :not_found}`, not an order made up for it (venue rule W6). `cancel_order/3`
+    # and `replace_order/4` read through here.
+    with :ok <- check_order_id(id),
+         :ok <- check_options(opts) do
+      fetch_order(id)
+    end
+  end
 
   @impl true
-  def get_trade_history(_credentials, _opts), do: {:ok, []}
+  def get_orders(_credentials, opts) do
+    with :ok <- check_options(opts), do: {:ok, Map.values(Process.get(@orders_key, %{}))}
+  end
+
+  @impl true
+  def get_trade_history(_credentials, opts) do
+    with :ok <- check_options(opts), do: {:ok, []}
+  end
 
   # --- streaming ---------------------------------------------------------
 
@@ -1061,10 +1194,11 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def unsubscribe(symbols, _opts) do
+  def unsubscribe(symbols, opts) do
     # A malformed list is refused, never `:ok` (assertion 32); upper-cased on the way in, as
-    # every real facade does (assertion 29).
-    with {:ok, symbols} <- check_symbols(symbols) do
+    # every real facade does (assertion 29). Then the options (group 43).
+    with {:ok, symbols} <- check_symbols(symbols),
+         :ok <- Options.check(opts, @no_request_options) do
       # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
       Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
 
@@ -1074,7 +1208,9 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def update_symbols(symbols, opts) do
-    with {:ok, symbols} <- check_symbols(symbols) do
+    # The options before the live set is touched: a refused call leaves the set as it was.
+    with {:ok, symbols} <- check_symbols(symbols),
+         :ok <- Options.check(opts, @no_request_options) do
       replace_symbols(symbols, opts)
     end
   end
@@ -1136,15 +1272,19 @@ defmodule DpExchange.Core.ReferenceVenue do
   # --- health ------------------------------------------------------------
 
   @impl true
-  def test_connection(_credentials, _opts), do: {:ok, %{reachable: true}}
-
-  @impl true
-  def get_rate_limit_status(_credentials, _opts) do
-    {:ok, %{limit: 10, remaining: 10, reset_time: nil}}
+  def test_connection(_credentials, opts) do
+    with :ok <- check_options(opts), do: {:ok, %{reachable: true}}
   end
 
   @impl true
-  def market_status(_opts), do: {:ok, :open}
+  def get_rate_limit_status(_credentials, opts) do
+    with :ok <- check_options(opts), do: {:ok, %{limit: 10, remaining: 10, reset_time: nil}}
+  end
+
+  @impl true
+  def market_status(opts) do
+    with :ok <- check_options(opts), do: {:ok, :open}
+  end
 
   @impl true
   def quantization(_symbol), do: DpExchange.Core.Venue.not_supported()

@@ -21,6 +21,38 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance group 43 probes every endpoint, not five reads.** Each callback of
+  `Core.Venue` that is active and that the Fake defines is called with an option nothing reads,
+  writes and feed calls included; the answer must be `{:error, {:unknown_option, key}}`. The
+  five original reads are judged on the probe alone; any other endpoint is also called without
+  it and judged only if that call succeeded (a refusal of the generated arguments never
+  reached the options), and the group fails if nothing could be judged. The callbacks that
+  cannot take the probe are listed with a reason in `AdapterContract.unknown_option_exclusions/0`.
+  New public decisions: `unknown_option_fault/2`, `unknown_option_judged?/1`,
+  `unknown_option_evidence?/2`, `unknown_option_probed/1`, `unknown_option_strict/0`.
+- **Conformance groups 47, 48 and 49 hold the parts of venue rules W4 to W6 a Fake can show.**
+  47: a float, zero, a negative, NaN or infinity as the amount of `stake/3`, `unstake/3`,
+  `convert/4`, `withdraw/5`, `transfer_internal/4` is `{:error, {:invalid_amount, value}}`.
+  48: `stake/3` and `unstake/3` answer a valid call with `Types.StakingTransaction`; a refusal
+  is not a pass. 49: `get_order/3` and `cancel_order/3` answer an id nobody placed
+  `{:refused, :not_found}`. Decisions: `invalid_amount_fault/2`, `staking_return_fault/1`,
+  `unknown_id_fault/1`. `Core.Venue` now says which of W1 to W7 are asserted and why the rest
+  are not.
+
+### Changed
+
+- The reference venue (`test/support`) now refuses an unknown option on every endpoint, validates
+  amounts (W4, including `{:invalid_transfer, :same_account}`), generates unique order ids and
+  answers an unknown order id `{:refused, :not_found}` (W6).
+
+### Fixed
+
+- `HttpClient`: an error body that is not valid UTF-8 (binary page, cut multi-byte sequence)
+  is shown as `inspect/2`ed bytes in the `"Client error"`/`"Server error"` message instead of
+  putting invalid text into the error tuple.
+
 ## [0.3.106] - 2026-10-18
 
 ### Documentation

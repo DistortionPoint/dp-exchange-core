@@ -13,7 +13,7 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Forty-six assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Forty-nine assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
 
@@ -36,15 +36,28 @@ Group 42 asserts that answer is `{:error, {:order_unconfirmed, id, reason}}` (`i
 the request's `client_order_id`, or a list of ids), and that the same function given a request
 refused before sending (no `:order_type`) is a plain or refused error, never `:order_unconfirmed`.
 
-**Group 43 needs nothing from you: it holds your fake to refusing an option nothing reads.**
-For each of `get_price/2`, `get_top_of_book/2`, `get_symbols/1`, `get_order_book/2` and
-`get_trades/2` that `capabilities/0` declares active, the suite calls your fake with your
-`endpoint_opts:` for that endpoint plus `dp_contract_unknown_option: true`. The answer must be
-`{:error, {:unknown_option, :dp_contract_unknown_option}}`; a success or a refusal that carried
-on as if the key were absent fails, as does any other error (a different key, another tag, a
-raise). `{:error, :not_supported}` stays legal for an endpoint the venue does not serve. Check
-the options with `DpExchange.Core.Options.check(opts, Options.transport_options() ++ own_keys)`
-after the positional arguments and before the credentials; see `usage-rules/adapter.md`.
+**Group 43 needs nothing from you: it holds your fake to refusing an option nothing reads, on
+every endpoint it serves.** For each callback of `Core.Venue` that `capabilities/0` declares
+active (reads, credentialed reads, writes and feed calls alike) the suite calls your fake with
+your `endpoint_opts:` for that endpoint plus `dp_contract_unknown_option: true`. The answer must
+be `{:error, {:unknown_option, :dp_contract_unknown_option}}`; a success or a refusal that
+carried on as if the key were absent fails, as does any other error (a different key, another
+tag, a raise). `{:error, :not_supported}` stays legal for an endpoint the venue does not serve.
+Check the options with `DpExchange.Core.Options.check(opts, own_keys)` after the positional
+arguments and before the credentials; see `usage-rules/adapter.md`.
+
+Two rules decide what is judged. `get_price/2`, `get_top_of_book/2`, `get_symbols/1`,
+`get_order_book/2` and `get_trades/2` are judged on the probe alone. Every other endpoint is
+also called **without** the probe, and judged only if that plain call succeeded: a fake that
+refuses the suite's generated arguments for a reason of its own (an order id it has not placed,
+a withdrawal address it has not approved) never reached its options, and that refusal is not a
+fault. It still must not raise, and must not succeed with the probe. The group fails if no
+endpoint gave evidence at all (a fake that refuses every generated call), so declare what the
+fake needs in `endpoint_opts:`. **The callbacks that cannot take the probe are listed, each with
+its reason, in `AdapterContract.unknown_option_exclusions/0`:** the zero-argument declarations,
+`quantization/1` (a symbol only), `child_spec/1` and `start_link/1` (lifecycle), and
+`coverage/1`, `coverage_by_kind/1` and `wanted/1` (plain-value reads, which raise
+`ArgumentError` on an unknown key rather than answering).
 
 **Group 44 needs nothing from you: your fake must export every public function your facade does.**
 `facade.__info__(:functions) -- fake.__info__(:functions)` must be `[]`, at the same arities
@@ -64,6 +77,29 @@ for notices sends no request on any venue, so nothing reads `:timeout` there
 (`usage-rules/adapter.md`, "Transport keys only where read"). `subscribe/2` is not probed: a
 venue whose subscribe sends a subscription request (Webull) reads the HTTP keys there.
 
+**Groups 47, 48 and 49 hold the parts of venue rules W4 to W6 a fake can show** (the rules are
+in the `DpExchange.Core.Venue` typedoc for `write_unconfirmed`; that moduledoc says which of
+W1 to W7 are asserted and which are not, and why). They need nothing from you unless your fake
+refuses the suite's generated arguments:
+
+- **47 (W4):** `stake/3`, `unstake/3`, `convert/4`, `withdraw/5` and `transfer_internal/4`, each
+  when active, are called with a float, zero, a negative, NaN and infinity as the amount. Each
+  must answer `{:error, {:invalid_amount, value}}` with the value as given, **before anything
+  else about the call is judged**: an amount is a positional argument, and those are checked
+  first. A success is the fault that matters (a withdrawal of NaN); a validator that compares
+  with `Decimal.gt?/2` before `Decimal.nan?/1` raises on NaN and fails here too.
+- **48 (W5):** `stake/3` and `unstake/3`, when active, answer a valid call with
+  `{:ok, %Types.StakingTransaction{}}`. A refusal is not a pass (group 5 already holds a success
+  to its struct and skips a refusal): declare what the fake needs in `endpoint_opts:`, or
+  declare the endpoint `:unsupported`.
+- **49 (W6):** `get_order/3` and `cancel_order/3` are asked about an id nobody placed
+  (`AdapterContract.unknown_order_id/0`) and must answer `{:refused, :not_found}`. A fake that
+  answers an order for any id it is given leaves a consumer's not-found handling untestable.
+  A venue whose order ids have a format (numeric ids, say) passes `unknown_order_id: "..."`
+  in that format: a malformed id is rightly `{:invalid_order_id, id}` and proves nothing about
+  W6. The id-taking callbacks with no documented unknown-id answer (`get_conversion/2`,
+  `get_payment_method/3`, `get_watchlist/2`) are not asked.
+
 **The other options of `use DpExchange.Core.AdapterContract`.** `endpoint_opts:`
 (`%{{name, arity} => keyword()}`, what your fake needs before it will answer, such as an
 account), `endpoint_symbols:` (`%{{name, arity} => symbol}` for an endpoint narrower than
@@ -73,7 +109,7 @@ points the streaming calls at a feed nothing registered), `package_root:` (defau
 where groups 16, 18 and 19 scan your compiled modules; an empty scan fails them), and
 `unlisted_symbol:` / `padded_credentials:` for group 41.
 
-**A fake that refuses is not a pass.** Groups 5, 24, 25, 31, 37 and 39 fail when a fake
+**A fake that refuses is not a pass.** Groups 5, 24, 25, 31, 37, 39, 43 and 48 fail when a fake
 refuses every endpoint they would have inspected (a missing `endpoint_opts:` entry, or a
 fixture with no bar, no balance or no book level), rather than skipping. Group 37 needs the
 unranged `get_historical_prices/4` to return at least one bar.

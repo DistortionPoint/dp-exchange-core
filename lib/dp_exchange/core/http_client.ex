@@ -1584,12 +1584,20 @@ defmodule DpExchange.Core.HttpClient do
   # prefix, and a venue that needs the body passes `raw_status: true` and gets it whole.
   # The cut is marked with the full size, so a truncated message never reads as complete.
   defp format_body(body) when is_binary(body) and byte_size(body) > @body_excerpt_bytes,
-    do: excerpt(body) <> "… (#{byte_size(body)} bytes)"
+    do: text_or_inspected(excerpt(body)) <> "… (#{byte_size(body)} bytes)"
 
-  defp format_body(body) when is_binary(body), do: body
+  defp format_body(body) when is_binary(body), do: text_or_inspected(body)
 
   defp format_body(body),
     do: inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)
+
+  # **Bytes that are not text are shown as bytes.** A binary error body (a gzip page, a
+  # truncated multi-byte sequence) went into the message as it was, so the error tuple held
+  # invalid UTF-8 that a consumer's logger or JSON encoder then crashed on. Valid text is
+  # unchanged; anything else is `inspect/2`ed, which is bounded by `:limit` items.
+  defp text_or_inspected(binary) do
+    if String.valid?(binary), do: binary, else: inspect(binary, limit: 64)
+  end
 
   # A byte prefix, trimmed back to a whole UTF-8 character so the message stays valid text.
   # Bounded at three trims: a UTF-8 character is at most four bytes, so a prefix still

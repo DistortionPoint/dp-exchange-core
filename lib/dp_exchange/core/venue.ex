@@ -335,8 +335,28 @@ defmodule DpExchange.Core.Venue do
   option the read cannot honour (a portfolio scope, say) is honoured or refused, never
   ignored.
 
-  Assertions for W1 to W7 are not part of the conformance suite yet; these rules are
-  documented first and held by each venue's own tests.
+  ## What the conformance suite asserts of W1 to W7
+
+  Three groups hold the parts checkable against a Fake. **Group 47 holds W4's amounts**: a
+  float, zero, a negative, NaN and infinity as the amount of `stake/3`, `unstake/3`,
+  `convert/4`, `withdraw/5` and `transfer_internal/4` (each when active) is
+  `{:error, {:invalid_amount, value}}`, the value as given. **Group 48 holds W5's staking
+  return**: `stake/3` and `unstake/3` answer a valid call with `Types.StakingTransaction`
+  (group 5 holds the rest of W5, for every callback whose spec names a struct). **Group 49
+  holds W6's unknown id**: `get_order/3` and `cancel_order/3` answer an id nobody placed
+  `{:refused, :not_found}`. Group 43 also holds, for every endpoint including each write,
+  that a key the call does not read is refused before anything is sent.
+
+  **Still not asserted, and why.** W1 (a possibly-sent write is `:write_unconfirmed`) and W2
+  (retries) need a fault injected after the request is sent, which a Fake cannot produce;
+  the opt-in `ambiguous_place_order:` seam (group 42) is the one place the suite does that,
+  for `place_order/3` only. W3 and W7 are properties of the real path's decoding of a venue's
+  body (a body missing optional fields, an unreadable row, a truncated reply), and the suite
+  has no venue body to decode. W4's same-account transfer, asset and destination checks and
+  the exponent bound need venue facts (which accounts and destinations exist, what bound the
+  package states) the suite does not have; W6's "unique generated id per write" and "echoes
+  only fields the real path returns" need a second write and the real path to compare with.
+  Those parts are held by each venue's own tests.
   """
   @type write_unconfirmed :: {:write_unconfirmed, String.t() | nil, term()}
 
