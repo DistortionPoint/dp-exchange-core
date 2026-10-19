@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.110] - 2026-10-19
+
 ### Documentation
 
 - Design document for tick AM (order-write discipline, group 50, group 17 teeth, stream
