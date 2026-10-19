@@ -121,6 +121,31 @@ defmodule Broken.Teeth.DeliveryFake do
   end
 end
 
+defmodule Broken.Teeth.RawChildSpec do
+  @moduledoc false
+  # Stores the consumer's `:credentials` map as given in the `{module, :start_link, [opts]}` MFA
+  # a supervisor keeps and OTP prints on every child crash: the leak assertion 22 exists for.
+  @spec child_spec(keyword()) :: map()
+  def child_spec(opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [opts]}}
+end
+
+defmodule Broken.Teeth.NestedChildSpec do
+  @moduledoc false
+  # The same leak one level down: the secret rides inside another term in the start args.
+  @spec child_spec(keyword()) :: map()
+  def child_spec(opts) do
+    wrapped = %{auth: {:basic, Keyword.fetch!(opts, :credentials)}}
+    %{id: __MODULE__, start: {__MODULE__, :start_link, [[config: wrapped]]}}
+  end
+end
+
+defmodule Broken.Teeth.DroppingChildSpec do
+  @moduledoc false
+  # Takes the credentials and keeps none of them in the spec, which is fine.
+  @spec child_spec(keyword()) :: map()
+  def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [[]]}}
+end
+
 defmodule DpExchange.Core.ContractTeethDecisionsTest do
   use ExUnit.Case, async: true
 
@@ -711,7 +736,7 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
       assert ReferenceVenue.place_order(%{}, order, extra) == refusal
       assert ReferenceVenue.place_orders(%{}, [order], extra) == refusal
       assert ReferenceVenue.preview_order(%{}, order, extra) == refusal
-      assert ReferenceVenue.preview_replace(%{}, "id", %{}, extra) == refusal
+      assert ReferenceVenue.preview_replace(%{}, "id", %{price: "1"}, extra) == refusal
       assert ReferenceVenue.close_position(%{}, "BTC-USD", extra) == refusal
       assert ReferenceVenue.cancel_all_orders(%{}, extra ++ [scope: :account]) == refusal
       assert ReferenceVenue.convert("BTC", "USD", d("1"), extra) == refusal
@@ -900,7 +925,8 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
       unknown = AdapterContract.unknown_order_id()
       assert ReferenceVenue.get_order(%{}, unknown, []) == {:refused, :not_found}
       assert ReferenceVenue.cancel_order(%{}, unknown, []) == {:refused, :not_found}
-      assert ReferenceVenue.replace_order(%{}, unknown, %{}, []) == {:refused, :not_found}
+      changes = %{price: "2"}
+      assert ReferenceVenue.replace_order(%{}, unknown, changes, []) == {:refused, :not_found}
       assert {:error, {:invalid_order_id, nil}} = ReferenceVenue.get_order(%{}, nil, [])
     end
 
@@ -945,6 +971,26 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
 
     test "a value that is not a Quote is named" do
       assert AdapterContract.volume_window_fault(:nope) == {:wrong_struct, :nope}
+    end
+  end
+
+  describe "assertion 22: child_spec/1 does not store a secret a supervisor would print" do
+    test "a child_spec that keeps the raw credentials map is named, with what OTP would print" do
+      assert {:leaked, rendered} =
+               AdapterContract.child_spec_credential_fault(Broken.Teeth.RawChildSpec)
+
+      assert rendered =~ "dpx-credential-canary-"
+      assert rendered =~ "start: {Broken.Teeth.RawChildSpec, :start_link"
+    end
+
+    test "a secret nested inside another term of the start args is found too" do
+      assert {:leaked, _rendered} =
+               AdapterContract.child_spec_credential_fault(Broken.Teeth.NestedChildSpec)
+    end
+
+    test "a redacting wrapper and a spec that keeps no credentials are not faulted" do
+      assert AdapterContract.child_spec_credential_fault(ReferenceVenue) == nil
+      assert AdapterContract.child_spec_credential_fault(Broken.Teeth.DroppingChildSpec) == nil
     end
   end
 end

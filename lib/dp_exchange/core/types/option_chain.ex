@@ -62,13 +62,25 @@ defmodule DpExchange.Core.Types.OptionChain do
   # consumer's process. Integers are refused here: `Decimal.compare/2` accepts them but the
   # typespec's key is `Decimal.t()` and a mixed-type map would hold two keys for one strike.
   defp check_strikes!(expiries) when is_map(expiries) do
-    Enum.each(expiries, fn {_expiry, strikes} -> check_strike_keys!(strikes) end)
+    Enum.each(expiries, fn {expiry, strikes} ->
+      check_expiry_key!(expiry)
+      check_strike_keys!(strikes)
+    end)
   end
 
   defp check_strikes!(other) do
     raise ArgumentError,
           "#{inspect(__MODULE__)}.new/1: field :expiries holds " <>
             "#{inspect(other, limit: 5, printable_limit: 40)} — must be a map of expiry to strikes"
+  end
+
+  # `expiry_dates/1` sorts with `Date`, which raises in the consumer on anything else.
+  defp check_expiry_key!(%Date{}), do: :ok
+
+  defp check_expiry_key!(other) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :expiries has expiry key " <>
+            "#{inspect(other, limit: 5, printable_limit: 40)} — must be a Date"
   end
 
   defp check_strike_keys!(strikes) when is_map(strikes) do

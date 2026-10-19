@@ -54,7 +54,15 @@ defmodule DpExchange.Core.Types.DepositAddress do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a blank `:asset`, `:network` or `:address`, and on a `:memo_required` that is
+  not `true`, `false` or `nil` (`nil` is "the venue did not say", never `false`).
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    __MODULE__
+    |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.text!([:asset, :network, :address])
+    |> Validate.one_of!(:memo_required, [true, false, nil])
+  end
 end

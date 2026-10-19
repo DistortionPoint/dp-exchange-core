@@ -89,6 +89,8 @@ defmodule DpExchange.Core.Types.AuctionImbalance do
       :near_price,
       :far_price
     ])
+    |> Validate.non_negative!([:paired_quantity, :imbalance_quantity])
+    |> Validate.text!([:side])
     |> Validate.one_of!(:auction, [:opening, :closing])
   end
 

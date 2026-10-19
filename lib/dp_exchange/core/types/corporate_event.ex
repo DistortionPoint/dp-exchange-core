@@ -67,6 +67,9 @@ defmodule DpExchange.Core.Types.CorporateEvent do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:amount])
+    |> Validate.dates!([:ex_date, :record_date, :pay_date, :announced_date])
+    |> Validate.maps!([:details])
+    |> Validate.one_of!(:confirmed, [true, false, nil])
     |> Validate.one_of!(:kind, @kinds)
   end
 end

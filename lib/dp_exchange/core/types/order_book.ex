@@ -66,7 +66,8 @@ defmodule DpExchange.Core.Types.OrderBook do
   Also raises `ArgumentError` when `bids` or `asks` is not a list of `{price, quantity}`
   pairs, or when the moduledoc's ordering is broken: `bids` must not rise and `asks` must
   not fall from one level to the next, so `hd/1` is the best price. A venue-order book that
-  was never re-sorted is true in every value and wrong in meaning.
+  was never re-sorted is true in every value and wrong in meaning. A level whose price is
+  `<= 0` or whose size is `<= 0` raises too (see "Sizes and prices" above).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -85,7 +86,21 @@ defmodule DpExchange.Core.Types.OrderBook do
               "pairs of Decimals, got #{inspect(levels, limit: 5)}"
     end
 
+    Enum.each(levels, &check_positive!(field, &1))
     check_sorted!(levels, field, allowed)
+  end
+
+  # The moduledoc's "Sizes and prices", held at the constructor: a price at or below zero, a
+  # negative size and a size of zero (a vanished level is dropped from a snapshot, never kept)
+  # are a decode bug, and a book carrying one is a different book with every other value
+  # still plausible.
+  defp check_positive!(field, {price, quantity} = level) do
+    if Decimal.compare(price, 0) != :gt or Decimal.compare(quantity, 0) != :gt do
+      raise ArgumentError,
+            "OrderBook.new/1: field #{inspect(field)} holds the level #{inspect(level)} — a " <>
+              "snapshot level has a price and a size above zero (a size of 0 is dropped, a " <>
+              "negative size or a price <= 0 refuses the book)"
+    end
   end
 
   # One walk over adjacent levels. This was `Enum.map` of the prices, `Enum.chunk_every(2, 1)`

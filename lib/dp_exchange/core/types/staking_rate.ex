@@ -58,6 +58,7 @@ defmodule DpExchange.Core.Types.StakingRate do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:rate_pct, :apy_pct, :deposit_limit_usd])
+    |> Validate.non_negative!([:rate_pct, :apy_pct, :deposit_limit_usd])
   end
 
   @doc """

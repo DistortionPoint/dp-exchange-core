@@ -89,6 +89,139 @@ defmodule DpExchange.Core.ReferenceVenueTest do
                Reference.get_historical_prices("BTC-USD", "1h", [], limit: 5)
     end
 
+    test "get_historical_prices/4 refuses a malformed range, not raises on it" do
+      # `Core.Venue`: `{:invalid_range, range}` is a malformed `:start`/`:end` (not DateTimes,
+      # or `:start` not before `:end`). The range was read with `Keyword.get/2`, so a tuple
+      # raised and a string reached `DateTime.compare/2`.
+      earlier = ~U[2026-08-27 11:00:00Z]
+      later = ~U[2026-08-27 13:00:00Z]
+
+      bad_ranges = [
+        {earlier, later},
+        nil,
+        [start: "2026-08-27"],
+        [end: 5],
+        [start: later, end: earlier],
+        [start: earlier, end: earlier],
+        [start: earlier] ++ [:end]
+      ]
+
+      for bad <- bad_ranges do
+        assert {:error, {:invalid_range, ^bad}} =
+                 Reference.get_historical_prices("BTC-USD", "1h", bad, [])
+      end
+
+      assert {:ok, [_bar]} =
+               Reference.get_historical_prices("BTC-USD", "1h", [start: earlier, end: later], [])
+
+      assert {:ok, [_bar]} = Reference.get_historical_prices("BTC-USD", "1h", [start: nil], [])
+    end
+
+    test "get_historical_prices/4 checks the range after the symbol and before the options" do
+      assert {:error, {:invalid_symbol, nil}} =
+               Reference.get_historical_prices(nil, "1h", :nope, [])
+
+      assert {:error, {:invalid_range, :nope}} =
+               Reference.get_historical_prices("BTC-USD", "1h", :nope, limit: 5)
+    end
+
+    test "get_volume_profile/3 refuses what the contract refuses, in its order" do
+      assert {:error, {:invalid_symbol, nil}} = Reference.get_volume_profile(nil, "1h", [])
+      assert {:error, {:invalid_symbol, "  "}} = Reference.get_volume_profile("  ", "1h", [])
+
+      assert {:error, {:unknown_option, :nope}} =
+               Reference.get_volume_profile("BTC-USD", "1h", nope: 1)
+
+      assert {:refused, :not_listed} = Reference.get_volume_profile("NOPE-USD", "1h", [])
+
+      assert {:error, {:unsupported_timeframe, "1w"}} =
+               Reference.get_volume_profile("BTC-USD", "1w", [])
+
+      assert {:ok, [%Types.VolumeProfile{symbol: "BTC-USD", timeframe: "1h"}]} =
+               Reference.get_volume_profile("BTC-USD", "1h", [])
+    end
+
+    test "preview_order/3 checks its request exactly as place_order/3 does" do
+      assert {:error, {:invalid_order_request, nil}} = Reference.preview_order(%{}, nil, [])
+
+      assert {:error, {:missing_field, :order_type}} =
+               Reference.preview_order(%{}, Map.delete(@limit, :order_type), [])
+
+      assert {:error, {:invalid_quantity, "0"}} =
+               Reference.preview_order(%{}, %{@limit | quantity: "0"}, [])
+
+      assert {:error, {:unsupported_order_field, :leverage}} =
+               Reference.preview_order(%{}, Map.put(@limit, :leverage, 2), [])
+
+      # The request before the options.
+      assert {:error, {:missing_field, :side}} =
+               Reference.preview_order(%{}, Map.delete(@limit, :side), nope: 1)
+
+      assert {:error, {:unknown_option, :nope}} = Reference.preview_order(%{}, @limit, nope: 1)
+      assert {:ok, %{request: @limit}} = Reference.preview_order(%{}, @limit, [])
+    end
+
+    test "replace_order/4 and preview_replace/4 judge every field of a change map" do
+      {:ok, %{id: id}} = Reference.place_order(%{}, @limit, [])
+
+      calls = [
+        &Reference.replace_order(%{}, id, &1, []),
+        &Reference.preview_replace(%{}, id, &1, [])
+      ]
+
+      for call <- calls do
+        # A non-map and an empty map change nothing.
+        for bad <- [nil, [price: "1"], "price", %{}] do
+          assert {:error, {:invalid_order_request, ^bad}} = call.(bad)
+        end
+
+        assert {:error, {:unsupported_order_field, :leverage}} = call.(%{leverage: 2})
+        assert {:error, {:invalid_symbol, "  "}} = call.(%{symbol: "  "})
+        assert {:error, {:invalid_side, "up"}} = call.(%{side: "up"})
+        assert {:error, {:unsupported_order_type, :stop}} = call.(%{order_type: :stop})
+
+        assert {:error, {:unsupported_order_combination, _type, :day}} =
+                 call.(%{time_in_force: :day})
+
+        assert {:error, {:invalid_quantity, "-1"}} = call.(%{quantity: "-1"})
+        assert {:error, {:invalid_quantity, 0.5}} = call.(%{quantity: 0.5})
+        assert {:error, {:invalid_price, nil}} = call.(%{price: nil})
+        assert {:error, {:invalid_price, "0"}} = call.(%{price: "0"})
+        assert {:error, {:unexpected_field, :stop_price}} = call.(%{stop_price: "1"})
+        assert {:error, {:invalid_client_order_id, "  "}} = call.(%{client_order_id: "  "})
+      end
+
+      # A field the map leaves out is not required: that is what makes it a change.
+      assert {:ok, %{id: ^id, status: :open}} =
+               Reference.replace_order(%{}, id, %{price: "2"}, [])
+
+      assert {:ok, %{order_id: ^id}} = Reference.preview_replace(%{}, id, %{quantity: 2}, [])
+    end
+
+    test "replace_order/4 checks the id, then the change map, then the options, then the order" do
+      assert {:error, {:invalid_order_id, nil}} = Reference.replace_order(%{}, nil, %{}, [])
+
+      assert {:error, {:invalid_order_request, %{}}} =
+               Reference.replace_order(%{}, "order-1", %{}, nope: 1)
+
+      assert {:error, {:unknown_option, :nope}} =
+               Reference.replace_order(%{}, "order-1", %{price: "1"}, nope: 1)
+
+      assert {:refused, :not_found} = Reference.replace_order(%{}, "order-1", %{price: "1"}, [])
+    end
+
+    test "place_orders/3 refuses requests that are not a proper list, before the options" do
+      for bad <- [nil, %{}, "orders", @limit, [@limit | @limit]] do
+        refused = {:error, {:invalid_argument, :requests}}
+
+        assert Reference.place_orders(%{}, bad, []) == refused
+        assert Reference.place_orders(%{}, bad, nope: 1) == refused
+      end
+
+      assert {:error, {:unknown_option, :nope}} = Reference.place_orders(%{}, [@limit], nope: 1)
+      assert {:ok, [%{"order_id" => _id}]} = Reference.place_orders(%{}, [@limit], [])
+    end
+
     test "get_trades/2 checks the symbol, then its options, and refuses :since and :limit" do
       assert {:error, {:invalid_symbol, ""}} = Reference.get_trades("", limit: 5)
 

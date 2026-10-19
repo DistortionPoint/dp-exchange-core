@@ -52,6 +52,7 @@ defmodule DpExchange.Core.Types.FxRate do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:rate])
+    |> Validate.positive!([:rate])
   end
 
   @doc """

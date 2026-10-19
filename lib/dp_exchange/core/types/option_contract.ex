@@ -94,6 +94,11 @@ defmodule DpExchange.Core.Types.OptionContract do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:strike, :multiplier])
+    |> Validate.positive!([:strike, :multiplier])
+    |> Validate.dates!([:expiry, :last_trading_day])
+    |> Validate.one_of!(:index_option, [true, false, nil])
+    |> Validate.one_of!(:mini, [true, false, nil])
+    |> Validate.one_of!(:non_standard, [true, false, nil])
     |> Validate.one_of!(:right, [:call, :put])
   end
 

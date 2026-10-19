@@ -37,5 +37,13 @@ defmodule DpExchange.Core.Types.ScreenerResult do
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
   """
   @spec new(keyword() | map()) :: t()
-  def new(attrs), do: Validate.new!(__MODULE__, @enforce_keys, attrs)
+  def new(attrs) do
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.maps!([:metrics])
+
+    # `rank` is the venue's position in its own list: a positive integer, or absent.
+    if is_nil(built.rank), do: built, else: Validate.positive_integer!(built, :rank)
+  end
 end

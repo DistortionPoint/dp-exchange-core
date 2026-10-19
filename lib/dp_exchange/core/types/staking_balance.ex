@@ -78,6 +78,7 @@ defmodule DpExchange.Core.Types.StakingBalance do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:staked, :available_to_trade, :available_for_withdrawal])
+    |> Validate.non_negative!([:staked, :available_to_trade, :available_for_withdrawal])
     |> Validate.decimal_map_values!([:by_provider])
   end
 end

@@ -1650,6 +1650,30 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  @child_spec_secret_keys ~w(api_key api_secret private_key app_key app_secret access_token
+                             refresh_token client_id client_secret passphrase secret token)a
+
+  @doc """
+  What is wrong with `venue.child_spec/1` where a secret is concerned, or `nil`. Assertion 22.
+
+  Hands `child_spec/1` a `:credentials` map holding one unique canary under every secret key
+  name this family's venues use, and looks for the canary in `inspect/2` of the answer, which
+  is what OTP prints on every child crash. `{:leaked, rendered}` when it is there. A
+  `child_spec/1` that drops the credentials altogether is not a fault, and one that raises is
+  not caught here: the group fails on the raise, as it should.
+
+  Public so that a teeth test can hand it a `child_spec/1` that stores the raw map, which the
+  inline version of this check could never be shown to catch.
+  """
+  @spec child_spec_credential_fault(module()) :: nil | {:leaked, String.t()}
+  def child_spec_credential_fault(venue) when is_atom(venue) do
+    canary = "dpx-credential-canary-#{System.unique_integer([:positive])}"
+    secrets = Map.new(@child_spec_secret_keys, &{&1, canary})
+    rendered = inspect(venue.child_spec(credentials: secrets), limit: :infinity)
+
+    if rendered =~ canary, do: {:leaked, rendered}, else: nil
+  end
+
   @doc """
   The identity fault of a venue's `provider_name/0` answer, or `nil`. Assertion 3.
   """
@@ -2487,13 +2511,19 @@ defmodule DpExchange.Core.AdapterContract do
                    "run it."
 
           caps = @venue.capabilities()
-          credentials = @credentials
 
-          for {field, {name, arity}, args} <- [
-                {:supports_order_preview, {:preview_order, 3}, [credentials, %{}, []]},
-                {:supports_order_replace, {:replace_order, 4}, [credentials, "id", %{}, []]}
+          # **Valid arguments, from `endpoint_args/2`.** These were `%{}` for the request and the
+          # change map, which a venue now refuses before it can answer anything else:
+          # `Core.Venue` checks a preview's request exactly as `place_order/3` does and every
+          # field a replace's change map carries by the same rules, and an empty change map is
+          # refused. A refusal still is not `:not_supported`, so the claim is judged either
+          # way; a valid call just keeps it from resting on which refusal came first.
+          for {field, {name, arity}} <- [
+                {:supports_order_preview, {:preview_order, 3}},
+                {:supports_order_replace, {:replace_order, 4}}
               ] do
             declared = Map.fetch!(caps, field)
+            args = endpoint_args(name, arity)
             answers? = apply(@fake, name, args) != {:error, :not_supported}
 
             assert declared == answers?,
@@ -4027,33 +4057,24 @@ defmodule DpExchange.Core.AdapterContract do
           # needs no per-venue list to keep in sync. `Kernel.struct/2` DROPS keys a given
           # venue's own credentials struct does not declare, so an unrecognised key cannot
           # leak either — it is gone, not merely unprinted.
-          canary = "dpx-credential-canary-#{System.unique_integer([:positive])}"
+          # The decision is `AdapterContract.child_spec_credential_fault/1`, public so that
+          # `contract_teeth_decisions_test.exs` can show it fails on a `child_spec/1` that
+          # stores the raw map.
+          case DpExchange.Core.AdapterContract.child_spec_credential_fault(@venue) do
+            nil ->
+              :ok
 
-          secrets = %{
-            api_key: canary,
-            api_secret: canary,
-            private_key: canary,
-            app_key: canary,
-            app_secret: canary,
-            access_token: canary,
-            refresh_token: canary,
-            client_id: canary,
-            client_secret: canary,
-            passphrase: canary,
-            secret: canary,
-            token: canary
-          }
-
-          rendered = inspect(@venue.child_spec(credentials: secrets), limit: :infinity)
-
-          refute rendered =~ canary,
-                 "#{inspect(@venue)}.child_spec/1 renders a secret passed in :credentials " <>
-                   "in cleartext. A supervisor stores those args and OTP prints them on " <>
-                   "every child crash, so this is a live credential written to the log by " <>
-                   "any crash at all. Wrap the :credentials value in a struct with a " <>
-                   "redacting Inspect IN child_spec/1 — doing it in start_link/1 or " <>
-                   "init/1 is too late, because the supervisor above has already captured " <>
-                   "the raw list. Rendered: #{rendered}"
+            {:leaked, rendered} ->
+              flunk(
+                "#{inspect(@venue)}.child_spec/1 renders a secret passed in :credentials " <>
+                  "in cleartext. A supervisor stores those args and OTP prints them on " <>
+                  "every child crash, so this is a live credential written to the log by " <>
+                  "any crash at all. Wrap the :credentials value in a struct with a " <>
+                  "redacting Inspect IN child_spec/1 — doing it in start_link/1 or " <>
+                  "init/1 is too late, because the supervisor above has already captured " <>
+                  "the raw list. Rendered: #{rendered}"
+              )
+          end
         end
       end
     end

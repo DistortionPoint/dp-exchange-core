@@ -321,6 +321,14 @@ defmodule DpExchange.Core.ReferenceVenue do
       match?({:error, _reason}, check_symbol(symbol)) ->
         check_symbol(symbol)
 
+      # The positional range, before the options: `{:invalid_range, range}` is a malformed
+      # `:start`/`:end` (`Core.Venue`, "Errors decided locally"). It used to be read with
+      # `Keyword.get/2`, which raised on a non-list and handed a non-`DateTime` to
+      # `DateTime.compare/2`, so the worked example every author copies raised where every
+      # real facade refuses.
+      match?({:error, _reason}, check_range(range)) ->
+        check_range(range)
+
       match?({:error, _reason}, historical_options(opts)) ->
         historical_options(opts)
 
@@ -366,6 +374,22 @@ defmodule DpExchange.Core.ReferenceVenue do
         {:ok, Enum.filter([bar], &in_range?(&1.opened_at, range))}
     end
   end
+
+  # A keyword list whose `:start` and `:end`, when present and not `nil`, are `DateTime`s with
+  # `:start` before `:end`. Anything else is `{:invalid_range, range}`, the range as given.
+  defp check_range(range) do
+    with true <- is_list(range) and Keyword.keyword?(range),
+         start = Keyword.get(range, :start),
+         finish = Keyword.get(range, :end),
+         true <- time_or_nil?(start) and time_or_nil?(finish),
+         true <- is_nil(start) or is_nil(finish) or DateTime.compare(start, finish) == :lt do
+      :ok
+    else
+      _malformed -> {:error, {:invalid_range, range}}
+    end
+  end
+
+  defp time_or_nil?(value), do: is_nil(value) or is_struct(value, DateTime)
 
   # Its own keys: `:limit` is known (and then refused as unsupported, MD4).
   defp historical_options(opts),
@@ -768,14 +792,22 @@ defmodule DpExchange.Core.ReferenceVenue do
   # `supports_order_preview: false` / `supports_order_replace: false`.
   @impl true
   def preview_order(_credentials, request, opts) do
-    with :ok <- check_options(opts) do
+    # The request is checked exactly as `place_order/3` checks it, in its order, then the
+    # options. It used to be echoed back unread, so a non-map or a request with no side was
+    # priced.
+    with {:ok, _plan} <- plan_order(request),
+         :ok <- check_options(opts) do
       {:ok, %{estimated_commission: Decimal.new("0.00"), request: request}}
     end
   end
 
   @impl true
-  def replace_order(credentials, id, _request, opts) do
-    with {:ok, order} <- get_order(credentials, id, opts) do
+  def replace_order(credentials, id, changes, opts) do
+    # The id as `cancel_order/3` checks it, then the change map (`plan_changes/1`), then the
+    # options; the order must be one this process placed.
+    with :ok <- check_order_id(id),
+         {:ok, _plan} <- plan_changes(changes),
+         {:ok, order} <- get_order(credentials, id, opts) do
       {:ok, remember_order(%{order | status: :open})}
     end
   end
@@ -783,10 +815,54 @@ defmodule DpExchange.Core.ReferenceVenue do
   @impl true
   def preview_replace(_credentials, id, changes, opts) do
     # Priced against the resting order, which is the whole difference from preview_order/3.
-    with :ok <- check_options(opts) do
+    # Its id and change map are held to the same rules as `replace_order/4`'s.
+    with :ok <- check_order_id(id),
+         {:ok, _plan} <- plan_changes(changes),
+         :ok <- check_options(opts) do
       {:ok, %{order_id: id, estimated_commission: Decimal.new("0.00"), changes: changes}}
     end
   end
+
+  # A change map is partial by nature: a field it leaves out is not checked and not required,
+  # and every field it carries is judged by `place_order/3`'s rule for that field, a present
+  # `nil` included. A non-map and an empty map change nothing, so they are
+  # `{:invalid_order_request, changes}`. The ladder is `plan_order/1`'s, minus the checks that
+  # need the whole order (a missing field; a price on a market order, which a change that does
+  # not name the type cannot be judged on).
+  defp plan_changes(changes) when is_map(changes) and map_size(changes) > 0 do
+    with :ok <- known_order_keys(changes),
+         :ok <- changed(changes, :symbol, &check_symbol/1),
+         :ok <- changed(changes, :side, &order_side/1),
+         :ok <- changed(changes, :order_type, &order_type/1),
+         :ok <- changed(changes, :time_in_force, &changed_duration/1),
+         :ok <- changed(changes, :quantity, &positive_amount(&1, :quantity)),
+         :ok <- changed(changes, :stop_price, &unused_stop_price/1),
+         :ok <- changed(changes, :price, &positive_amount(&1, :price)),
+         :ok <- changed(changes, :client_order_id, &order_client_id/1) do
+      {:ok, changes}
+    end
+  end
+
+  defp plan_changes(changes), do: {:error, {:invalid_order_request, changes}}
+
+  # Runs `validator` on the value of `key` when the change map carries it, `nil` included.
+  defp changed(changes, key, validator) do
+    case Map.fetch(changes, key) do
+      :error -> :ok
+      {:ok, value} -> accepted(validator.(value))
+    end
+  end
+
+  defp accepted(:ok), do: :ok
+  defp accepted({:ok, _checked}), do: :ok
+  defp accepted({:error, _reason} = error), do: error
+
+  # A duration on its own: the order type it rides on may not be in the change.
+  defp changed_duration(tif) when tif in [:gtc, :ioc], do: :ok
+  defp changed_duration(tif), do: {:error, {:unsupported_order_combination, :limit, tif}}
+
+  # The reference venue serves no stop order, so a stop price is never a field it uses.
+  defp unused_stop_price(_stop_price), do: {:error, {:unexpected_field, :stop_price}}
 
   @impl true
   def close_position(_credentials, symbol, opts) do
@@ -918,7 +994,10 @@ defmodule DpExchange.Core.ReferenceVenue do
     # One entry per request, and the second one refused. A batch that reported a single
     # ok-or-error would let a consumer ship code that believes "the batch failed" when four
     # of five were placed. Each id is generated, so none repeats across writes (venue rule W6).
-    with :ok <- check_options(opts) do
+    # A `requests` that is not a proper list is `{:invalid_argument, :requests}` (`Core.Venue`),
+    # decided before the options; `Enum.with_index/1` raised on a non-list.
+    with :ok <- check_requests(requests),
+         :ok <- check_options(opts) do
       {:ok,
        requests
        |> Enum.with_index()
@@ -931,6 +1010,9 @@ defmodule DpExchange.Core.ReferenceVenue do
        end)}
     end
   end
+
+  defp check_requests(requests),
+    do: if(proper_list?(requests), do: :ok, else: {:error, {:invalid_argument, :requests}})
 
   @impl true
   def get_payment_method(_credentials, id, opts) do
@@ -1113,7 +1195,15 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_volume_profile(symbol, timeframe, opts) do
-    with :ok <- check_options(opts) do
+    # The positional arguments first, then the options (`Core.Venue`): a symbol that is not
+    # text is `{:invalid_symbol, v}`, one the venue does not list is `{:refused, :not_listed}`,
+    # and a width it does not serve is an error, never the nearest one (the callback's own
+    # words). All three used to be skipped, so any symbol and any width was answered with a
+    # profile stamped with them.
+    with :ok <- check_symbol(symbol),
+         :ok <- check_options(opts),
+         :ok <- listed(symbol),
+         :ok <- served_timeframe(timeframe) do
       {:ok,
        [
          %Types.VolumeProfile{
@@ -1131,6 +1221,16 @@ defmodule DpExchange.Core.ReferenceVenue do
          }
        ]}
     end
+  end
+
+  defp listed(symbol) do
+    if symbol in @symbols, do: :ok, else: {:refused, :not_listed}
+  end
+
+  defp served_timeframe(timeframe) do
+    if timeframe in capabilities().historical_timeframes,
+      do: :ok,
+      else: {:error, {:unsupported_timeframe, timeframe}}
   end
 
   @impl true

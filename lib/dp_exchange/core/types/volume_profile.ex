@@ -72,6 +72,7 @@ defmodule DpExchange.Core.Types.VolumeProfile do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:total_volume, :delta, :buy_volume, :sell_volume])
+    |> Validate.non_negative!([:total_volume, :buy_volume, :sell_volume])
     |> Validate.decimal_map_values!([:buy_at_price, :sell_at_price])
   end
 

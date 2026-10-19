@@ -249,7 +249,9 @@ defmodule DpExchange.Core.PollingFeed do
 
   A duration that is not of the stated kind stops the feed at start with
   `{:invalid_option, key, value}`, the way a missing `:sink` does. `interval_ms: 0` would
-  otherwise re-poll the venue as fast as the fetch returns.
+  otherwise re-poll the venue as fast as the fetch returns. The three durations are also
+  bounded above by 4_294_967_295 milliseconds (the longest `Process.send_after/3` arms): a
+  larger one stops the feed at start instead of raising from a timer on the first fetch.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -483,15 +485,27 @@ defmodule DpExchange.Core.PollingFeed do
       # value raised inside `init/1`, a restart loop whose message named `send_after/3`
       # rather than the option. A `fetch_timeout_ms` of `0` timed every fetch out before it
       # started, so the feed delivered nothing and reported it as a venue fault.
-      {is_integer(state.interval_ms) and state.interval_ms > 0,
-       {:invalid_option, :interval_ms, state.interval_ms}},
-      {is_integer(state.start_delay_ms) and state.start_delay_ms >= 0,
+      #
+      # **And none of them exceeds what `Process.send_after/3` can arm** (`@max_timer_ms`,
+      # about 49.7 days). A larger value is a valid integer and passed every check above,
+      # then raised `ArgumentError` from `send_after/3`: at `init/1` for the interval and the
+      # delay, and for `:fetch_timeout_ms` on the FIRST FETCH, inside `handle_info/2`, where
+      # the restart came back from its static start opts, lost every `update_symbols/2` scope
+      # and raised again on its next fetch. Refused at start, naming the option.
+      {timer_ms?(state.interval_ms, 1), {:invalid_option, :interval_ms, state.interval_ms}},
+      {timer_ms?(state.start_delay_ms, 0),
        {:invalid_option, :start_delay_ms, state.start_delay_ms}},
-      {is_integer(state.fetch_timeout_ms) and state.fetch_timeout_ms > 0,
+      {timer_ms?(state.fetch_timeout_ms, 1),
        {:invalid_option, :fetch_timeout_ms, state.fetch_timeout_ms}}
     ]
     |> Enum.find_value(:ok, &first_invalid/1)
   end
+
+  # The longest delay `Process.send_after/3` accepts (2^32 - 1 milliseconds).
+  @max_timer_ms 4_294_967_295
+
+  defp timer_ms?(value, minimum),
+    do: is_integer(value) and value >= minimum and value <= @max_timer_ms
 
   defp first_invalid({true, _reason}), do: nil
   defp first_invalid({false, reason}), do: {:error, reason}
@@ -967,13 +981,27 @@ defmodule DpExchange.Core.PollingFeed do
   defp publish_and_record(state, events) do
     case Enum.split_with(events, &MapSet.member?(state.symbols, &1.symbol)) do
       {[], [_first | _rest] = unwanted} ->
-        names = unwanted |> Enum.map(& &1.symbol) |> Enum.uniq() |> Enum.take(5)
-        record_failure(state, "bulk fetch", {:unrequested_symbols, names})
+        record_failure(state, "bulk fetch", {:unrequested_symbols, unrequested_names(unwanted)})
 
-      {wanted, _unwanted} ->
+      {wanted, []} ->
         publish_wanted(state, wanted)
+
+      # **Some events were for symbols nobody asked for: delivered for the rest, and said so.**
+      # They were dropped here without a word, so a venue spelling a few symbols differently
+      # (or answering more than it was asked) looked identical to a clean answer, the shape the
+      # all-unwanted clause above exists to make loud. The wanted events are delivered first,
+      # then the unrequested names are recorded exactly as that clause records them
+      # (`record_failure/3`, so `status/1`'s `last_error` and the debug log carry them). It
+      # cannot trip the delivering-nothing escalation: the delivery just recorded is fresh.
+      {wanted, unwanted} ->
+        state
+        |> publish_wanted(wanted)
+        |> record_failure("bulk fetch", {:unrequested_symbols, unrequested_names(unwanted)})
     end
   end
+
+  defp unrequested_names(unwanted),
+    do: unwanted |> Enum.map(& &1.symbol) |> Enum.uniq() |> Enum.take(5)
 
   defp publish_wanted(state, events) do
     now = System.monotonic_time(:millisecond)

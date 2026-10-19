@@ -70,6 +70,8 @@ defmodule DpExchange.Core.Types.StakingTransaction do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:amount, :amount_paid_so_far, :amount_remaining])
+    |> Validate.positive!([:amount])
+    |> Validate.non_negative!([:amount_paid_so_far, :amount_remaining])
     |> Validate.one_of!(:type, @types)
   end
 

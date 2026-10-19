@@ -55,5 +55,7 @@ defmodule DpExchange.Core.Types.ContractStats do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:mark_price, :index_price, :open_interest, :open_interest_notional])
+    |> Validate.positive!([:mark_price, :index_price])
+    |> Validate.non_negative!([:open_interest, :open_interest_notional])
   end
 end

@@ -77,7 +77,8 @@ defmodule DpExchange.Core.Types.Position do
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
 
-  Also raises on a `:side` that is not `:long` or `:short`. A position built `:buy` is
+  Also raises on a `:quantity` of zero or less (the size is always positive; a flat account
+  holds no position), and on a `:side` that is not `:long` or `:short`. A position built `:buy` is
   read by a consumer matching the two sides as no side at all, or as the wrong one, and
   the contract's whole point is that the sign never decides direction twice.
   """
@@ -95,6 +96,7 @@ defmodule DpExchange.Core.Types.Position do
       :liquidation_price,
       :leverage
     ])
+    |> Validate.positive!([:quantity])
     |> Validate.one_of!(:side, [:long, :short])
     |> atom_instrument_type!()
   end

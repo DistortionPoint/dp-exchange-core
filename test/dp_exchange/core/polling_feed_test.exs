@@ -166,6 +166,34 @@ defmodule DpExchange.Core.PollingFeedTest do
       end
     end
 
+    test "a duration past what a timer can arm is refused at start, not raised from a timer" do
+      # `Process.send_after/3` takes at most 2^32 - 1 ms. A larger `:fetch_timeout_ms` passed
+      # the integer check and raised from `send_after/3` on the FIRST FETCH, inside
+      # `handle_info/2`: a restart that lost the runtime scope, then the same raise again. The
+      # interval and the delay raised at `init/1`. All three are now refused at start.
+      Process.flag(:trap_exit, true)
+      base = [sink: sink_to_self(), fetch: &event/1, symbols: ["A"]]
+      past = 4_294_967_296
+
+      for key <- [:interval_ms, :start_delay_ms, :fetch_timeout_ms] do
+        assert {:error, {:invalid_option, ^key, ^past}} =
+                 PollingFeed.start_link(Keyword.put(base, key, past))
+      end
+
+      longest = 4_294_967_295
+
+      pid =
+        start_feed(
+          fetch: &event/1,
+          symbols: [],
+          interval_ms: longest,
+          start_delay_ms: longest,
+          fetch_timeout_ms: longest
+        )
+
+      assert Process.alive?(pid)
+    end
+
     test "callbacks and scope of the wrong shape are refused at start, naming the option" do
       Process.flag(:trap_exit, true)
       base = [sink: sink_to_self(), fetch: &event/1]
@@ -1162,6 +1190,41 @@ defmodule DpExchange.Core.PollingFeedTest do
       status = await_status(pid, &(&1.last_error != nil))
       refute_received {:published, _event}
       assert %{last_error: {:unrequested_symbols, ["btcusd"]}} = status
+    end
+
+    test "a bulk answer with some symbols nobody asked for delivers the rest and says so" do
+      # Only the all-unwanted case was reported; with one wanted event among the unrequested
+      # ones the extras were dropped in silence, and the answer looked clean.
+      answer = [event("BTC-USD"), event("btcusd"), event("XBT-USD")]
+
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD),
+          fetch_all: fn _symbols -> {:ok, answer} end,
+          interval_ms: 60_000
+        )
+
+      status = await_status(pid, &(&1.last_error != nil))
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+      refute_received {:published, %{symbol: "btcusd"}}
+      refute_received {:published, %{symbol: "XBT-USD"}}
+
+      assert %{delivering: true, covered: 1} = status
+      assert %{last_error: {:unrequested_symbols, ["btcusd", "XBT-USD"]}} = status
+    end
+
+    test "a bulk answer with only wanted symbols reports no error" do
+      pid =
+        start_feed(
+          symbols: ~w(BTC-USD),
+          fetch_all: fn _symbols -> {:ok, [event("BTC-USD")]} end,
+          interval_ms: 60_000
+        )
+
+      assert_receive {:published, %{symbol: "BTC-USD"}}, 5_000
+      status = await_status(pid, &(&1.covered == 1))
+      assert %{last_error: nil, failures_since_ok: 0} = status
     end
   end
 

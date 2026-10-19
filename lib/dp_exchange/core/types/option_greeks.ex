@@ -80,5 +80,6 @@ defmodule DpExchange.Core.Types.OptionGreeks do
       :underlying_price,
       :open_interest
     ])
+    |> Validate.non_negative!([:implied_volatility, :open_interest])
   end
 end

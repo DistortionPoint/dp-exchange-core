@@ -79,6 +79,23 @@ defmodule DpExchange.Core.Types.Withdrawal do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:amount, :fee])
+    |> Validate.positive!([:amount])
+    |> Validate.non_negative!([:fee])
     |> Validate.one_of!(:status, @statuses)
+    |> broadcast_has_tx_id!()
   end
+
+  # "`:broadcast` — a transaction exists; `:tx_id` is set". A broadcast withdrawal with no
+  # transaction id claims a transaction it cannot name, and the money has already left.
+  defp broadcast_has_tx_id!(%{status: :broadcast, tx_id: tx_id} = built) do
+    if is_binary(tx_id) and String.trim(tx_id) != "" do
+      built
+    else
+      raise ArgumentError,
+            "#{inspect(__MODULE__)}.new/1: status :broadcast with :tx_id #{inspect(tx_id)} — " <>
+              "a broadcast withdrawal has a transaction, and it is named"
+    end
+  end
+
+  defp broadcast_has_tx_id!(built), do: built
 end

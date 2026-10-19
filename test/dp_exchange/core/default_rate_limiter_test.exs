@@ -165,6 +165,19 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: :infinity])
     end
 
+    test "a wait no process can sleep is a timeout under :infinity, and spends nothing" do
+      # `acquire/3` sleeps AFTER the reservation is committed, and `Process.sleep/1` raises past
+      # 2^32 - 1 ms. A weight of ten billion asks for years: it raised in the caller with the
+      # tokens already spent. It is `:rate_limit_timeout` now, and the bucket is untouched.
+      opts = start_limiter(%{default: %{limit: 1, per_ms: 1_000, burst: 1}})
+
+      assert {:error, :rate_limit_timeout} =
+               Limiter.acquire(:venue, 10_000_000_000, opts ++ [timeout: :infinity])
+
+      assert {:ok, %{next_allowed_in_ms: 0}} = Limiter.inspect_provider(:venue, opts)
+      assert :ok = Limiter.acquire(:venue, 1, opts ++ [timeout: 0])
+    end
+
     test "concurrent weight-N acquires do not interleave" do
       # 20 tokens of burst, ten concurrent callers each taking 2. Exactly ten succeed
       # immediately; none observes a partially-applied reservation.

@@ -54,5 +54,19 @@ defmodule DpExchange.Core.Types.StakingReward do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:amount, :apy_pct])
+    |> Validate.non_negative!([:amount, :apy_pct])
+    |> accrual_count!()
+  end
+
+  # `non_neg_integer() | nil`: a count of accruals, so a Decimal, a float or a negative is a
+  # decode bug.
+  defp accrual_count!(%{accrual_count: count} = built)
+       when is_nil(count) or (is_integer(count) and count >= 0),
+       do: built
+
+  defp accrual_count!(%{accrual_count: count}) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :accrual_count is #{inspect(count)} — must be " <>
+            "a non-negative integer or nil"
   end
 end

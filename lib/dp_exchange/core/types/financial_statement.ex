@@ -64,6 +64,8 @@ defmodule DpExchange.Core.Types.FinancialStatement do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.maps!([:line_items])
+    |> Validate.dates!([:period_end])
     |> Validate.one_of!(:kind, @kinds)
   end
 end

@@ -95,13 +95,27 @@ defmodule DpExchange.Core.Types.Candle do
   builds fine despite `open`'s typespec forbidding it, and blows up later inside `Decimal`
   instead of at the boundary. This is the exact defect that motivated
   `DpExchange.Core.Types.Validate`, written up there in full.
+
+  Also raises on a bar that is not `coherent?/1`: `high` below `low`, or an `open` or `close`
+  outside `[low, high]`. A struct literal can still hold one; `new/1` will not build it.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
-    __MODULE__
-    |> Validate.new!(@enforce_keys, attrs)
-    |> Validate.decimals!([:open, :high, :low, :close, :volume])
-    |> Validate.non_negative!([:volume])
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.decimals!([:open, :high, :low, :close, :volume])
+      |> Validate.non_negative!([:volume])
+
+    unless coherent?(built) do
+      raise ArgumentError,
+            "Candle.new/1: the bar is incoherent — high #{inspect(built.high)} must be at " <>
+              "least low #{inspect(built.low)}, and open #{inspect(built.open)} and close " <>
+              "#{inspect(built.close)} must each lie within [low, high]; a bar like that is " <>
+              "malformed at the venue or misread, and corrupts every range it enters"
+    end
+
+    built
   end
 
   @doc """

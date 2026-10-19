@@ -102,7 +102,8 @@ defmodule DpExchange.Core.Types.Trade do
   An explicit `broken: nil` is likewise not an error: it is normalised to `false`, per this
   module's "`broken: nil` is 'said nothing'" section above.
 
-  Also raises on a `:side` that is not `:buy`, `:sell` or `nil`, and on a `:broken` that is
+  Also raises on a `:price` of zero or less (see the moduledoc), on a `:side` that is not
+  `:buy`, `:sell` or `nil`, and on a `:broken` that is
   not a boolean once `nil` has been normalised. `side: "buy"` or `:Buy` matches neither
   branch of a consumer's `case`, so volume lands on no side and no error says why.
   """
@@ -113,6 +114,7 @@ defmodule DpExchange.Core.Types.Trade do
     __MODULE__
     |> Validate.new!(@required_non_nil, attrs)
     |> Validate.decimals!([:price, :quantity])
+    |> Validate.positive!([:price])
     |> Validate.non_negative!([:quantity])
     |> Validate.one_of!(:side, [:buy, :sell, nil])
     |> Validate.one_of!(:broken, [true, false])

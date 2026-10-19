@@ -93,6 +93,9 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   @default_limit %{limit: 10, per_ms: 1_000, burst: 10}
 
+  # The longest `Process.sleep/1` accepts: 2^32 - 1 milliseconds.
+  @max_sleep_ms 4_294_967_295
+
   # --- lifecycle ---------------------------------------------------------
 
   @doc """
@@ -128,7 +131,8 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   **One reservation, not `weight` of them.** The wait is served in the calling process,
   so a caller waiting does not stall the limiter for anyone else. A reservation that
   cannot be honoured within the timeout is **not** committed — the tokens are not
-  consumed for a request that will never be made.
+  consumed for a request that will never be made. A wait over 4_294_967_295 ms, the longest
+  `Process.sleep/1` accepts, is `{:error, :rate_limit_timeout}` even under `timeout: :infinity`.
 
   ## `:timeout` must survive an explicit `nil`
 
@@ -414,7 +418,11 @@ defmodule DpExchange.Core.DefaultRateLimiter do
   def handle_call({:acquire, provider, weight, timeout}, _from, state) do
     {wait_ms, new_tat} = reserve(state, provider, weight)
 
-    if timeout != :infinity and wait_ms > timeout do
+    # **A wait the caller cannot sleep is a timeout, even under `timeout: :infinity`.**
+    # `Process.sleep/1` raises past 2^32 - 1 ms, and `acquire/3` sleeps AFTER this commit, so
+    # a weight large enough to ask for more raised in the caller with the tokens already
+    # spent on a request that was never made. About 49.7 days is not a wait anyone meant.
+    if (timeout != :infinity and wait_ms > timeout) or wait_ms > @max_sleep_ms do
       # Deliberately NOT committed. Consuming tokens for a request that will not be
       # made is how a partial failure leaks capacity nothing ever gives back.
       {:reply, {:error, :rate_limit_timeout}, state}

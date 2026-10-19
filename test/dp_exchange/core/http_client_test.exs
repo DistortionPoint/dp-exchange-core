@@ -539,6 +539,34 @@ defmodule DpExchange.Core.HttpClientTest do
         end
       end
     end
+
+    test "a retry wait that no process can sleep is refused before anything is sent" do
+      # `Process.sleep/1` raises past 2^32 - 1 ms. This delay passed the integer check, sent the
+      # request and raised from the sleep in the calling process on the first retry.
+      assert_raise ArgumentError, ~r/retry_delay.*longer than 4294967295 ms/, fn ->
+        HttpClient.request(:get, "http://127.0.0.1:1/x", [], nil, retry_delay: 2_000_000_000)
+      end
+
+      # The jitter counts: 3_500_000_000 plus a quarter again is over, with two attempts.
+      assert_raise ArgumentError, ~r/retry_delay/, fn ->
+        HttpClient.request(:get, "http://127.0.0.1:1/x", [], nil,
+          retry_delay: 3_500_000_000,
+          retry_attempts: 2
+        )
+      end
+    end
+
+    test "a huge retry_delay is fine when nothing is retried, and backoff_ms/2 stays in range" do
+      assert HttpClient.backoff_ms(3_000_000_000, 1) <= 3_750_000_000
+
+      # One attempt never sleeps, so the delay is never used.
+      assert {:error, _refused} =
+               HttpClient.request(:get, "http://127.0.0.1:1/x", [], nil,
+                 retry_delay: 4_000_000_000,
+                 retry_attempts: 1,
+                 timeout: 5_000
+               )
+    end
   end
 
   describe "parse_rate_limit_headers/1 — standard shape only" do

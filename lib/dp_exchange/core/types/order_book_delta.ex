@@ -107,13 +107,15 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
   triples with `side` one of `:bid | :ask` and `price` and `quantity` each a `Decimal` (or
   an integer). A level on `:buy`, or on the string `"bid"`, is
   read by a consumer matching the two sides as no side at all, and its quantity lands on
-  neither side of the book.
+  neither side of the book. A price `<= 0` or a negative quantity raises too; a quantity of
+  zero is kept, because it is how a delta says a level ceased to exist.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
     built = Validate.new!(__MODULE__, @enforce_keys, attrs)
 
     if is_list(built.levels) and Enum.all?(built.levels, &level?/1) do
+      Enum.each(built.levels, &check_values!/1)
       built
     else
       raise ArgumentError,
@@ -126,6 +128,18 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
     do: side in [:bid, :ask] and number?(price) and number?(quantity)
 
   defp level?(_other), do: false
+
+  # A price is above zero and a quantity is not negative: zero is the documented "this level
+  # ceased to exist" and is kept, but a negative quantity is a delta read as a level (or a
+  # sign flipped), and a price at or below zero is no price. Neither is ever what a venue
+  # sent, and the rest of the frame stays plausible around it.
+  defp check_values!({_side, price, quantity} = level) do
+    if Decimal.compare(price, 0) != :gt or Decimal.compare(quantity, 0) == :lt do
+      raise ArgumentError,
+            "OrderBookDelta.new/1: field :levels holds #{inspect(level)} — a price must be " <>
+              "above zero and a quantity must not be negative (0 removes the level)"
+    end
+  end
 
   defp number?(%Decimal{}), do: true
   defp number?(value), do: is_integer(value)

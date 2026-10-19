@@ -124,7 +124,7 @@ defmodule DpExchange.Core.Types.Quote do
 
   ## Raises
 
-  On a `:volume_window` outside `#{inspect(@volume_windows)}`, and on a `:volume_window`
+  On a `:price` of zero or less (a traded price is above zero), on a `:volume_window` outside `#{inspect(@volume_windows)}`, and on a `:volume_window`
   given for a quote with no `:volume`. Both are a caller's mistake, and both would publish a
   claim about a quantity that is not there.
   """
@@ -134,6 +134,7 @@ defmodule DpExchange.Core.Types.Quote do
       __MODULE__
       |> Validate.new!(@enforce_keys, attrs)
       |> Validate.decimals!([:price, :volume])
+      |> Validate.positive!([:price])
       |> Validate.non_negative!([:volume])
 
     validate_volume_window!(built)

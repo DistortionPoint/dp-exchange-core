@@ -47,6 +47,12 @@ defmodule DpExchange.Core.Types.Validate do
   tuple, because no field of any type is a float and a float has already lost digits. Free-form
   maps (`details`, `line_items`, `metrics`) may still hold one: they are the venue's own.
 
+  **Value rules a type's own doc states are held per type too**, by `positive!/2` (a traded
+  price, a resting bid or ask, a position or withdrawal size, a strike), `non_negative!/2`,
+  `text!/2` (an address, network, asset or id is a non-blank string), `maps!/2`, `dates!/2` and
+  `symbol_lists!/2` (a container of the right shape or `nil`). Each names module, field and
+  value, accepts `nil` (presence is `new!/3`'s job) and never repairs the input.
+
   ## Struct literals still work
 
   Nothing here removes `defstruct` or `@enforce_keys` from any `Types.*` module, and
@@ -138,6 +144,116 @@ defmodule DpExchange.Core.Types.Validate do
     end)
 
     built
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a number above zero, and raises
+  `ArgumentError` naming module, field and value otherwise.
+
+  For a traded price, a resting bid or ask, and a position's size: zero is not a price (a
+  venue's `0` means "no resting order", which its decoder turns into `nil`) and not a size
+  that is held. Run it after `decimals!/2`, which guarantees a `Decimal`, an integer or `nil`.
+  """
+  @spec positive!(struct(), [atom()]) :: struct()
+  def positive!(%module{} = built, fields) when is_list(fields) do
+    Enum.each(fields, fn field ->
+      case Map.fetch!(built, field) do
+        nil -> :ok
+        value -> positive_value!(module, field, value)
+      end
+    end)
+
+    built
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a non-blank string, and raises
+  `ArgumentError` naming module, field and value otherwise.
+
+  For the identifying text of a funds-moving or addressing field (an address, a network, an
+  asset, an id). A blank string is no name at all and an atom or number is not the venue's
+  text; both used to build, and an address with an empty network is the one the deposit is
+  lost to.
+  """
+  @spec text!(struct(), [atom()]) :: struct()
+  def text!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless is_binary(value) and String.trim(value) != "" do
+        raise_shape!(module, field, value, "a non-blank string")
+      end
+    end)
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a plain map (not a struct), and raises
+  `ArgumentError` otherwise. For the free-form maps (`details`, `line_items`, `metrics`) whose
+  contents are the venue's own but whose container is not.
+  """
+  @spec maps!(struct(), [atom()]) :: struct()
+  def maps!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless is_map(value) and not is_struct(value) do
+        raise_shape!(module, field, value, "a map")
+      end
+    end)
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a `Date`, and raises `ArgumentError`
+  otherwise. A `DateTime` or a string there sorts and compares wrongly in the consumer.
+  """
+  @spec dates!(struct(), [atom()]) :: struct()
+  def dates!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless is_struct(value, Date), do: raise_shape!(module, field, value, "a Date")
+    end)
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a proper list of non-blank strings, and
+  raises `ArgumentError` otherwise. `nil` and `[]` stay different answers ("not fetched" and
+  "fetched, empty"); anything else, a bare string included, is neither.
+  """
+  @spec symbol_lists!(struct(), [atom()]) :: struct()
+  def symbol_lists!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless symbol_list?(value), do: raise_shape!(module, field, value, "a list of strings")
+    end)
+  end
+
+  defp symbol_list?([]), do: true
+
+  defp symbol_list?([head | tail]),
+    do: is_binary(head) and String.trim(head) != "" and symbol_list?(tail)
+
+  defp symbol_list?(_other), do: false
+
+  defp each_present(built, fields, check) do
+    Enum.each(fields, fn field ->
+      case Map.fetch!(built, field) do
+        nil -> :ok
+        value -> check.(field, value)
+      end
+    end)
+
+    built
+  end
+
+  defp raise_shape!(module, field, value, wanted) do
+    raise ArgumentError,
+          "#{inspect(module)}.new/1: field #{inspect(field)} holds " <>
+            "#{inspect(value, limit: 5, printable_limit: 40)} — must be #{wanted} or nil"
+  end
+
+  defp positive_value!(module, field, value) do
+    if Decimal.compare(value, 0) != :gt do
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — it must " <>
+              "be above zero; zero or a negative here is a decode bug (a venue's 0 for " <>
+              "\"none\" belongs as nil)"
+    end
+
+    :ok
   end
 
   defp non_negative_value!(module, field, value) do

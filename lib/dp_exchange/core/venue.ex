@@ -225,6 +225,11 @@ defmodule DpExchange.Core.Venue do
       after trimming (every single-symbol read, and an order request's `:symbol`).
     * `{:invalid_order_id, value}` — an order id that is `nil`, not a string, or blank after
       trimming (`c:get_order/3`, `c:cancel_order/3`, `c:replace_order/4`).
+    * `{:invalid_argument, name}` — a positional argument that must be a list and is not a
+      proper one, named by the argument: `{:invalid_argument, :requests}` for
+      `c:place_orders/3`. (Symbol lists keep their own tag, `{:invalid_symbols, value}`; this
+      is the tag for a list argument that has none.) The value is not echoed: a batch of
+      requests can hold anything.
 
   A caller matches these tags and never a venue's own wording. They are `{:error, _}` and not
   `{:refused, _}`: the caller can fix the argument and retry.
@@ -234,6 +239,7 @@ defmodule DpExchange.Core.Venue do
           | {:invalid_subscriber, term()}
           | {:invalid_symbol, term()}
           | {:invalid_order_id, term()}
+          | {:invalid_argument, atom()}
 
   @typedoc """
   The refusals `c:place_order/3` and `c:replace_order/4` give for a request decided wrong
@@ -1260,6 +1266,9 @@ defmodule DpExchange.Core.Venue do
   a single ok-or-error: a caller told "the batch failed" when four of five were placed has
   four positions it does not know about.
 
+  `requests` that is not a proper list is `{:error, {:invalid_argument, :requests}}`, decided
+  before anything is sent and before credentials; it never raises on a non-list.
+
   A batch that may have reached the venue is
   `{:error, {:order_unconfirmed, [client_order_id], reason}}`: the id is the **list** of
   every client order id sent, in request order (`t:order_unconfirmed/0`).
@@ -1354,7 +1363,17 @@ defmodule DpExchange.Core.Venue do
   `supports_order_replace` rather than being inferred from the callback existing.
 
   The order id is checked as `c:cancel_order/3` checks it
-  (`{:error, {:invalid_order_id, value}}`), then the request as `c:place_order/3` checks it.
+  (`{:error, {:invalid_order_id, value}}`), then the change map.
+
+  **The change map is partial by nature, and every field it carries is held to
+  `c:place_order/3`'s rules for that field**, in the same order: a non-map or an **empty** map
+  is `{:error, {:invalid_order_request, value}}` (a replace that changes nothing is not a
+  replace); a key the venue's builder does not read is `{:unsupported_order_field, key}`; and
+  each field that is present is judged as `place_order/3` judges it (`:symbol`, `:side`,
+  `:order_type`, `:time_in_force`, `:quantity`, `:price`, `:stop_price`, `:client_order_id`),
+  a present `nil` included, so `%{price: nil}` is `{:invalid_price, nil}`, not "no change".
+  A field the map leaves out is not checked, and is not required: that is what makes it a
+  change. `c:preview_replace/4` takes the same map under the same rules.
 
   ## An outcome that may have reached the venue
 
@@ -1387,6 +1406,11 @@ defmodule DpExchange.Core.Venue do
   irreversible at the venue, and a caller who cannot price the amendment first is choosing
   between committing blind and cancel-then-place, which reopens the very window
   `replace_order/4` exists to close.
+
+  The order id and the change map are checked as `c:replace_order/4` checks them: an id that
+  is `nil`, not a string or blank is `{:invalid_order_id, value}`; a non-map or empty change
+  map is `{:invalid_order_request, value}`; each field present is judged by
+  `c:place_order/3`'s rule for it.
 
   Declared through `supports_order_preview`, alongside `preview_order/3`.
   """

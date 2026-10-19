@@ -57,6 +57,7 @@ defmodule DpExchange.Core.Types.Fill do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.text!([:order_id])
     |> Validate.decimals!([:quantity, :price, :fee])
     |> Validate.non_negative!([:quantity])
     |> Validate.one_of!(:side, [:buy, :sell])

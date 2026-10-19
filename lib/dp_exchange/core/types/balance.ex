@@ -71,6 +71,7 @@ defmodule DpExchange.Core.Types.Balance do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@required_non_nil, attrs)
+    |> Validate.text!([:currency])
     |> Validate.decimals!([:balance, :available_balance, :hold])
   end
 end

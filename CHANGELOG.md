@@ -21,6 +21,85 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`PollingFeed` refuses a duration `Process.send_after/3` cannot arm.** `:interval_ms`,
+  `:start_delay_ms` and `:fetch_timeout_ms` above 4_294_967_295 passed the integer check and
+  raised from a timer: at `init/1` for the first two, and for `:fetch_timeout_ms` on the
+  FIRST FETCH inside `handle_info/2`, where the restart lost every runtime `update_symbols/2`
+  scope and raised again. All three now stop the feed at start with
+  `{:invalid_option, key, value}`.
+- **`HttpClient.request/5` refuses a `:retry_delay` whose longest retry wait no process can
+  sleep.** The wait is `retry_delay * n` plus a quarter, and `Process.sleep/1` raises past
+  2^32 - 1 ms; a delay of 2_000_000_000 with the default three attempts sent the request and
+  raised in the calling venue process on the first retry. It is an `ArgumentError` before
+  anything is sent, like the other retry options. One attempt never sleeps and is unaffected.
+- **`DefaultRateLimiter.acquire/3` answers `{:error, :rate_limit_timeout}` for a wait over
+  2^32 - 1 ms, `timeout: :infinity` included.** The sleep happens after the reservation is
+  committed, so a weight large enough to ask for years raised in the caller with the tokens
+  already spent. The reservation is now not committed.
+- **`Types.OrderBook.new/1` refuses a level with a price or a size at or below zero**, and
+  `Types.OrderBookDelta.new/1` a price at or below zero or a negative quantity (zero stays: it
+  is how a delta removes a level). `OrderBook`'s moduledoc already said a negative size or a
+  price `<= 0` refuses the whole book and a zero size is dropped; only shape and order were
+  checked.
+
+- **`Types.*.new/1` hold the value rules each type's own doc states** (they were prose only;
+  a struct literal still builds anything). `Candle.new/1` refuses an incoherent bar (high
+  below low, or open or close outside `[low, high]`). `Quote.new/1` and `Trade.new/1` refuse a
+  price at or below zero; `TopOfBook.new/1` a bid or ask at or below zero (a venue's `0` is
+  `nil`); `Position.new/1` a quantity at or below zero. `Fill`, `Balance`, `Conversion`,
+  `DepositAddress` and `ApprovedAddress` refuse a blank or non-text identifying field (order
+  id, currency, asset, network, address); `DepositAddress.memo_required` is `true`, `false`
+  or `nil`. `Withdrawal` needs an amount above zero, a fee not negative, and a `:tx_id` when
+  `:broadcast`. `StakingTransaction.amount` is above zero and its progress, with
+  `StakingBalance`, `StakingRate` and `StakingReward` amounts, not negative; a reward's
+  `accrual_count` is a non-negative integer or `nil`. `OptionContract` needs a strike and
+  multiplier above zero, `Date` expiries and boolean-or-`nil` flags; `OptionChain` keys its
+  expiries on `Date`s; `OptionGreeks`, `ContractStats`, `VolumeProfile` and `FxRate` refuse
+  negative open interest, volatility, volumes and non-positive rates and marks. `NewsItem`
+  and `Watchlist` `symbols` are `nil` or a list of strings; `FinancialStatement.line_items`,
+  `CorporateEvent.details` and `ScreenerResult.metrics` are maps; `ScreenerResult.rank` is a
+  positive integer or `nil`; `AuctionImbalance.side` is the venue's string. New helpers in
+  `Types.Validate`: `positive!/2`, `text!/2`, `maps!/2`, `dates!/2`, `symbol_lists!/2`.
+- **`PollingFeed` reports unrequested symbols in a bulk answer that also carries wanted
+  ones.** Only the all-unwanted answer was reported; with one wanted event among them the rest
+  were dropped in silence. The wanted events are delivered, then `{:unrequested_symbols, names}`
+  is recorded exactly as in the all-unwanted case (`status/1`'s `last_error`, the debug log).
+
+### Changed
+
+- **`Core.Venue`: `replace_order/4` and `preview_replace/4` hold a change map to
+  `place_order/3`'s rules field by field** (a non-map or empty map is
+  `{:invalid_order_request, v}`, an unread key `{:unsupported_order_field, k}`, each present
+  field, `nil` included, judged by its place_order rule), and `preview_order/3` checks its
+  request exactly as `place_order/3`. **`{:error, {:invalid_argument, :requests}}`** is the tag
+  for a `place_orders/3` argument that is not a proper list. The reference venue enforces all
+  three. Conformance group 12 now calls `preview_order/3` and `replace_order/4` with
+  `endpoint_args/2` (a valid request and change map) instead of `%{}`; it only judges whether
+  the answer is `:not_supported`, so a conforming venue passes either way. Venue-side impact:
+  none in the suite; a venue whose `replace_order/4` or `preview_order/3` accepts an empty or
+  malformed map now disagrees with the documented rule though no group holds it yet.
+
+### Added
+
+- **`AdapterContract.child_spec_credential_fault/1`**, the decision of conformance group 22
+  (a secret passed in `:credentials` must not appear in what `child_spec/1` hands a
+  supervisor), public so it can be shown to fail. Group 22 had no teeth test: it was an inline
+  `refute` that no broken fixture had ever been run through. `contract_teeth_decisions_test.exs`
+  now hands it a `child_spec/1` that stores the raw map, one that nests it, a redacting
+  wrapper, and one that keeps no credentials.
+
+### Changed (test support)
+
+- **The reference venue refuses what the contract refuses where it used to raise or answer.**
+  `get_historical_prices/4` answers `{:error, {:invalid_range, range}}` for a range that is not
+  a keyword list of `DateTime`s with `:start` before `:end` (a tuple raised `FunctionClauseError`
+  and a string reached `DateTime.compare/2`), checked after the symbol and before the options.
+  `get_volume_profile/3` answers `{:error, {:invalid_symbol, v}}`, then the options, then
+  `{:refused, :not_listed}` and `{:error, {:unsupported_timeframe, tf}}`; it used to answer a
+  profile stamped with any symbol and any width.
+
 ## [0.3.108] - 2026-10-18
 
 ### Documentation

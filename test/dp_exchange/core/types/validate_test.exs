@@ -140,7 +140,9 @@ defmodule DpExchange.Core.Types.ValidateTest do
       at_bottom = %Decimal{sign: 1, coef: 1, exp: -limit}
       past_top = %Decimal{sign: 1, coef: 1, exp: limit + 1}
 
-      assert %Candle{} = Candle.new(Keyword.put(@valid_candle, :open, at_top))
+      # `high` rises with `open`: a bar whose open is above its high is incoherent and refused.
+      at_top_bar = Keyword.merge(@valid_candle, open: at_top, high: at_top)
+      assert %Candle{} = Candle.new(at_top_bar)
       assert %Candle{} = Candle.new(Keyword.put(@valid_candle, :low, at_bottom))
 
       assert_raise ArgumentError, ~r/exponent/, fn ->

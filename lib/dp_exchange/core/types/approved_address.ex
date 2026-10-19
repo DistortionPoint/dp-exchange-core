@@ -59,6 +59,7 @@ defmodule DpExchange.Core.Types.ApprovedAddress do
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.text!([:address, :network])
     |> Validate.one_of!(:status, [:pending, :active, :rejected])
   end
 

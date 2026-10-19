@@ -65,6 +65,9 @@ defmodule DpExchange.Core.HttpClient do
   # Suppress dialyzer warnings for functions that dialyzer incorrectly analyzes
   @dialyzer {:nowarn_function, [parse_response_body: 2, get: 3]}
 
+  # The longest `Process.sleep/1` (a `receive ... after`) accepts: 2^32 - 1 milliseconds.
+  @max_sleep_ms 4_294_967_295
+
   # The most of a response body that goes into an error message. See `format_body/1`.
   @body_excerpt_bytes 2_048
 
@@ -158,7 +161,9 @@ defmodule DpExchange.Core.HttpClient do
     an explicit `retry_attempts`. A write without one needs nothing.
   - `:retry_delay` - Base delay between retries in milliseconds (default: 1000). The wait
     before retry `n` is `retry_delay * n` plus up to a quarter of that again at random, so it is
-    never shorter than the configured delay. What is retried: a transport failure, a 5xx and an
+    never shorter than the configured delay. A delay whose longest wait over the attempts
+    (jitter included) passes 4_294_967_295 ms, the most a process can sleep, is an
+    `ArgumentError` before anything is sent. What is retried: a transport failure, a 5xx and an
     unexpected status. What is not: a 4xx (permanent), a 3xx (`redirect` is off, so the same
     request gets the same answer), a 429 (the venue's `Retry-After` holds the bucket and the
     error returns at once), a body over `:max_body_bytes`, and a request that could not be
@@ -288,6 +293,14 @@ defmodule DpExchange.Core.HttpClient do
             ":retry_delay must be a non-negative integer of milliseconds, got " <>
               inspect(retry_delay)
     end
+
+    # **The longest wait a retry can ask for must be one `Process.sleep/1` accepts.** The wait
+    # before retry `n` is `retry_delay * n` plus up to a quarter again, and `sleep/1` raises
+    # `ArgumentError` past 2^32 - 1 ms (about 49.7 days). `retry_delay: 2_000_000_000` with the
+    # default three attempts passed every check above, sent the request, and then raised from
+    # the sleep in the CALLING venue process on the first retry, after the warning that said
+    # it was about to wait. Refused here, before anything is sent, like its neighbours.
+    sleepable_backoff!(retry_delay, retry_attempts)
 
     max_body_bytes = Config.opt(opts, :max_body_bytes, @default_max_body_bytes)
 
@@ -810,6 +823,25 @@ defmodule DpExchange.Core.HttpClient do
   def backoff_ms(retry_delay, attempts_made) do
     base = retry_delay * attempts_made
     base + :rand.uniform(div(base, 4) + 1) - 1
+  end
+
+  defp sleepable_backoff!(retry_delay, attempts) do
+    if longest_backoff_ms(retry_delay, attempts) > @max_sleep_ms do
+      raise ArgumentError,
+            ":retry_delay #{retry_delay} with :retry_attempts #{attempts} can ask for a wait " <>
+              "longer than #{@max_sleep_ms} ms, the most a process can sleep"
+    end
+
+    :ok
+  end
+
+  # The most `backoff_ms/2` can return over `attempts` attempts (the last retry is number
+  # `attempts - 1`, with the whole quarter of jitter), or 0 when nothing is retried.
+  defp longest_backoff_ms(_retry_delay, attempts) when attempts < 2, do: 0
+
+  defp longest_backoff_ms(retry_delay, attempts) do
+    base = retry_delay * (attempts - 1)
+    base + div(base, 4)
   end
 
   defp rate_limit_refusal(refused, opts) do

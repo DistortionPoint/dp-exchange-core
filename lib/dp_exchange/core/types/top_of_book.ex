@@ -90,12 +90,16 @@ defmodule DpExchange.Core.Types.TopOfBook do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:bid` or `:ask` of zero or less: a venue's `0` means no resting order, and
+  that side is `nil`, as the moduledoc says.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:bid, :ask, :bid_size, :ask_size])
+    |> Validate.positive!([:bid, :ask])
     |> Validate.non_negative!([:bid_size, :ask_size])
   end
 
