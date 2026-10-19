@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.109] - 2026-10-19
+
 ### Fixed
 
 - **`PollingFeed` refuses a duration `Process.send_after/3` cannot arm.** `:interval_ms`,
