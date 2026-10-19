@@ -21,6 +21,11 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- Design record for tick AN (dependency floors, HTTP error paths, consumer docs), implemented
+  across the family with its retrospective, in `docs/design/closed/`.
+
 ## [0.3.111] - 2026-10-19
 
 ### Fixed
