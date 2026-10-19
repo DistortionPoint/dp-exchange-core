@@ -21,6 +21,12 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- Design document for tick AM (order-write discipline, group 50, group 17 teeth, stream
+  lifecycle and schema-only decoding across the family), implemented in all five venues, with
+  its retrospective, in `docs/design/closed/`.
+
 ## [0.3.109] - 2026-10-19
 
 ### Fixed
