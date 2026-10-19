@@ -146,6 +146,26 @@ defmodule Broken.Teeth.DroppingChildSpec do
   def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [[]]}}
 end
 
+defmodule Broken.Teeth.LaxWrites do
+  @moduledoc false
+  # Previews and replaces whatever it is handed: the request is never read.
+  @spec preview_order(map(), term(), keyword()) :: {:ok, map()}
+  def preview_order(_credentials, _request, _opts), do: {:ok, %{}}
+
+  @spec replace_order(map(), String.t(), term(), keyword()) :: {:ok, map()}
+  def replace_order(_credentials, _id, _changes, _opts), do: {:ok, %{}}
+end
+
+defmodule Broken.Teeth.RaisingWrites do
+  @moduledoc false
+  # Raises where the convention answers a tuple.
+  @spec preview_order(map(), term(), keyword()) :: no_return()
+  def preview_order(_credentials, _request, _opts), do: raise(ArgumentError, "boom")
+
+  @spec replace_order(map(), String.t(), term(), keyword()) :: no_return()
+  def replace_order(_credentials, _id, _changes, _opts), do: raise(ArgumentError, "boom")
+end
+
 defmodule DpExchange.Core.ContractTeethDecisionsTest do
   use ExUnit.Case, async: true
 
@@ -971,6 +991,78 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
 
     test "a value that is not a Quote is named" do
       assert AdapterContract.volume_window_fault(:nope) == {:wrong_struct, :nope}
+    end
+  end
+
+  describe "assertion 17: a stripped credential is refused, not served and not a crash" do
+    test "a success is named, a raise, exit or throw is named, a refusal is not a fault" do
+      assert AdapterContract.credential_gate_fault({:ok, 1}) == {:succeeded, {:ok, 1}}
+
+      assert {:raised, {:raised, _exception}} =
+               AdapterContract.credential_gate_fault({:raised, %{}})
+
+      assert {:raised, {:exit, :boom}} = AdapterContract.credential_gate_fault({:exit, :boom})
+      assert {:raised, {:throw, 1}} = AdapterContract.credential_gate_fault({:throw, 1})
+
+      assert AdapterContract.credential_gate_fault({:error, {:missing_credentials, :v}}) == nil
+      assert AdapterContract.credential_gate_fault({:refused, :nope}) == nil
+      # A callback that returns a bare value cannot be `{:ok, _}`.
+      assert AdapterContract.credential_gate_fault(:ok) == nil
+    end
+
+    test "the reference venue's stripped read is a tuple refusal or no fault" do
+      answer = ReferenceVenue.get_order(%{}, "id", credentials: %{})
+      assert AdapterContract.credential_gate_fault(answer) == nil
+    end
+  end
+
+  describe "assertion 50: preview and replace hold the order-write discipline" do
+    @request %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+
+    defp discipline_cases do
+      AdapterContract.order_write_discipline_cases(
+        [%{}, @request, []],
+        [%{}, "order-1", %{price: "1"}, []]
+      )
+    end
+
+    defp discipline_faults(module) do
+      caps = ReferenceVenue.capabilities()
+      cases = AdapterContract.eligible_cases(module, caps, discipline_cases())
+      {length(cases), AdapterContract.case_faults(module, cases)}
+    end
+
+    test "the cases are place_order's refusals for preview and an empty or non-map change" do
+      cases = discipline_cases()
+
+      assert {:preview_order, [%{}, "not-an-order-request", []],
+              {:invalid_order_request, "not-an-order-request"}} in cases
+
+      assert {:preview_order, [%{}, Map.delete(@request, :order_type), []],
+              {:missing_field, :order_type}} in cases
+
+      for bad <- [%{}, nil, "price", [price: "1"]] do
+        assert {:replace_order, [%{}, "order-1", bad, []], {:invalid_order_request, bad}} in cases
+      end
+    end
+
+    test "the reference venue passes every case" do
+      assert {9, []} = discipline_faults(ReferenceVenue)
+    end
+
+    test "a venue that previews and replaces anything is named for every case" do
+      assert {9, faults} = discipline_faults(Broken.Teeth.LaxWrites)
+      assert length(faults) == 9
+
+      assert Enum.all?(faults, fn {_name, _arity, _expected, fault} ->
+               match?({:answered, {:ok, %{}}}, fault)
+             end)
+    end
+
+    test "a venue that raises is named, not passed" do
+      assert {9, faults} = discipline_faults(Broken.Teeth.RaisingWrites)
+      assert length(faults) == 9
+      assert Enum.all?(faults, fn {_name, _arity, _expected, fault} -> fault == :raised end)
     end
   end
 

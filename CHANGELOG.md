@@ -83,6 +83,19 @@ an acceptable changelog line.
 
 ### Added
 
+- **Conformance group 50, order-write discipline of preview and replace**, for the calls
+  `capabilities/0` makes active. `replace_order/4` given an empty change map, `nil`, a string
+  or a list answers `{:error, {:invalid_order_request, value}}`, and `preview_order/3` given a
+  request `place_order/3` refuses (a non-map, no `:order_type`, an unread key) answers the
+  identical tuple. Decision: `order_write_discipline_cases/2` with `case_faults/2`. The
+  reference venue passes; teeth in `contract_teeth_decisions_test.exs` (a venue that accepts
+  anything, one that raises). Listed in `assertions/0` (now fifty), `usage-rules/testing.md`
+  and the `Core.Venue` text.
+- **Group 17 no longer lets a raise stand for a refusal.** Its decision is now the public
+  `AdapterContract.credential_gate_fault/1`: with credentials stripped, `{:ok, _}` and a raise,
+  exit or throw are faults. It cannot demand `{:error, _}` or `{:refused, _}` of every
+  callback, because the group walks callbacks that return a bare value (`subscribe/2` is
+  `:ok`, `coverage/1` a map), so those stay unjudged.
 - **`AdapterContract.child_spec_credential_fault/1`**, the decision of conformance group 22
   (a secret passed in `:credentials` must not appear in what `child_spec/1` hands a
   supervisor), public so it can be shown to fail. Group 22 had no teeth test: it was an inline

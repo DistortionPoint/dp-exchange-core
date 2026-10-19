@@ -55,7 +55,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Forty-nine groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifty groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -230,7 +230,11 @@ defmodule DpExchange.Core.AdapterContract do
          "{:ok, %Types.StakingTransaction{}} to a valid call; a refusal is not a pass"},
       {49,
        "venue rule W6, unknown id — get_order/3 and cancel_order/3 on the fake answer an id " <>
-         "nobody placed with {:refused, :not_found}, never an order made up for it"}
+         "nobody placed with {:refused, :not_found}, never an order made up for it"},
+      {50,
+       "order-write discipline of preview and replace — replace_order/4 given an empty change " <>
+         "map or a non-map answers {:error, {:invalid_order_request, v}}, and preview_order/3 " <>
+         "given a request place_order/3 refuses answers the same tuple (each when active)"}
     ]
   end
 
@@ -725,6 +729,52 @@ defmodule DpExchange.Core.AdapterContract do
        {:unsupported_order_field, :contract_unknown_field}}
     ]
   end
+
+  @doc """
+  The `{name, args, expected}` cases of assertion 50, from the suite's own argument lists for
+  `preview_order/3` (`[credentials, request, opts]`) and `replace_order/4`
+  (`[credentials, id, changes, opts]`).
+
+  `preview_order/3` is handed each malformed request of `order_request_cases/1`, and must answer
+  the tuple `place_order/3` answers for it. `replace_order/4` is handed an empty change map and
+  values that are not maps, and must answer `{:invalid_order_request, value}`: a replace that
+  changes nothing is not a replace, and a non-map never raises.
+  """
+  @spec order_write_discipline_cases(list(), list()) :: [{atom(), list(), term()}]
+  def order_write_discipline_cases(preview_args, replace_args) do
+    [credentials, base, opts] = preview_args
+    [rcredentials, id, _changes, ropts] = replace_args
+
+    preview =
+      for {request, reason} <- order_request_cases(base),
+          do: {:preview_order, [credentials, request, opts], reason}
+
+    replace =
+      for bad <- [%{}, nil, "price", [price: "1"]],
+          do: {:replace_order, [rcredentials, id, bad, ropts], {:invalid_order_request, bad}}
+
+    preview ++ replace
+  end
+
+  @doc """
+  What is wrong with a call's answer when its credentials were stripped, or `nil`. Assertion 17.
+
+    * `{:succeeded, answer}` - `{:ok, _}`: the fake served a call it could not have signed.
+    * `{:raised, answer}` - a raise, exit or throw (`{:raised, e}`, `{:exit, r}`, `{:throw, v}`
+      from the suite's `call_on/3`). A raise is not a refusal: the family answers with tuples,
+      and a fake that crashes on `%{}` credentials holds the gate for a reason that has
+      nothing to do with credentials.
+
+  Any other answer is nil: the refusals (`{:error, _}`, `{:refused, _}`) and the callbacks that
+  return a bare value, which the group walks too and which cannot be `{:ok, _}`.
+  """
+  @spec credential_gate_fault(term()) :: nil | {:succeeded | :raised, term()}
+  def credential_gate_fault({:ok, _value} = answer), do: {:succeeded, answer}
+
+  def credential_gate_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def credential_gate_fault(_answer), do: nil
 
   @doc """
   The requests that put a `:price` on a market order, one for each time in force the venue
@@ -2142,6 +2192,7 @@ defmodule DpExchange.Core.AdapterContract do
       invalid_amount_refusals(),
       staking_return(),
       unknown_id_refusals(),
+      order_write_discipline(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -4799,6 +4850,32 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # --- 50. preview and replace hold the order-write discipline --------------------------------
+  #
+  # `Core.Venue` states that `preview_order/3` checks its request exactly as `place_order/3`
+  # does and that `replace_order/4` refuses an empty or non-map change map. The decisions are
+  # `order_write_discipline_cases/2` and `case_faults/2`; a call that is not active is skipped
+  # (group 12 holds the declaration), and one declared active but not exported fails.
+  defp order_write_discipline do
+    quote location: :keep do
+      describe "50. order-write discipline of preview and replace" do
+        test "preview_order/3 answers place_order/3's refusals, replace_order/4 refuses " <>
+               "an empty or non-map change map" do
+          if @fake do
+            cases =
+              DpExchange.Core.AdapterContract.order_write_discipline_cases(
+                endpoint_args(:preview_order, 3),
+                endpoint_args(:replace_order, 4)
+              )
+
+            what = "the fake's preview_order/3 and replace_order/4"
+            assert_conventions(@fake, cases, what, true)
+          end
+        end
+      end
+    end
+  end
+
   # --- 44. the fake exports everything the facade does ------------------------------------
   #
   # Each venue's own tests held this (`facade -- fake == []`), so a sixth venue could ship a
@@ -5449,11 +5526,14 @@ defmodule DpExchange.Core.AdapterContract do
           for {name, arity} <- gated do
             args = stripped_credential_args(name, arity)
 
-            refute match?({:ok, _}, call_on(fake, {name, arity}, args)),
-                   "#{inspect({name, arity})} answered {:ok, _} with credentials " <>
-                     "stripped, but #{inspect(venue)} declares credential_benefit: " <>
-                     ":required — a fake that succeeds without credentials certifies " <>
-                     "consumer code that forgot to supply them"
+            answer = call_on(fake, {name, arity}, args)
+
+            assert DpExchange.Core.AdapterContract.credential_gate_fault(answer) == nil,
+                   "#{inspect({name, arity})} answered #{inspect(answer, limit: 6)} with " <>
+                     "credentials stripped, but #{inspect(venue)} declares " <>
+                     "credential_benefit: :required — a fake that succeeds without " <>
+                     "credentials certifies consumer code that forgot to supply them, and " <>
+                     "one that raises is not refusing: answer {:error, _} or {:refused, _}"
           end
         end
       end

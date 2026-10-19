@@ -13,9 +13,16 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Forty-nine assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifty assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Group 50 needs nothing from you: it holds the order-write discipline of the preview and
+replace calls, when they are active.** `replace_order/4` given an empty change map or a
+non-map answers `{:error, {:invalid_order_request, value}}`, and `preview_order/3` given a
+request `place_order/3` refuses (a non-map, no `:order_type`, an unread key) answers the same
+tuple. **Group 17 no longer lets a raise stand for a refusal:** with credentials stripped, a
+fake must not answer `{:ok, _}` and must not raise, exit or throw.
 
 **Two checks in group 41 are opt-in and skip until you name the fact only your fixture
 knows.** Group 41 holds your fake to two family reasons: `unlisted_symbol: "ZZZ-USD"` (a well-formed symbol the

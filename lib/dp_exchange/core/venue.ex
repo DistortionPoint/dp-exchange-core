@@ -1246,7 +1246,10 @@ defmodule DpExchange.Core.Venue do
   sends once (`retry_attempts: 1`, or no idempotency key) has only a first attempt.
   `t:order_unconfirmed/0` documents the shape of the id, which is a list for a batch.
 
-  Conformance assertion 34 holds a venue's Fake to items 1, 2, 5 and 8 above.
+  Conformance assertion 34 holds a venue's Fake to items 1, 2, 5 and 8 above. Assertion 50
+  holds `c:preview_order/3` to answering a request `place_order/3` refuses with the identical
+  tuple, and `c:replace_order/4` to `{:invalid_order_request, value}` for an empty or non-map
+  change map.
   """
   @callback place_order(credentials(), map(), keyword()) ::
               order_write_result(Types.Order.t())
