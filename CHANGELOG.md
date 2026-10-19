@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.112] - 2026-10-19
+
 ### Documentation
 
 - Design record for tick AN (dependency floors, HTTP error paths, consumer docs), implemented
