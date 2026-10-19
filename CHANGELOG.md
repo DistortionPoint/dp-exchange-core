@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.111] - 2026-10-19
+
 ### Fixed
 
 Tick AN: dependency floors (lens I), HTTP paths (lens J) and consumer docs against code (lens K).
