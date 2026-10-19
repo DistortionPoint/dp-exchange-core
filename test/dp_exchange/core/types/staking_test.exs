@@ -62,6 +62,16 @@ defmodule DpExchange.Core.Types.StakingTest do
       assert Decimal.equal?(StakingRate.bps_to_pct("4.5e2"), Decimal.new("4.5"))
     end
 
+    test "text with more digits than decimal128 holds is nil at every Decimal version" do
+      # Decimal 3.x refuses to parse more than 34 digits and Decimal 2.x parsed them, so the
+      # same text was a rate at the dependency floor and no rate at the lock.
+      assert StakingRate.bps_to_pct(String.duplicate("9", 35)) == nil
+      assert StakingRate.bps_to_pct("1" <> String.duplicate("0", 40)) == nil
+
+      # Exactly 34 digits is still a rate.
+      assert %Decimal{} = StakingRate.bps_to_pct(String.duplicate("9", 34))
+    end
+
     test "padding is not a reason to fail" do
       # `Decimal.new("  500  ")` raises. Whitespace around a number does not change it.
       assert Decimal.equal?(StakingRate.bps_to_pct("  450  "), Decimal.new("4.5"))

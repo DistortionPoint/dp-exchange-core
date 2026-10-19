@@ -50,8 +50,15 @@ over your own declared `supported_quotes` for exactly that reason.
 
 ## Both directions are total
 
-Malformed input must never raise. Unparseable input is uppercased and passed through, never
-dropped — **a dropped symbol is invisible, a strange one is reviewable.**
+A malformed **symbol string** must never raise. Unparseable input is uppercased and passed
+through, never dropped — **a dropped symbol is invisible, a strange one is reviewable.**
+
+What does raise is a broken **declaration**, and it raises at the first symbol, not at
+compile time: a mapping whose `:sep` is missing or not a string, or whose `:quotes` is not a
+list of strings, is an `ArgumentError`, and so are two `asset_aliases` entries that map to the
+same canonical code (`to_exchange/2` cannot choose which one to send). A value that is not a
+string at all (`nil`, an atom) is a `FunctionClauseError`: the facade refuses it first, as
+`{:error, {:invalid_symbol, value}}`, before it reaches the normaliser.
 
 ## Asset aliases
 

@@ -1380,6 +1380,11 @@ defmodule DpExchange.Core.AdapterContract do
     Enum.find_value(levels, &unreadable_price/1) || unsorted_prices(levels, direction)
   end
 
+  # A NaN price is unreadable here, not sortable: `Decimal.compare/2` RAISES `Decimal.Error` for
+  # one (in every Decimal this package admits), and `unsorted_prices/2` hands every price to it.
+  # That turned a fake's NaN level into a raise out of this decision, inside the consuming
+  # venue's own test suite, in place of the named `{:unreadable_level, level}` a fault gets.
+  defp unreadable_price({%Decimal{coef: :NaN}, _size} = level), do: {:unreadable_level, level}
   defp unreadable_price({%Decimal{}, _size}), do: nil
   defp unreadable_price(other), do: {:unreadable_level, other}
 

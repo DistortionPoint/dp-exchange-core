@@ -27,6 +27,9 @@ defmodule DpExchange.Core.Types.StakingRate do
 
   alias DpExchange.Core.Types.Validate
 
+  # 10^34: the first coefficient with more than the 34 digits Decimal 3.x parses.
+  @max_parsed_coef 10_000_000_000_000_000_000_000_000_000_000_000
+
   @enforce_keys [:asset, :provider]
   defstruct [
     :asset,
@@ -107,6 +110,12 @@ defmodule DpExchange.Core.Types.StakingRate do
 
   def bps_to_pct(bps) when is_binary(bps) do
     case bps |> String.trim() |> Decimal.parse() do
+      # **Past 34 digits is unreadable at every Decimal version.** Decimal 3.x refuses to parse
+      # it (`:error`, so `nil`); Decimal 2.x, which `mix.exs` admits, parsed it in full, so the
+      # same text was a rate at the floor and no rate at the lock. A rate with more digits than
+      # decimal128 holds is not one a venue states, and which answer it got depended on the
+      # consumer's lockfile.
+      {%Decimal{coef: coef}, ""} when is_integer(coef) and coef >= @max_parsed_coef -> nil
       {parsed, ""} -> bps_to_pct(parsed)
       _unreadable -> nil
     end

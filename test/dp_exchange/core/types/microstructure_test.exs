@@ -149,6 +149,22 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
              ) == "99"
     end
 
+    test "a price key with an absurd exponent is unreadable, not compared" do
+      # `Decimal.parse("1e999999999")` succeeds in Decimal 2.x (which `mix.exs` admits), and
+      # at the 2.0.x floor `Decimal.compare/2` then builds a number of that many digits: one
+      # hostile key stalled the consumer's process. It must be unreadable like any non-number,
+      # at every Decimal version, so the tie below is decided by the key that parses at once.
+      for hostile <- ["1e999999999", "1E+99999", "1e-99999"] do
+        tied =
+          profile(%{
+            buy_at_price: %{hostile => Decimal.new("7"), "5" => Decimal.new("7")},
+            sell_at_price: %{}
+          })
+
+        assert VolumeProfile.point_of_control(tied) == "5"
+      end
+    end
+
     test "a tie between two spellings of the same number is still stable" do
       # The venue's own rows are kept as it sent them — see the moduledoc — so "24.2" and
       # "24.20" are two levels that no numeric comparison can order. The answer must still

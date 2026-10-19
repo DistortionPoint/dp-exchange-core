@@ -569,6 +569,52 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe "a GET never carries a body (Req 0.7.0-0.7.2 would send it as a POST)" do
+    test "a :get with a non-empty body raises before anything is sent" do
+      parent = self()
+
+      plug = fn conn ->
+        send(parent, {:sent, conn.method})
+        Req.Test.json(conn, %{})
+      end
+
+      assert_raise ArgumentError, ~r/:get request cannot carry a body/, fn ->
+        HttpClient.request(:get, "http://venue.test/x", [], ~s({"a":1}), plug: plug)
+      end
+
+      refute_receive {:sent, _method}, 500
+    end
+
+    test "an empty body on a :get is sent as a GET with no body" do
+      parent = self()
+
+      plug = fn conn ->
+        send(parent, {:sent, conn.method})
+        Req.Test.json(conn, %{"ok" => true})
+      end
+
+      assert {:ok, %{status: 200}} =
+               HttpClient.request(:get, "http://venue.test/x", [], "", plug: plug)
+
+      assert_receive {:sent, "GET"}, 5_000
+    end
+
+    test "a :post keeps its body" do
+      parent = self()
+
+      plug = fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(parent, {:sent, conn.method, body})
+        Req.Test.json(conn, %{"ok" => true})
+      end
+
+      assert {:ok, %{status: 200}} =
+               HttpClient.request(:post, "http://venue.test/x", [], ~s({"a":1}), plug: plug)
+
+      assert_receive {:sent, "POST", ~s({"a":1})}, 5_000
+    end
+  end
+
   describe "parse_rate_limit_headers/1 — standard shape only" do
     test "reads the conventional x-ratelimit-* trio" do
       headers = [
@@ -2114,6 +2160,31 @@ defmodule DpExchange.Core.HttpClientTest do
                )
 
       assert_received :sent
+    end
+
+    test "userinfo in a remote http:// URL is a credential: Req 0.7+ sends it as Basic auth" do
+      use_stub()
+
+      for url <- ["http://user:pw-not-real@venue.test/x", "http://token-not-real@venue.test/x"] do
+        assert {:error, "refused: credentials are not sent over plain http"} =
+                 HttpClient.request(:get, url, [], nil,
+                   adapter: answering(self()),
+                   retry_attempts: 0
+                 )
+
+        refute_received :sent
+      end
+
+      # The same userinfo over https, or to a loopback host, is not a cleartext credential.
+      for url <- ["https://user:pw-not-real@venue.test/x", "http://user:pw@127.0.0.1:1/x"] do
+        assert {:ok, _response} =
+                 HttpClient.request(:get, url, [], nil,
+                   adapter: answering(self()),
+                   retry_attempts: 0
+                 )
+
+        assert_received :sent
+      end
     end
 
     test "a header entry that is not a name/value pair is not judged as a credential" do

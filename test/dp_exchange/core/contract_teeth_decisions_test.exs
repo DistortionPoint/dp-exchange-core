@@ -541,6 +541,16 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
       assert AdapterContract.book_ordering_fault({:not, :a_list}, :desc) ==
                {:unreadable_level, {:not, :a_list}}
     end
+
+    test "a NaN price is named, not handed to Decimal.compare/2, which raises on it" do
+      nan_level = {Decimal.new("NaN"), d("1")}
+
+      assert AdapterContract.book_ordering_fault([nan_level | levels(~w(2 1))], :desc) ==
+               {:unreadable_level, nan_level}
+
+      assert AdapterContract.book_ordering_fault(levels(~w(1 2)) ++ [nan_level], :asc) ==
+               {:unreadable_level, nan_level}
+    end
   end
 
   describe "assertion 37: the reference venue's candles sit on every declared width's grid" do

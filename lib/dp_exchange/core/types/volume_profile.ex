@@ -33,6 +33,8 @@ defmodule DpExchange.Core.Types.VolumeProfile do
 
   alias DpExchange.Core.Types.Validate
 
+  @max_exponent Validate.max_decimal_exponent()
+
   @enforce_keys [:symbol, :timeframe, :opened_at, :provider]
   defstruct [
     :symbol,
@@ -160,12 +162,25 @@ defmodule DpExchange.Core.Types.VolumeProfile do
 
   # A whole-string parse only: `Decimal.parse/1` answers `{decimal, rest}` and would read
   # "12abc" as 12, which is a value invented from a key this module cannot actually read.
+  #
+  # **An absurd exponent is unreadable too, and this is a dependency-floor fix.** The keys are
+  # the venue's own strings and `Validate` does not bound them (they are binaries, not
+  # `Decimal`s). Decimal 3.x refuses `"1e999999999"` at parse time (its default limit is 6144),
+  # but Decimal 2.x, which `mix.exs` admits, parses it in full (nothing bounds a parse before
+  # 3.0.0), and at the 2.0.x floor `Decimal.compare/2` has no large-exponent shortcut (that is
+  # 2.1.0), so it aligns the two operands' exponents by building a number of that many digits:
+  # one hostile price key stalled the CONSUMER's process at the floor and was an `:error` at the
+  # lock. Bounded here by the same `Validate.max_decimal_exponent/0` every `Decimal` field is.
   defp parsed_price(price) when is_binary(price) do
     case Decimal.parse(price) do
       # "NaN" and "Infinity" parse in full but make `Decimal.compare/2` raise, so a key
       # spelled that way is unreadable here like any other non-number.
-      {%Decimal{coef: coef} = decimal, ""} when is_integer(coef) -> decimal
-      _partial_or_error -> nil
+      {%Decimal{coef: coef, exp: exp} = decimal, ""}
+      when is_integer(coef) and abs(exp) <= @max_exponent ->
+        decimal
+
+      _partial_error_or_absurd ->
+        nil
     end
   end
 

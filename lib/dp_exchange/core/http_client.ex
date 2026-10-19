@@ -146,7 +146,8 @@ defmodule DpExchange.Core.HttpClient do
   - `headers`: List of HTTP headers, or a zero-arity function returning them (or
     `{:ok, list}` / `{:error, reason}`) that is called again before every attempt, so a
     signed request is re-signed on retry rather than replayed
-  - `body`: Request body (for POST/PUT requests)
+  - `body`: Request body (for POST/PUT requests). A `:get` with a non-empty body raises
+    `ArgumentError` before anything is sent, because Req 0.7.0-0.7.2 send it as a POST
   - `opts`: Additional options including rate limiting context
 
   ## Options
@@ -311,6 +312,7 @@ defmodule DpExchange.Core.HttpClient do
 
     max_retry_after_s!(opts)
     validate_timeout_and_flags!(opts)
+    get_without_body!(method, body)
 
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
     # in the query string (`?api_key=...`) or in the URL's userinfo wrote its credential into
@@ -331,6 +333,25 @@ defmodule DpExchange.Core.HttpClient do
     end
   end
 
+  # **A GET that carries a body is refused, and this is a dependency-floor fix.** `mix.exs`
+  # admits Req `~> 0.7`, and Req 0.7.0 to 0.7.2 "automatically change GET to POST when request
+  # body is set" (0.7.3 reverted it). A `request(:get, url, headers, body)` was therefore a
+  # read at the lock and a WRITE at the floor, and because a GET defaults to three attempts it
+  # was a write retried up to three times. No venue reads with a body, so it is refused here,
+  # naming the method, before anything is sent. An empty body is no body and is not refused.
+  defp get_without_body!(:get, body) when is_binary(body) and body != "" do
+    raise ArgumentError,
+          "a :get request cannot carry a body: Req 0.7.0-0.7.2 turn it into a POST, and a " <>
+            "GET is retried. Use :post, or put the values in the query string"
+  end
+
+  defp get_without_body!(_method, _body), do: :ok
+
+  # `""` is sent as no body at all, so no Req version has anything to turn a GET into a POST
+  # for. Every other method and body is sent as given.
+  defp wire_body(:get, ""), do: nil
+  defp wire_body(_method, body), do: body
+
   # **Credentials never travel over plain http.** Every venue's base URL can be overridden
   # (config or an option, for a sandbox or a test stub), and nothing stopped an `http://`
   # one: a signed request then put the key, the signature or the bearer token on the wire
@@ -341,8 +362,19 @@ defmodule DpExchange.Core.HttpClient do
   defp cleartext_refusal, do: "refused: credentials are not sent over plain http"
   @credential_header_fragments ~w(authorization key sign token passphrase secret)
 
+  # **A URL's own userinfo is a credential too.** Req 0.7.0 and later turn `user:pass@host`
+  # into a Basic `Authorization` header, so `http://user:pass@venue/x` sent the password in the
+  # clear while every header check above saw nothing named like a credential.
   defp cleartext_credentials?(url, headers, opts) do
-    not Keyword.has_key?(opts, :plug) and credentials_in?(headers) and cleartext_remote?(url)
+    not Keyword.has_key?(opts, :plug) and cleartext_remote?(url) and
+      (credentials_in?(headers) or userinfo?(url))
+  end
+
+  defp userinfo?(url) do
+    case URI.parse(url) do
+      %URI{userinfo: userinfo} when is_binary(userinfo) -> true
+      _no_userinfo -> false
+    end
   end
 
   defp credentials_in?(headers) when is_function(headers, 0), do: true
@@ -965,7 +997,7 @@ defmodule DpExchange.Core.HttpClient do
                  method: method,
                  url: url,
                  headers: headers,
-                 body: body
+                 body: wire_body(method, body)
                ] ++ request_opts
              )
              |> oversized(max_body_bytes) do

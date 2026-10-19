@@ -34,8 +34,11 @@ The per-repo checklist. Every step exists because skipping it has cost something
       `CLAUDE.md` takes effect in the session that wrote it — a session that writes rules
       it cannot see will cheerfully violate them.
 
-- [ ] `mix.exs`: `{:dp_exchange_core, "~> 0.1.0"}` — **three segments**, because while
+- [ ] `mix.exs`: `{:dp_exchange_core, "~> 0.3.0"}` — **three segments**, because while
       Core is `0.x` a minor bump may break you and that is the signal it is meant to send.
+      Use the Core release you built against, never an older one: the floor is a claim that
+      every Core from that version up has what you call (a `Capabilities` field, a `Types.*`
+      module, a conformance group), and `~> 0.1.0` would resolve a Core that has none of it.
 
 - [ ] `description:` prefixed `EXPERIMENTAL — `. It is what hexpm search shows, and for
       many readers it is the only text they see.
@@ -109,8 +112,15 @@ The per-repo checklist. Every step exists because skipping it has cost something
 
 ## 5. Test
 
-- [ ] `use DpExchange.Core.AdapterContract` — 21 assertion groups (see
-      `DpExchange.Core.AdapterContract.assertions/0`), green.
+- [ ] `use DpExchange.Core.AdapterContract` — 50 assertion groups (see
+      `DpExchange.Core.AdapterContract.assertions/0`), green. Several are opt-in and skip
+      until you name the fact only your fixture knows: see `usage-rules/testing.md`.
+
+- [ ] Run `script/check_dependency_floor.sh`: it resolves every runtime dependency to the
+      floor your `mix.exs` declares and runs the conformance test there. `mix.lock` always
+      resolves the newest version, so a floor that is too low passes every ordinary CI run
+      and fails in a consumer's application. See "Dependency floors" in
+      `usage-rules/adapter.md`.
 
 - [ ] Your fake satisfies the same suite as the real adapter. Less capable is allowed;
       differently capable is not.

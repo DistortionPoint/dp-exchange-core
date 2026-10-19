@@ -44,12 +44,12 @@ children = [
 ]
 
 # Pull.
-{:ok, %DpExchange.Core.Types.Quote{} = quote} = DpExchange.Coinbase.get_price("BTC-USD", [])
+{:ok, %DpExchange.Core.Types.Quote{} = pulled} = DpExchange.Coinbase.get_price("BTC-USD", [])
 
 # Push. The same struct arrives as a message; one handler serves both.
 :ok = DpExchange.Coinbase.subscribe(["BTC-USD"], to: self())
 receive do
-  {:dp_exchange, :coinbase, %DpExchange.Core.Types.Quote{} = quote} -> handle(quote)
+  {:dp_exchange, :coinbase, %DpExchange.Core.Types.Quote{} = pushed} -> handle(pushed)
 end
 ```
 
@@ -359,7 +359,8 @@ backoff.
 option: `:timeout` must be a non-negative integer or `:infinity`, `:weight` a positive
 integer, and `:log_requests`, `:rate_limit_per_endpoint`, `:rate_limit_blocking` and
 `:raw_status` booleans (`raw_status: "false"` would otherwise be truthy). A forwarded `nil`
-is read as absent.
+is read as absent. A `:get` that carries a non-empty body is refused the same way: Req 0.7.0
+to 0.7.2, which `mix.exs` admits, send it as a POST.
 
 **`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
 it arrives and the transfer is halted at the limit, so an oversized or endless response is

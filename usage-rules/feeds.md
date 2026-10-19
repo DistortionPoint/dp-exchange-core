@@ -318,8 +318,9 @@ NXDOMAIN. `subscribe/2` there **refuses**.
 
 It does not quietly connect to production, because a consumer testing against UAT while
 receiving production prices would be reading real market data believing it was fake. That is
-the substitution failure in its most dangerous form, and `Environment.streaming?/1` exists so
-a caller can ask before it commits.
+the substitution failure in its most dangerous form, and Webull's own `Environment.streaming?/1`
+(a venue module, not Core's: Core ships no environment module) exists so a caller can ask
+before it commits.
 
 ## A poll-based feed that goes silent still has to say so
 

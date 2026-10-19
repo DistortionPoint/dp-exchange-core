@@ -21,6 +21,47 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+Tick AN: dependency floors (lens I), HTTP paths (lens J) and consumer docs against code (lens K).
+
+- **`HttpClient.request/5` refuses a `:get` that carries a body.** `mix.exs` admits Req `~> 0.7`,
+  and Req 0.7.0 to 0.7.2 "automatically change GET to POST when request body is set" (0.7.3
+  reverted it). A `request(:get, url, headers, body)` was a read at the lock and a write at the
+  floor, retried up to three times because a GET defaults to three attempts. A non-empty body on
+  a `:get` is now `ArgumentError` before anything is sent; an empty body is sent as no body.
+- **`HttpClient` treats userinfo in the URL as a credential for the plain-http refusal.** Req
+  0.7.0 and later turn `http://user:pass@host/x` into a Basic `Authorization` header, and the
+  backstop that refuses credentials over cleartext http looked only at header names, so the
+  password went out in the clear. A remote `http://` URL with userinfo is now refused unsent
+  (`"refused: credentials are not sent over plain http"`); https, loopback and `plug:` are
+  unchanged.
+- **`Types.VolumeProfile.point_of_control/1` no longer compares a price key with an absurd
+  exponent.** The keys are the venue's own strings and are not bounded by `Validate`. Decimal 3.x
+  refuses to parse `"1e999999999"`, but Decimal 2.x (admitted by `mix.exs`) parses it, and at the
+  2.0.x floor `Decimal.compare/2` (no large-exponent shortcut until 2.1.0) then builds a number of
+  that many digits, stalling the consumer's process. A key outside
+  `Validate.max_decimal_exponent/0` is unreadable, like any non-number.
+- **`Types.StakingRate.bps_to_pct/1` answers the same for text of more than 34 digits at every
+  Decimal version.** Decimal 3.x refuses to parse it (`nil`) and Decimal 2.x returned a rate, so
+  the answer depended on the consumer's lockfile. It is `nil` at both.
+- **`AdapterContract.book_ordering_fault/2` names a NaN price.** It handed every price to
+  `Decimal.compare/2`, which raises `Decimal.Error` on NaN, so a fake's NaN level raised out of the
+  decision inside the consuming venue's own suite. It is now `{:unreadable_level, level}`.
+
+### Documentation
+
+- `docs/guides/building-an-exchange-package.md` told a new venue to depend on
+  `{:dp_exchange_core, "~> 0.1.0"}` (which resolves a Core with none of what a venue calls) and
+  to expect 21 conformance groups; it is `~> 0.3.0` and 50, with a step for
+  `script/check_dependency_floor.sh`.
+- `usage-rules.md`: the consumer example bound a variable named `quote` (a Kernel special form)
+  and is renamed; the `HttpClient` section states the `:get`-with-body refusal.
+- `usage-rules/symbols.md`: "both directions are total" now says what does raise (a broken
+  mapping, two aliases for one canonical code, a non-string symbol) rather than promising that
+  nothing does.
+- `usage-rules/feeds.md`: `Environment.streaming?/1` is Webull's own module, not Core's.
+
 ## [0.3.110] - 2026-10-19
 
 ### Documentation
