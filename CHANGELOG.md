@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.116] - 2026-10-20
+
 ### Fixed
 
 - `PollingFeed` in bulk mode (`:fetch_all`) ran its clock on a bare `:poll_all` message, so a
