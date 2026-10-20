@@ -21,6 +21,12 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- `Options.check/2` raised `FunctionClauseError` on an improper list (`[a: 1 | :tail]`)
+  instead of refusing it: 0.3.113's credential redaction walked the refused value with
+  `Enum.map/2`. It is walked by hand now and the improper tail is kept as given.
+
 ## [0.3.113] - 2026-10-20
 
 ### Documentation

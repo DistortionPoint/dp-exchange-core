@@ -129,9 +129,9 @@ defmodule DpExchange.Core.Options do
   defp redact_credentials(opts) when is_map(opts) and not is_struct(opts),
     do: Map.new(opts, fn {key, value} -> {key, redact_entry(key, value)} end)
 
-  defp redact_credentials(opts) when is_list(opts),
-    do: Enum.map(opts, &redact_pair/1)
-
+  # Walked by hand, not `Enum.map/2`: a refused list may be improper (`[a: 1 | :tail]`), and
+  # `Enum.map/2` raises on one — a refusal that crashes the caller instead of answering.
+  defp redact_credentials([head | tail]), do: [redact_pair(head) | redact_credentials(tail)]
   defp redact_credentials(opts), do: opts
 
   defp redact_pair({key, value}), do: {key, redact_entry(key, value)}

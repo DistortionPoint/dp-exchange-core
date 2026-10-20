@@ -42,7 +42,9 @@ defmodule DpExchange.Core.OptionsTest do
       for bad <- [
             %{limit: 1, credentials: creds},
             [{:limit, 1}, {:credentials, creds}, :stray],
-            %{"credentials" => creds}
+            %{"credentials" => creds},
+            # Improper: a refusal must answer, not raise in `Enum.map/2`.
+            [{:limit, 1}, {:credentials, creds} | :improper_tail]
           ] do
         assert {:error, {:invalid_options, echoed}} = Options.check(bad, [:limit])
 
