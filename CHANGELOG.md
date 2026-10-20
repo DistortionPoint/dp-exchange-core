@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.115] - 2026-10-20
+
 ### Documentation
 
 - Design record for tick AO (hot paths, process identity, secret hygiene), implemented across
