@@ -1,7 +1,7 @@
 # Time, Races and Truthful Docs - Design Document
 
 **Date**: 2026-10-20
-**Status**: Implementing
+**Status**: Implemented
 **Version**: 1.0
 **Author(s)**: User/Claude Collaboration (unattended loop, tick AP)
 
@@ -86,5 +86,42 @@ lenses that earlier ticks did not cover in full.
   - Refresh dated from the send.
   - Streamer expiry notices.
   - Unfenced refutes fixed.
-- [ ] **Family:** venues pass against the new Core, the floor check and the full suite at the
-      floor, and the batch is released.
+- [x] **Family:** venues pass against the new Core, the floor check and the full suite at the
+      floor, and the batch is released (Core 0.3.116; every venue requires `~> 0.3.116`).
+
+## Retrospective
+
+**What worked.**
+- Every venue suite ran against the unreleased Core before Core was released. This tick it
+  found nothing, and that is the point: the release went out already known to pass.
+- Sending back every partial report found more than the first passes did. Re-reading every
+  test file in full found tests that could not fail in all six repos.
+  - In Coinbase, a test asserted that a null list is refused on every endpoint. It passed only
+    because its options carried account keys from other venues, so every call was refused as an
+    unknown option before a body was read.
+  - Pinning the exact answer made the test fail. Removing the stray keys made it pass for the
+    right reason.
+
+**What went wrong.**
+- A deadline test set `expires_at` to `0`. The BEAM's monotonic clock is often negative, so
+  `0` lay in the future and the "expired" caller was replayed. Fake a deadline relative to
+  `System.monotonic_time/1`. The same fact is why Webull's "never delivered" sentinel is the
+  minimum integer, not `0`.
+- Two tests compared a parsed millisecond time with `==` against a literal without one.
+  `DateTime` equality includes precision (`.000`), so compare instants with
+  `DateTime.compare/2`.
+- Agents wrote code they could not compile:
+  - clauses split by a new function, so the compile failed with `--warnings-as-errors`;
+  - a `when` guard inside `refute_received`;
+  - lines of 99 columns;
+  - bare `_` patterns.
+  
+  Each was a one-line gate fix. None would have reached a release, because the gate runs
+  before every commit.
+- An agent's moduledoc claim ("eleven of thirteen, six loud and three silent") did not add up
+  and had no recorded source. It is now stated without numbers.
+
+**What to carry.**
+- Check what the BEAM's clocks and types actually do before writing the test's control. The
+  monotonic clock's sign and `DateTime`'s precision are part of the contract a test relies on,
+  just as sub-binary copying was in tick AO.
