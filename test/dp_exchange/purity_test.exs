@@ -67,10 +67,11 @@ defmodule DpExchange.PurityTest do
       # `beam_lib` was already reaching for in assertion 7's own imports-chunk check.
       # `code` is `:kernel`: assertion 7 asks `:code.which/1` where a module was loaded from.
       # `persistent_term` is `:erts`: `CanonicalPair`'s alias cache (written at most 64 times,
-      # which bounds the global GC a `put` triggers).
+      # which bounds the global GC a `put` triggers). `sys` is `:stdlib`: assertion 51 renders a
+      # venue process with `:sys.get_status/2` to find a credential it prints.
       allowed_erlang = ~w(erlang lists maps crypto logger elixir_erl_pass ets os
                           telemetry rand binary re unicode beam_lib xref erl_anno code queue
-                          persistent_term)a
+                          persistent_term sys)a
 
       called =
         "_build/#{Mix.env()}/lib/dp_exchange_core/ebin/*.beam"

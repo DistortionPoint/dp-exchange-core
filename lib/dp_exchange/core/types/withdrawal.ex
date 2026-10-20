@@ -92,7 +92,7 @@ defmodule DpExchange.Core.Types.Withdrawal do
       built
     else
       raise ArgumentError,
-            "#{inspect(__MODULE__)}.new/1: status :broadcast with :tx_id #{inspect(tx_id)} — " <>
+            "#{inspect(__MODULE__)}.new/1: status :broadcast with :tx_id #{Validate.show(tx_id)} — " <>
               "a broadcast withdrawal has a transaction, and it is named"
     end
   end

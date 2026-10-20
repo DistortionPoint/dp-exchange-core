@@ -262,6 +262,20 @@ defmodule DpExchange.Core.PollingFeed do
   end
 
   @doc """
+  The child spec, identified by `:name` when there is one, else by `:label`.
+
+  `use GenServer`'s own spec is always `id: DpExchange.Core.PollingFeed`, so a venue running
+  two feeds (a poll per account, a gap-filler beside a bulk poll) under one supervisor was
+  refused for a duplicate child id that has nothing to do with the feeds. A feed with neither
+  keeps the module as its id, as before.
+  """
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    id = Config.opt(opts, :name, Config.opt(opts, :label, __MODULE__))
+    %{id: id, start: {__MODULE__, :start_link, [opts]}}
+  end
+
+  @doc """
   Which symbols this poller is currently delivering.
 
   OBSERVED: a symbol appears only once a fetch has actually succeeded for it and

@@ -158,7 +158,7 @@ defmodule DpExchange.Core.Types.Quote do
 
   defp validate_volume_window!(%{volume_window: window}) do
     raise ArgumentError,
-          "unknown Quote :volume_window #{inspect(window)} — must be one of " <>
+          "unknown Quote :volume_window #{Validate.show(window)} — must be one of " <>
             inspect(@volume_windows)
   end
 end

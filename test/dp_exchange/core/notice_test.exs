@@ -203,6 +203,19 @@ defmodule DpExchange.Core.NoticeTest do
       end
     end
 
+    test "the refusal of non-map details names the kind of value and never prints it" do
+      # The likeliest wrong shape is a keyword list, which is where a secret sits. The
+      # message is logged and pasted into issues, so it must not carry what it refuses.
+      secret = "sk-live-NOTICE-DETAILS-0123456789"
+
+      for bad <- [[api_key: secret], {:token, secret}, secret] do
+        error = assert_raise(ArgumentError, fn -> Notice.new(:link_up, :v, details: bad) end)
+
+        assert Exception.message(error) =~ "must be a map"
+        refute Exception.message(error) =~ secret
+      end
+    end
+
     test "C8: many distinct, novel details keys never grow the atom table" do
       # `reject_credentials!/1` used to normalise every `details` key with
       # `String.to_atom/1` before comparing it. Atoms are never garbage collected and

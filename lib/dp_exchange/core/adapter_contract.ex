@@ -52,10 +52,17 @@ defmodule DpExchange.Core.AdapterContract do
       answer is `{:error, {:order_unconfirmed, id, reason}}`, and that the same function
       given a request refused before sending (no `:order_type`) is a plain or refused error,
       never `:order_unconfirmed`. Absent, group 42 is skipped, like group 41's facts.
+    * `:process_probe` - opt-in for group 51: a `{module, function}` naming a 1-arity function
+      that starts the venue's own long-lived process or processes (its feed, its socket) **with
+      no network** (the fake transport, a closed port, a stub) from a credentials map and
+      answers `{:ok, pid}` or `{:ok, [pid]}`. Group 51 renders `:sys.get_status/2` of each,
+      which is what OTP prints in a crash report, and fails if the secret it passed in is in
+      it. Absent, group 51 is skipped, like group 41's facts, and a venue holding a
+      credential in a process it never probed is a venue this suite has not examined.
 
   ## What it asserts, and what it deliberately does not
 
-  Fifty groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -234,7 +241,11 @@ defmodule DpExchange.Core.AdapterContract do
       {50,
        "order-write discipline of preview and replace — replace_order/4 given an empty change " <>
          "map or a non-map answers {:error, {:invalid_order_request, v}}, and preview_order/3 " <>
-         "given a request place_order/3 refuses answers the same tuple (each when active)"}
+         "given a request place_order/3 refuses answers the same tuple (each when active)"},
+      {51,
+       "credential redaction in a running process — a secret handed to the venue's own " <>
+         "process (the :process_probe option) is not in :sys.get_status/2, which is what a " <>
+         "crash report prints; skipped without the option"}
     ]
   end
 
@@ -1730,6 +1741,77 @@ defmodule DpExchange.Core.AdapterContract do
   end
 
   @doc """
+  What is wrong with a venue's running process where a secret is concerned, or `nil`.
+  Assertion 51.
+
+  `probe` is the `:process_probe` option: `{module, function}`, a 1-arity function that starts
+  the venue's own process or processes with no network from a credentials map. It is handed a
+  map holding one unique canary under every secret key name this family's venues use, and
+  must answer `{:ok, pid}` or `{:ok, [pid, ...]}`. Each process is asked for
+  `:sys.get_status/2`, which carries its process dictionary and the state it would print in a
+  crash report, rendered with `inspect/2`; the canary in it is `{:leaked, pid, excerpt}`. The
+  processes are stopped afterwards whatever the answer.
+
+  `{:probe_failed, answer}` when the probe starts nothing it can examine (an error, an empty
+  list, a non-pid, a process that does not answer to `:sys`): a probe that examined nothing
+  must not read as a pass. `nil` for no probe at all: the group is opt-in.
+
+  Public so that a teeth test can hand it a process that keeps the raw map, which the inline
+  version could never be shown to catch.
+  """
+  @spec process_credential_fault({module(), atom()} | nil) ::
+          nil | {:leaked, pid(), String.t()} | {:probe_failed, term()}
+  def process_credential_fault(nil), do: nil
+
+  def process_credential_fault({module, function}) when is_atom(module) and is_atom(function) do
+    canary = "dpx-process-canary-#{System.unique_integer([:positive])}"
+    secrets = Map.new(@child_spec_secret_keys, &{&1, canary})
+
+    case probe_pids(apply(module, function, [secrets])) do
+      {:ok, pids} -> judge_and_stop(pids, canary)
+      {:error, answer} -> {:probe_failed, answer}
+    end
+  end
+
+  defp probe_pids({:ok, pid}) when is_pid(pid), do: {:ok, [pid]}
+
+  defp probe_pids({:ok, [_first | _rest] = pids} = answer) do
+    if Enum.all?(pids, &is_pid/1), do: {:ok, pids}, else: {:error, answer}
+  end
+
+  defp probe_pids(answer), do: {:error, answer}
+
+  defp judge_and_stop(pids, canary) do
+    Enum.find_value(pids, &status_fault(&1, canary))
+  after
+    Enum.each(pids, &stop_probe/1)
+  end
+
+  defp status_fault(pid, canary) do
+    status = :sys.get_status(pid, 5_000)
+    rendered = inspect(status, limit: :infinity, printable_limit: :infinity)
+
+    case :binary.match(rendered, canary) do
+      {start, _length} -> {:leaked, pid, excerpt_around(rendered, start)}
+      :nomatch -> nil
+    end
+  catch
+    :exit, reason -> {:probe_failed, {:not_inspectable, pid, reason}}
+  end
+
+  defp excerpt_around(rendered, start) do
+    from = max(start - 100, 0)
+    binary_part(rendered, from, min(300, byte_size(rendered) - from))
+  end
+
+  # Unlinked first: the probe is usually started linked to the test, and a kill would
+  # otherwise take the test with it.
+  defp stop_probe(pid) do
+    Process.unlink(pid)
+    Process.exit(pid, :kill)
+  end
+
+  @doc """
   The identity fault of a venue's `provider_name/0` answer, or `nil`. Assertion 3.
   """
   @spec provider_name_fault(term()) :: nil | {:provider_name, term()}
@@ -2112,7 +2194,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   @use_options ~w(venue fake symbol_format sample_pairs credentials package_root endpoint_opts
                   order_args absent_feed_opts endpoint_symbols unlisted_symbol
-                  padded_credentials ambiguous_place_order unknown_order_id)a
+                  padded_credentials ambiguous_place_order unknown_order_id process_probe)a
 
   @doc """
   The options `use DpExchange.Core.AdapterContract` accepts.
@@ -2198,6 +2280,7 @@ defmodule DpExchange.Core.AdapterContract do
       staking_return(),
       unknown_id_refusals(),
       order_write_discipline(),
+      process_redaction(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -2300,6 +2383,10 @@ defmodule DpExchange.Core.AdapterContract do
       #     `{:error, {:invalid_credentials, runtime_id}}`.
       @unlisted_symbol Keyword.get(opts, :unlisted_symbol)
       @padded_credentials Keyword.get(opts, :padded_credentials)
+
+      # Group 51's opt-in: `{module, function}` starting the venue's own process offline. See
+      # `AdapterContract.process_credential_fault/1`.
+      @process_probe Keyword.get(opts, :process_probe)
 
       # Group 49's id. A well-formed order id nobody placed; the default is text, and a venue
       # whose ids have a format (Gemini's are integers) names one in that format, because
@@ -3042,7 +3129,7 @@ defmodule DpExchange.Core.AdapterContract do
                 flunk("""
                 capabilities/0 declares get_price/2 active, but the fake answered:
 
-                    #{inspect(other)}
+                    #{inspect(other, limit: 20)}
 
                 Either the endpoint is not really active and capabilities/0 should say
                 `:unsupported`, or the fake needs something this call did not carry —
@@ -3169,7 +3256,7 @@ defmodule DpExchange.Core.AdapterContract do
                      @venue.runtime_id()
                    ) == nil,
                    "get_price/2 for the unlisted symbol #{inspect(@unlisted_symbol)} answered " <>
-                     "#{inspect(answer)}, not {:refused, :not_listed}"
+                     "#{inspect(answer, limit: 20)}, not {:refused, :not_listed}"
           end
         end
 
@@ -3191,7 +3278,8 @@ defmodule DpExchange.Core.AdapterContract do
                      answer,
                      @venue.runtime_id()
                    ) == nil,
-                   "get_balances/2 with padded credentials answered #{inspect(answer)}, not " <>
+                   "get_balances/2 with padded credentials answered " <>
+                     "#{inspect(answer, limit: 20)}, not " <>
                      "{:error, {:invalid_credentials, #{inspect(@venue.runtime_id())}}}"
           end
         end
@@ -3274,7 +3362,7 @@ defmodule DpExchange.Core.AdapterContract do
                 flunk("""
                 capabilities/0 declares get_top_of_book/2 active, but the fake answered:
 
-                    #{inspect(other)}
+                    #{inspect(other, limit: 20)}
 
                 Either the endpoint is not really active and capabilities/0 should say
                 `:unsupported`, or the fake needs something this call did not carry —
@@ -3779,8 +3867,8 @@ defmodule DpExchange.Core.AdapterContract do
 
               :not_a_core_struct ->
                 flunk(
-                  "subscribe/2 pushed #{inspect(payload)} — the facade's own contract " <>
-                    "is that the payload is a DpExchange.Core.Types.* struct, the same " <>
+                  "subscribe/2 pushed #{inspect(payload, limit: 20)} — the facade's own " <>
+                    "contract is that the payload is a DpExchange.Core.Types.* struct, the same " <>
                     "value the pull endpoints return, never raw venue data"
                 )
             end
@@ -3862,7 +3950,7 @@ defmodule DpExchange.Core.AdapterContract do
               flunk("""
               capabilities/0 declares get_order_book/2 active, but the fake answered:
 
-                  #{inspect(other)}
+                  #{inspect(other, limit: 20)}
 
               Either the endpoint is not really active and capabilities/0 should say
               `:unsupported`, or the fake needs something this call did not carry —
@@ -3913,7 +4001,7 @@ defmodule DpExchange.Core.AdapterContract do
               "every #{side} level carries a real Decimal price — `Core.Types.OrderBook`'s " <>
                 "`level/0` is `{Decimal.t(), Decimal.t()}`, and a caller reading " <>
                 "`hd(#{side})` as the #{superlative} price cannot be handed " <>
-                "#{inspect(level)}"
+                "#{inspect(level, limit: 20)}"
             )
 
           {:unsorted, prices} ->
@@ -3921,7 +4009,7 @@ defmodule DpExchange.Core.AdapterContract do
               "#{side} must be #{direction}ending so `hd(#{side})` is the #{superlative} — " <>
                 "the ordering is part of `Core.Types.OrderBook`'s contract, not a " <>
                 "convenience, and a package returning venue-order without re-sorting has " <>
-                "broken it even though every value in it is true. Got: #{inspect(prices)}"
+                "broken it even though every value in it is true. Got: #{inspect(prices, limit: 20)}"
             )
         end
       end
@@ -4010,7 +4098,7 @@ defmodule DpExchange.Core.AdapterContract do
               flunk("""
               capabilities/0 declares #{name}/#{arity} active, but the fake answered:
 
-                  #{inspect(other)}
+                  #{inspect(other, limit: 20)}
 
               Either the endpoint is not really active and capabilities/0 should say
               `:unsupported`, or the fake needs something this call did not carry —
@@ -4207,7 +4295,7 @@ defmodule DpExchange.Core.AdapterContract do
               flunk("""
               capabilities/0 declares get_balances/2 active, but the fake answered:
 
-                  #{inspect(other)}
+                  #{inspect(other, limit: 20)}
 
               A refusal here is not a pass. Either the endpoint is not really active and
               capabilities/0 should say `:unsupported`, or the fake needs something this
@@ -4875,6 +4963,43 @@ defmodule DpExchange.Core.AdapterContract do
 
             what = "the fake's preview_order/3 and replace_order/4"
             assert_conventions(@fake, cases, what, true)
+          end
+        end
+      end
+    end
+  end
+
+  # --- 51. a running process does not print the secret it holds ----------------------------
+  #
+  # Groups 19 and 22 hold the credentials STRUCT and the stored child spec. Neither reaches
+  # the process that actually keeps the credential for its lifetime: OTP prints a process's
+  # state in full in the crash report, and `:sys.get_status/2` is the same rendering on demand.
+  # The decision is `process_credential_fault/1`. Opt-in (`process_probe:`): only the venue
+  # knows how to start its feed or socket without a network.
+  defp process_redaction do
+    quote location: :keep do
+      describe "51. credential redaction in a running process" do
+        test "a secret handed to the venue's process is not in :sys.get_status/2" do
+          case DpExchange.Core.AdapterContract.process_credential_fault(@process_probe) do
+            nil ->
+              :ok
+
+            {:leaked, pid, excerpt} ->
+              flunk(
+                "a process of #{inspect(@venue)} (#{inspect(pid)}) renders a secret passed in " <>
+                  "its credentials in cleartext under :sys.get_status/2, which is what OTP " <>
+                  "prints in the crash report of any crash at all. Hold the credential in a " <>
+                  "struct with a redacting Inspect (group 19 checks the struct) and/or " <>
+                  "define format_status/1 on the process. Around the secret: #{excerpt}"
+              )
+
+            {:probe_failed, answer} ->
+              flunk(
+                "the :process_probe of #{inspect(@venue)} examined nothing: " <>
+                  "#{inspect(answer, limit: 20)}. It must start the venue's process with no " <>
+                  "network and answer {:ok, pid} or {:ok, [pid, ...]}; a probe that examines " <>
+                  "nothing must not read as a pass."
+              )
           end
         end
       end

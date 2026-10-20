@@ -17,6 +17,33 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
   defp fast, do: %{default: %{limit: 1_000, per_ms: 1_000, burst: 1_000}}
   defp slow, do: %{default: %{limit: 1, per_ms: 10_000, burst: 1}}
 
+  describe "two limiters under one supervisor" do
+    test "child_spec/1 takes its id from the name, so two accounts' limiters can coexist" do
+      suffix = System.unique_integer([:positive])
+      a = :"acct_a_#{suffix}"
+      b = :"acct_b_#{suffix}"
+
+      # Linked to the test, and a supervisor ends when its parent does.
+      {:ok, sup} =
+        Supervisor.start_link(
+          [{Limiter, name: a, limits: slow()}, {Limiter, name: b, limits: slow()}],
+          strategy: :one_for_one
+        )
+
+      ids = sup |> Supervisor.which_children() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+      assert ids == Enum.sort([a, b])
+
+      # And they are separate buckets: draining one leaves the other untouched.
+      assert :ok = Limiter.acquire(:v, 1, limiter: a, timeout: 0)
+      assert {:error, :rate_limit_timeout} = Limiter.acquire(:v, 1, limiter: a, timeout: 0)
+      assert :ok = Limiter.acquire(:v, 1, limiter: b, timeout: 0)
+    end
+
+    test "an unnamed limiter keeps the module as its id" do
+      assert %{id: Limiter} = Limiter.child_spec(limits: slow())
+    end
+  end
+
   describe "a malformed :limits fails at start, not on the first request" do
     # It used to fail on the first acquire: `reserve/3` destructures
     # `%{limit: _, per_ms: _, burst: _}`, so a missing key raised a `MatchError` INSIDE this

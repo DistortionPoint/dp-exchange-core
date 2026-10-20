@@ -1412,3 +1412,24 @@ defmodule DpExchange.Core.ReferenceVenue.SymbolFormat do
   def to_exchange_symbol(canonical),
     do: CanonicalPair.to_exchange(ReferenceVenue.mapping(), canonical)
 end
+
+defmodule DpExchange.Core.ReferenceVenue.ProcessProbe do
+  @moduledoc """
+  The reference venue's answer to group 51's `process_probe:`: a long-lived process that
+  holds a credential for its lifetime, the way a venue's feed or socket does, started with
+  no network. The credential is wrapped in the redacting `ReferenceVenue.Credentials` the
+  moment it enters the process, which is the shape every venue package is expected to have.
+  """
+
+  use GenServer
+
+  alias DpExchange.Core.ReferenceVenue.Credentials
+
+  @doc "Starts the process from a credentials map. Named `start_link/1` so a supervisor can too."
+  @spec start_link(map()) :: GenServer.on_start()
+  def start_link(credentials) when is_map(credentials),
+    do: GenServer.start_link(__MODULE__, credentials)
+
+  @impl true
+  def init(credentials), do: {:ok, %{credentials: struct(Credentials, credentials)}}
+end

@@ -146,6 +146,95 @@ defmodule Broken.Teeth.DroppingChildSpec do
   def child_spec(_opts), do: %{id: __MODULE__, start: {__MODULE__, :start_link, [[]]}}
 end
 
+defmodule Broken.Teeth.LeakyProcess do
+  @moduledoc false
+  # Keeps the consumer's credentials map as the process state, as four venues' Feed and
+  # Socket did: OTP prints it in full in a crash report, and `:sys.get_status/2` on demand.
+  use GenServer
+
+  @spec start_link(map()) :: GenServer.on_start()
+  def start_link(credentials), do: GenServer.start_link(__MODULE__, credentials)
+
+  @impl true
+  def init(credentials), do: {:ok, %{credentials: credentials, subscribed: []}}
+end
+
+defmodule Broken.Teeth.DictionaryLeakProcess do
+  @moduledoc false
+  # Keeps nothing in its state, but the secret sits in the process dictionary, which
+  # `:sys.get_status/2` carries too.
+  use GenServer
+
+  @spec start_link(map()) :: GenServer.on_start()
+  def start_link(credentials), do: GenServer.start_link(__MODULE__, credentials)
+
+  @impl true
+  def init(credentials) do
+    Process.put(:auth, credentials)
+    {:ok, %{}}
+  end
+end
+
+defmodule Broken.Teeth.RedactingProcess do
+  @moduledoc false
+  # Holds the raw map but redacts it in `format_status/1`, the other legitimate fix.
+  use GenServer
+
+  @spec start_link(map()) :: GenServer.on_start()
+  def start_link(credentials), do: GenServer.start_link(__MODULE__, credentials)
+
+  @impl true
+  def init(credentials), do: {:ok, %{credentials: credentials}}
+
+  @impl true
+  def format_status(status) do
+    Map.update(status, :state, %{}, fn state -> %{state | credentials: :redacted} end)
+  end
+end
+
+defmodule Broken.Teeth.Probes do
+  @moduledoc false
+  # `process_probe:` functions, one per answer the group has to judge.
+  alias Broken.Teeth.{DictionaryLeakProcess, LeakyProcess, RedactingProcess}
+  alias DpExchange.Core.ReferenceVenue.ProcessProbe
+
+  @spec leaky(map()) :: GenServer.on_start()
+  def leaky(credentials), do: LeakyProcess.start_link(credentials)
+
+  @spec dictionary(map()) :: GenServer.on_start()
+  def dictionary(credentials), do: DictionaryLeakProcess.start_link(credentials)
+
+  @spec redacting(map()) :: GenServer.on_start()
+  def redacting(credentials), do: RedactingProcess.start_link(credentials)
+
+  # A clean process first and a leaking one second: the second is still found.
+  @spec two(map()) :: {:ok, [pid()]}
+  def two(credentials) do
+    {:ok, clean} = ProcessProbe.start_link(credentials)
+    {:ok, leaky} = LeakyProcess.start_link(credentials)
+    {:ok, [clean, leaky]}
+  end
+
+  @spec refuses(map()) :: {:error, :no_network_fake}
+  def refuses(_credentials), do: {:error, :no_network_fake}
+
+  @spec nothing(map()) :: {:ok, [pid()]}
+  def nothing(_credentials), do: {:ok, []}
+
+  @spec dead(map()) :: {:ok, pid()}
+  def dead(_credentials) do
+    # A pid that answers nothing to `:sys`: it has already exited.
+    pid = spawn(fn -> :ok end)
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> {:ok, pid}
+    after
+      5_000 -> {:ok, pid}
+    end
+  end
+end
+
 defmodule Broken.Teeth.LaxWrites do
   @moduledoc false
   # Previews and replaces whatever it is handed: the request is never read.
@@ -1093,6 +1182,58 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     test "a redacting wrapper and a spec that keeps no credentials are not faulted" do
       assert AdapterContract.child_spec_credential_fault(ReferenceVenue) == nil
       assert AdapterContract.child_spec_credential_fault(Broken.Teeth.DroppingChildSpec) == nil
+    end
+  end
+
+  describe "assertion 51: a running process does not print the secret it holds" do
+    test "a process holding the raw credentials map is named, with the text around the secret" do
+      assert {:leaked, pid, excerpt} =
+               AdapterContract.process_credential_fault({Broken.Teeth.Probes, :leaky})
+
+      assert is_pid(pid)
+      assert excerpt =~ "dpx-process-canary-"
+      assert excerpt =~ "api_key"
+    end
+
+    test "a secret kept only in the process dictionary is found too" do
+      assert {:leaked, _pid, excerpt} =
+               AdapterContract.process_credential_fault({Broken.Teeth.Probes, :dictionary})
+
+      assert excerpt =~ "dpx-process-canary-"
+    end
+
+    test "a leaking process is found even when it is not the first one the probe starts" do
+      assert {:leaked, _pid, _excerpt} =
+               AdapterContract.process_credential_fault({Broken.Teeth.Probes, :two})
+    end
+
+    test "a redacting struct and a format_status/1 redactor are not faulted" do
+      assert AdapterContract.process_credential_fault(
+               {DpExchange.Core.ReferenceVenue.ProcessProbe, :start_link}
+             ) == nil
+
+      assert AdapterContract.process_credential_fault({Broken.Teeth.Probes, :redacting}) == nil
+    end
+
+    test "the probe's processes are stopped afterwards, leaking or not" do
+      assert {:leaked, pid, _excerpt} =
+               AdapterContract.process_credential_fault({Broken.Teeth.Probes, :leaky})
+
+      # Monitoring a dead pid answers `:DOWN` at once, so this holds whether or not the kill
+      # has landed yet; the wait only bounds a process that was never stopped.
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 5_000
+    end
+
+    test "a probe that examines nothing is a failure, never a pass" do
+      for name <- [:refuses, :nothing, :dead] do
+        assert {:probe_failed, _answer} =
+                 AdapterContract.process_credential_fault({Broken.Teeth.Probes, name})
+      end
+    end
+
+    test "no probe at all is not a fault: the group is opt-in" do
+      assert AdapterContract.process_credential_fault(nil) == nil
     end
   end
 end

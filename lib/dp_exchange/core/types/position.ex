@@ -107,7 +107,7 @@ defmodule DpExchange.Core.Types.Position do
 
   defp atom_instrument_type!(%{instrument_type: type}) do
     raise ArgumentError,
-          "#{inspect(__MODULE__)}.new/1: field :instrument_type is #{inspect(type)} — " <>
+          "#{inspect(__MODULE__)}.new/1: field :instrument_type is #{Validate.show(type)} — " <>
             "must be an atom or nil"
   end
 

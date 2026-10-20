@@ -111,6 +111,9 @@ defmodule DpExchange.Core.Telemetry do
   have to invent one.
   """
 
+  # The most of a link's `reason` text that travels in `[:dp_exchange, :link, :down]` metadata.
+  @max_reason_bytes 1_024
+
   @doc "All telemetry event prefixes this module documents."
   @spec event_prefixes() :: [[atom()]]
   def event_prefixes do
@@ -250,16 +253,29 @@ defmodule DpExchange.Core.Telemetry do
   # A raw term is inspected here rather than refused. The `is_binary/1` guard raised
   # `FunctionClauseError` into the venue's own feed when a reason arrived as an atom or a
   # tuple, which is this module being the reason a call failed.
+  #
+  # **And bounded.** The raw term is whatever the venue's process held when the link fell: an
+  # exit reason can carry a whole GenServer call (`{reason, {GenServer, :call, [server,
+  # request, timeout]}}`), a decoded error body or a stacktrace, and telemetry metadata is
+  # copied to every attached handler and exporter on every occurrence. `inspect/2` is cut to
+  # 50 items and 1_024 printable bytes, identical to plain `inspect/1` for any reason inside
+  # that, which is every reason a link normally ends with.
   def link_down(provider, reason) when not is_binary(reason),
-    do: link_down(provider, inspect(reason))
+    do: link_down(provider, inspect(reason, limit: 50, printable_limit: @max_reason_bytes))
 
   def link_down(provider, reason) do
     :telemetry.execute(
       [:dp_exchange, :link, :down],
       %{count: 1},
-      %{provider: provider, reason: reason}
+      %{provider: provider, reason: bounded_text(reason)}
     )
   end
+
+  # Cut on a character boundary, with the full size marked so a cut reason never reads whole.
+  defp bounded_text(text) when byte_size(text) <= @max_reason_bytes, do: text
+
+  defp bounded_text(text),
+    do: String.slice(text, 0, @max_reason_bytes) <> "… (#{byte_size(text)} bytes)"
 
   @doc """
   Emits `[:dp_exchange, :link, :event]` for a route that cannot measure wire size.

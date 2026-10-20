@@ -120,6 +120,21 @@ defmodule DpExchange.Core.DefaultRateLimiter do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @doc """
+  The child spec, identified by the limiter's `:name`.
+
+  `use GenServer`'s own spec is always `id: DpExchange.Core.DefaultRateLimiter`, so a consumer
+  running two limiters under one supervisor (two accounts, or a venue with its own ceiling
+  beside another's) got `{:error, {:already_started, _}}`-shaped trouble from a duplicate
+  child id, not from anything wrong with the limiters. The id is the name, so `{Limiter,
+  name: :account_a}` and `{Limiter, name: :account_b}` sit side by side. A limiter started
+  with no name keeps the module as its id, as before.
+  """
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    %{id: Keyword.get(opts, :name, __MODULE__), start: {__MODULE__, :start_link, [opts]}}
+  end
+
   # --- RateLimitBehaviour ------------------------------------------------
 
   @doc """

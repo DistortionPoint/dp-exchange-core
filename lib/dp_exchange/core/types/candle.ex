@@ -109,9 +109,9 @@ defmodule DpExchange.Core.Types.Candle do
 
     unless coherent?(built) do
       raise ArgumentError,
-            "Candle.new/1: the bar is incoherent — high #{inspect(built.high)} must be at " <>
-              "least low #{inspect(built.low)}, and open #{inspect(built.open)} and close " <>
-              "#{inspect(built.close)} must each lie within [low, high]; a bar like that is " <>
+            "Candle.new/1: the bar is incoherent — high #{Validate.show(built.high)} must be at " <>
+              "least low #{Validate.show(built.low)}, and open #{Validate.show(built.open)} " <>
+              "and close #{Validate.show(built.close)} must each lie within [low, high]; a bar like that is " <>
               "malformed at the venue or misread, and corrupts every range it enters"
     end
 

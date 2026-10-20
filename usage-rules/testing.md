@@ -13,9 +13,19 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Fifty assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifty-one assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Group 51 is opt-in and skips until you supply `process_probe: {Module, :function}`.** It is
+the credential check that reaches the process which holds the credential for its lifetime, as
+groups 19 (the struct) and 22 (the stored child spec) cannot. Your function takes a credentials
+map holding a canary under every secret key name, starts your feed and/or socket **with no
+network** (the fake transport, a stub, a port nothing listens on) and answers `{:ok, pid}` or
+`{:ok, [pid, ...]}`. The group renders `:sys.get_status/2` of each, which carries the process
+dictionary and the state OTP prints in a crash report, and fails if the canary is in it. Hold
+the credential in a struct with a redacting `Inspect`, or define `format_status/1` on the
+process; a probe that starts nothing it can examine fails the group rather than skipping it.
 
 **Group 50 needs nothing from you: it holds the order-write discipline of the preview and
 replace calls, when they are active.** `replace_order/4` given an empty change map or a

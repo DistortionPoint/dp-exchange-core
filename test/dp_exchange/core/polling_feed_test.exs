@@ -26,6 +26,32 @@ defmodule DpExchange.Core.PollingFeedTest do
 
   defp event(symbol), do: %{symbol: symbol, price: Decimal.new(1)}
 
+  describe "child_spec/1" do
+    test "two named feeds sit under one supervisor, each identified by its name" do
+      suffix = System.unique_integer([:positive])
+      a = :"feed_a_#{suffix}"
+      b = :"feed_b_#{suffix}"
+      common = [sink: sink_to_self(), fetch: fn symbol -> {:ok, event(symbol)} end]
+
+      {:ok, sup} =
+        Supervisor.start_link(
+          [
+            {PollingFeed, Keyword.put(common, :name, a)},
+            {PollingFeed, Keyword.put(common, :name, b)}
+          ],
+          strategy: :one_for_one
+        )
+
+      ids = sup |> Supervisor.which_children() |> Enum.map(&elem(&1, 0)) |> Enum.sort()
+      assert ids == Enum.sort([a, b])
+    end
+
+    test "a feed with a label but no name is identified by the label; with neither, the module" do
+      assert %{id: "robinhood-poll"} = PollingFeed.child_spec(label: "robinhood-poll")
+      assert %{id: PollingFeed} = PollingFeed.child_spec(label: nil, name: nil)
+    end
+  end
+
   # Waits until `status/1` satisfies `predicate`, or fails after `timeout` ms. The feed
   # records a failure on its own timer, so there is no message to wait for; polling the
   # status bounds the wait by a ceiling instead of guessing a sleep long enough.

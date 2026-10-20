@@ -66,7 +66,7 @@ defmodule DpExchange.Core.Types.StakingReward do
 
   defp accrual_count!(%{accrual_count: count}) do
     raise ArgumentError,
-          "#{inspect(__MODULE__)}.new/1: field :accrual_count is #{inspect(count)} — must be " <>
+          "#{inspect(__MODULE__)}.new/1: field :accrual_count is #{Validate.show(count)} — must be " <>
             "a non-negative integer or nil"
   end
 end

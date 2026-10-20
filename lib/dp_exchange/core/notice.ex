@@ -76,6 +76,11 @@ defmodule DpExchange.Core.Notice do
   directly from an incident: 325 symbols subscribed and confirmed, 174 actually
   delivering. A drop from 325 to 174 is an event, not a number to be discovered by asking.
 
+  A feed process that crashed and was restarted by its supervisor, and resumed the symbols
+  and subscribers it had accepted, says so with `:coverage_change` and `details.reason:
+  :feed_restarted` (with `details.symbols`): deliveries paused, nothing was dropped silently,
+  and the consumer may want to re-read state it derived from the stream (tick AO, all venues).
+
   ### Catalog
 
   `:catalog_change` — a pair added, removed, or moving `:tradable` → `:delisted`. The one
@@ -450,8 +455,19 @@ defmodule DpExchange.Core.Notice do
   end
 
   defp reject_credentials!(other) do
-    raise ArgumentError, "notice details must be a map, got #{inspect(other)}"
+    # The KIND of the value, never the value. This printed `inspect(other)`, and the likeliest
+    # wrong shape for `details` is a keyword list, which is exactly where a venue puts the
+    # `api_key:` or `token:` the credential-key guard above exists to keep out of a public
+    # issue. The exception message is logged and pasted; the guard must not leak what it refuses.
+    raise ArgumentError, "notice details must be a map, got #{value_kind(other)}"
   end
+
+  defp value_kind(value) when is_list(value), do: "a list"
+  defp value_kind(value) when is_tuple(value), do: "a tuple"
+  defp value_kind(value) when is_binary(value), do: "a binary"
+  defp value_kind(value) when is_atom(value), do: inspect(value)
+  defp value_kind(value) when is_number(value), do: "a number"
+  defp value_kind(_value), do: "a term that is not a map"
 
   # Credential-shaped keys at ANY depth, through plain maps, lists and `{key, value}` pairs
   # (a keyword list). `%{request: %{headers: %{authorization: ...}}}` passed the top-level

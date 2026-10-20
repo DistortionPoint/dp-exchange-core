@@ -375,6 +375,29 @@ defmodule DpExchange.Core.TelemetryTest do
                       %{reason: "{:raw, :term}"}}
     end
 
+    test "down bounds a huge reason, raw or text, because it is copied to every handler" do
+      provider = unique_provider()
+      :ok = attach([[:dp_exchange, :link, :down]], provider)
+
+      huge_term = {:exit, Enum.to_list(1..5_000), String.duplicate("x", 50_000)}
+      Telemetry.link_down(provider, huge_term)
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements,
+                      %{reason: from_term}},
+                     5_000
+
+      assert byte_size(from_term) < 2_048
+
+      Telemetry.link_down(provider, String.duplicate("y", 50_000))
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements,
+                      %{reason: from_text}},
+                     5_000
+
+      assert byte_size(from_text) < 2_048
+      assert from_text =~ "(50000 bytes)"
+    end
+
     test "event carries bytes, which is what makes it a throughput signal" do
       provider = unique_provider()
       :ok = attach([[:dp_exchange, :link, :event]], provider)

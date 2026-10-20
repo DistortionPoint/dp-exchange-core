@@ -2318,6 +2318,156 @@ defmodule DpExchange.Core.HttpClientTest do
     end
   end
 
+  describe "an error text never quotes a credential this request carried" do
+    @echoed "sk-live-ECHOED-0123456789"
+
+    test "a venue 4xx body that quotes the key is scrubbed from the error tuple" do
+      use_stub()
+
+      plug = fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.send_resp(401, "invalid api key #{@echoed}")
+      end
+
+      assert {:error, {:exchange_error, "echo", message}} =
+               HttpClient.request(
+                 :get,
+                 "https://venue.test/x",
+                 [{"authorization", "Bearer #{@echoed}"}],
+                 nil,
+                 provider: "echo",
+                 plug: plug,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "Client error (401)"
+      assert message =~ "[redacted]"
+      refute message =~ @echoed
+    end
+
+    test "a 5xx body quoting a header value is scrubbed from the error and the retry log" do
+      use_stub()
+
+      plug = fn conn ->
+        Plug.Conn.send_resp(conn, 503, ~s({"detail": "bad signature #{@echoed}"}))
+      end
+
+      log =
+        ExUnit.CaptureLog.capture_log([level: :debug], fn ->
+          assert {:error, {:exchange_error, "echo", message}} =
+                   HttpClient.request(
+                     :get,
+                     "https://venue.test/x",
+                     [{"x-api-signature", @echoed}],
+                     nil,
+                     provider: "echo",
+                     plug: plug,
+                     retry_attempts: 2,
+                     retry_delay: 0
+                   )
+
+          refute message =~ @echoed
+        end)
+
+      assert log =~ "retry provider=echo"
+      refute log =~ @echoed
+    end
+
+    test "a transport exception quoting the key is scrubbed from the error and telemetry" do
+      use_stub()
+      provider = "echo-#{System.unique_integer([:positive])}"
+      test_pid = self()
+      handler_id = "http-echo-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:dp_exchange, :request, :exception],
+        fn _event, _measurements, metadata, _config ->
+          if metadata.provider == provider, do: send(test_pid, {:exception_event, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:error, {:exchange_error, ^provider, message}} =
+               HttpClient.request(
+                 :get,
+                 "https://venue.test/x",
+                 %{"authorization" => "Bearer #{@echoed}"},
+                 nil,
+                 provider: provider,
+                 plug: fn _conn -> raise ArgumentError, "cannot send #{@echoed}" end,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "Request exception"
+      refute message =~ @echoed
+
+      assert_receive {:exception_event, metadata}, 5_000
+      refute inspect(metadata) =~ @echoed
+    end
+
+    test "a query token and a URL password are scrubbed from the error text" do
+      use_stub()
+
+      plug = fn conn ->
+        Plug.Conn.send_resp(conn, 400, "bad request for #{@echoed} and hunter2hunter2")
+      end
+
+      assert {:error, {:exchange_error, "echo", message}} =
+               HttpClient.request(
+                 :get,
+                 "https://user:hunter2hunter2@venue.test/x?api_key=#{@echoed}&symbol=BTC",
+                 [],
+                 nil,
+                 provider: "echo",
+                 plug: plug,
+                 retry_attempts: 0
+               )
+
+      refute message =~ @echoed
+      refute message =~ "hunter2hunter2"
+    end
+
+    test "get/3 with raw_status scrubs the key a 4xx body quotes" do
+      use_stub()
+
+      plug = fn conn -> Req.Test.json(Plug.Conn.put_status(conn, 403), %{"key" => @echoed}) end
+
+      assert {:error, message} =
+               HttpClient.get("https://venue.test/x", [],
+                 headers: [{"authorization", "Bearer #{@echoed}"}],
+                 plug: plug,
+                 raw_status: true,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "HTTP 403"
+      refute message =~ @echoed
+    end
+
+    test "a short header value is not hunted for, so ordinary words survive" do
+      use_stub()
+
+      plug = fn conn -> Plug.Conn.send_resp(conn, 404, "no such symbol") end
+
+      assert {:error, {:exchange_error, "echo", message}} =
+               HttpClient.request(
+                 :get,
+                 "https://venue.test/x",
+                 [{"x-api-key", "no"}],
+                 nil,
+                 provider: "echo",
+                 plug: plug,
+                 retry_attempts: 0
+               )
+
+      assert message =~ "no such symbol"
+    end
+  end
+
   describe "a params map is sent in key order" do
     test "more than 32 keys, where a map has no iteration order of its own" do
       params = Map.new(1..40, fn n -> {"k#{String.pad_leading("#{n}", 2, "0")}", n} end)

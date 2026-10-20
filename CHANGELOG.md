@@ -21,6 +21,60 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- `Notice` moduledoc: a feed restarted by its supervisor that resumed what it had accepted says
+  so with `:coverage_change` and `details.reason: :feed_restarted` (with `details.symbols`), the
+  shape every venue uses from tick AO.
+
+### Added
+
+- **Conformance group 51: credential redaction in a running process** (opt-in,
+  `process_probe: {Module, :function}`; skipped without it, like group 41's facts). Groups 19
+  and 22 hold the credentials struct and the stored child spec; neither reaches the feed or
+  socket process that keeps the credential for its lifetime and whose state OTP prints in a
+  crash report. The probe starts the venue's process with no network from a canary-laden
+  credentials map; the group renders `:sys.get_status/2` and fails if the canary is in it, or
+  if the probe examined nothing. `AdapterContract.process_credential_fault/1` is public and
+  has teeth tests against a process holding the raw map, a `format_status/1` redactor and a
+  redacting struct. The reference venue runs the group against `ReferenceVenue.ProcessProbe`.
+  A venue not yet supplying a probe is unchanged; to satisfy it, see `usage-rules/testing.md`.
+- `DefaultRateLimiter.child_spec/1` and `PollingFeed.child_spec/1` take the child id from
+  `:name` (`PollingFeed` falls back to `:label`). `use GenServer`'s spec was always
+  `id: <module>`, so two limiters (two accounts) or two feeds under one supervisor were
+  refused for a duplicate child id. Unnamed ones keep the module as their id.
+
+### Fixed
+
+- **`HttpClient` error text no longer quotes a credential the request carried.** A venue 4xx
+  or 5xx body that echoed the key ("invalid api key sk-live-..."), a transport exception
+  message built from a header value, or a query token reached the error tuple, the retry
+  warning and `[:dp_exchange, :request, :exception]` telemetry. The values of credential-named
+  headers (and the token after a scheme such as `Bearer`), a URL's userinfo, and the value of
+  a credential-named query parameter are now replaced with `[redacted]` in those texts, before
+  the body excerpt is cut so a value straddling the cut is not left half-printed. Values under
+  six bytes are not hunted for. `get/3` with `raw_status: true` scrubs its `HTTP <status>`
+  message the same way.
+- `Notice.new/3` with non-map `details` (the likeliest wrong shape is a keyword list holding
+  `api_key:`) raised "must be a map, got <the value>", printing the secret its own guard
+  exists to keep out of a public issue. The message now names the kind of value only.
+- `Options.check/2` answered `{:error, {:invalid_options, opts}}` with the caller's whole
+  `opts`, `:credentials` included. The tuple keeps its shape; a `:credentials` entry in it is
+  now `:redacted`.
+- **A `Types.*` constructor's refusal names the offending value in bounded form.** Fifteen
+  messages (`Validate`: the identity, time, vocabulary, count, Decimal, text and shape checks;
+  `OrderBook`, `OrderBookDelta`, `Candle`, `Quote`, `Position`, `StakingReward`, `Withdrawal`)
+  put the whole value in the message with `inspect/1`, so a megabyte venue body or a
+  caller-supplied map became a megabyte exception message, copied into logs and crash reports.
+  They now go through `Validate.show/1` (five items, forty printable bytes, clipped to 200
+  characters, because `Decimal`'s `Inspect` ignores `:printable_limit` and prints every
+  digit). A value that prints shorter than that reads exactly as before. The conformance
+  suite's own failure messages bound the fake answers they print the same way.
+- `Telemetry.link_down/2` metadata `reason` is bounded (50 items, 1 KiB of printable text, a
+  longer text cut with its full size marked). A raw exit reason can carry a whole `GenServer`
+  call, and the metadata is copied to every attached handler and exporter. Identical to the
+  old output for any reason inside the bound.
+
 ## [0.3.112] - 2026-10-19
 
 ### Documentation

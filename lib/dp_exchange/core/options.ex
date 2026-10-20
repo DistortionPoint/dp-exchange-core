@@ -37,7 +37,8 @@ defmodule DpExchange.Core.Options do
 
     * `:ok`
     * `{:error, {:unknown_option, key}}` - the first key (in the caller's order) not allowed
-    * `{:error, {:invalid_options, opts}}` - `opts` is not a keyword list
+    * `{:error, {:invalid_options, opts}}` - `opts` is not a keyword list. Any `:credentials`
+      entry of `opts` is replaced by `:redacted` in the tuple, since the error is logged.
   """
 
   # The keys every facade call may carry. Taken from what the five venue facades forward to
@@ -116,7 +117,26 @@ defmodule DpExchange.Core.Options do
         {key, _value} -> {:error, {:unknown_option, key}}
       end
     else
-      {:error, {:invalid_options, opts}}
+      {:error, {:invalid_options, redact_credentials(opts)}}
     end
   end
+
+  # **The refusal echoes the value it was handed, and that value is the caller's `opts`.** A
+  # map (`%{credentials: creds}`) or a list with a stray non-pair in it is the likeliest
+  # wrong shape, and it carries the credentials the call was made as: the error tuple is
+  # logged and pasted. The value stays, so the tuple keeps its documented shape and a reader
+  # still sees what kind of thing was passed, but a `:credentials` entry is replaced.
+  defp redact_credentials(opts) when is_map(opts) and not is_struct(opts),
+    do: Map.new(opts, fn {key, value} -> {key, redact_entry(key, value)} end)
+
+  defp redact_credentials(opts) when is_list(opts),
+    do: Enum.map(opts, &redact_pair/1)
+
+  defp redact_credentials(opts), do: opts
+
+  defp redact_pair({key, value}), do: {key, redact_entry(key, value)}
+  defp redact_pair(other), do: other
+
+  defp redact_entry(key, _value) when key in [:credentials, "credentials"], do: :redacted
+  defp redact_entry(_key, value), do: value
 end

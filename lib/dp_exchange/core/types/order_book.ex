@@ -83,7 +83,7 @@ defmodule DpExchange.Core.Types.OrderBook do
     if not (is_list(levels) and Enum.all?(levels, &level?/1)) do
       raise ArgumentError,
             "OrderBook.new/1: field #{inspect(field)} must be a list of {price, quantity} " <>
-              "pairs of Decimals, got #{inspect(levels, limit: 5)}"
+              "pairs of Decimals, got #{Validate.show(levels)}"
     end
 
     Enum.each(levels, &check_positive!(field, &1))
@@ -97,7 +97,7 @@ defmodule DpExchange.Core.Types.OrderBook do
   defp check_positive!(field, {price, quantity} = level) do
     if Decimal.compare(price, 0) != :gt or Decimal.compare(quantity, 0) != :gt do
       raise ArgumentError,
-            "OrderBook.new/1: field #{inspect(field)} holds the level #{inspect(level)} — a " <>
+            "OrderBook.new/1: field #{inspect(field)} holds the level #{Validate.show(level)} — a " <>
               "snapshot level has a price and a size above zero (a size of 0 is dropped, a " <>
               "negative size or a price <= 0 refuses the book)"
     end
@@ -110,7 +110,7 @@ defmodule DpExchange.Core.Types.OrderBook do
     if Decimal.compare(better, worse) not in allowed do
       raise ArgumentError,
             "OrderBook.new/1: field #{inspect(field)} is not sorted best price first " <>
-              "(#{inspect(better)} before #{inspect(worse)})"
+              "(#{Validate.show(better)} before #{Validate.show(worse)})"
     end
 
     check_sorted!(tail, field, allowed)

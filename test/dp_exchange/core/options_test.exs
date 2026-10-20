@@ -34,6 +34,25 @@ defmodule DpExchange.Core.OptionsTest do
         assert Options.check(bad, [:limit]) == {:error, {:invalid_options, bad}}
       end
     end
+
+    test "the credentials in a refused opts are not echoed in the tuple" do
+      secret = "sk-live-OPTIONS-0123456789"
+      creds = %{api_key: secret, api_secret: secret}
+
+      for bad <- [
+            %{limit: 1, credentials: creds},
+            [{:limit, 1}, {:credentials, creds}, :stray],
+            %{"credentials" => creds}
+          ] do
+        assert {:error, {:invalid_options, echoed}} = Options.check(bad, [:limit])
+
+        refute inspect(echoed) =~ secret
+        assert inspect(echoed) =~ ":redacted"
+      end
+
+      assert {:error, {:invalid_options, %{limit: 1}}} =
+               Options.check(%{limit: 1}, [:limit])
+    end
   end
 
   describe "transport_options/0" do

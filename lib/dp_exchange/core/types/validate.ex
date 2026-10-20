@@ -239,16 +239,39 @@ defmodule DpExchange.Core.Types.Validate do
     built
   end
 
+  # **The offending value in a message is always bounded.** A decoder hands these constructors
+  # whatever it parsed, and a venue body of megabytes (or a caller-supplied map holding
+  # anything) became a megabyte exception message, copied into every log line and crash report
+  # that carried it. Five items and 40 printable bytes name the value; a small value reads
+  # exactly as plain `inspect/1` printed it.
+  #
+  # **Cut after rendering as well as inside `inspect/2`.** `Decimal`'s `Inspect` ignores
+  # `:printable_limit` and prints every digit (verified in Decimal 3.2.0), and the
+  # `{price, quantity}` levels of a book are tuples of them, so `inspect/2`'s own limits do not
+  # bound a Decimal with twenty thousand digits. The rendering is therefore clipped to
+  # `@shown_chars`; a value that prints shorter than that is untouched.
+  @shown_chars 200
+
+  @doc false
+  @spec show(term()) :: String.t()
+  def show(value) do
+    text = inspect(value, limit: 5, printable_limit: 40)
+
+    if byte_size(text) > @shown_chars,
+      do: String.slice(text, 0, @shown_chars) <> "...",
+      else: text
+  end
+
   defp raise_shape!(module, field, value, wanted) do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} holds " <>
-            "#{inspect(value, limit: 5, printable_limit: 40)} — must be #{wanted} or nil"
+            "#{show(value)} — must be #{wanted} or nil"
   end
 
   defp positive_value!(module, field, value) do
     if Decimal.compare(value, 0) != :gt do
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — it must " <>
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — it must " <>
               "be above zero; zero or a negative here is a decode bug (a venue's 0 for " <>
               "\"none\" belongs as nil)"
     end
@@ -259,7 +282,7 @@ defmodule DpExchange.Core.Types.Validate do
   defp non_negative_value!(module, field, value) do
     if Decimal.compare(value, 0) == :lt do
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — a size, " <>
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — a size, " <>
               "quantity or volume is never negative; a negative one is a decode bug"
     end
 
@@ -307,7 +330,7 @@ defmodule DpExchange.Core.Types.Validate do
   defp raise_not_decimal!(module, field, value, wanted) do
     raise ArgumentError,
           "#{inspect(module)}.new/1: field #{inspect(field)} holds " <>
-            "#{inspect(value, limit: 5, printable_limit: 40)} — must be #{wanted}; a decoder " <>
+            "#{show(value)} — must be #{wanted}; a decoder " <>
             "that passes a string or a map through builds a struct that raises inside " <>
             "Decimal.compare/2 in the consumer's process"
   end
@@ -331,7 +354,7 @@ defmodule DpExchange.Core.Types.Validate do
       built
     else
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — must " <>
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — must " <>
               "be one of #{inspect(allowed)}"
     end
   end
@@ -351,7 +374,7 @@ defmodule DpExchange.Core.Types.Validate do
 
       value ->
         raise ArgumentError,
-              "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — " <>
+              "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — " <>
                 "must be a positive integer"
     end
   end
@@ -394,7 +417,7 @@ defmodule DpExchange.Core.Types.Validate do
   defp refuse_identity!(module, :symbol, value) do
     unless is_binary(value) and String.trim(value) != "" do
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field :symbol is #{inspect(value)} — must be a " <>
+            "#{inspect(module)}.new/1: field :symbol is #{show(value)} — must be a " <>
               "non-blank string"
     end
   end
@@ -402,7 +425,7 @@ defmodule DpExchange.Core.Types.Validate do
   defp refuse_identity!(module, :provider, value) do
     unless is_atom(value) or is_binary(value) do
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field :provider is #{inspect(value)} — must be an " <>
+            "#{inspect(module)}.new/1: field :provider is #{show(value)} — must be an " <>
               "atom (or a string)"
     end
   end
@@ -426,7 +449,7 @@ defmodule DpExchange.Core.Types.Validate do
               not is_struct(value, NaiveDateTime) and is_atom(field) do
     if time_field?(field) do
       raise ArgumentError,
-            "#{inspect(module)}.new/1: field #{inspect(field)} is #{inspect(value)} — every " <>
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — every " <>
               "time in this family is a DateTime or nil; decode the time before building"
     end
   end

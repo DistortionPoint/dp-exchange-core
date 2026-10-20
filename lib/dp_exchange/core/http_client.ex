@@ -30,6 +30,17 @@ defmodule DpExchange.Core.HttpClient do
   non-JSON handling are what they were. A transport that ignores `:into` is checked after
   the fact instead; that path cannot prevent the allocation.
 
+  ## An error text never quotes a credential the request carried
+
+  The error tuple, the retry warning and the `[:dp_exchange, :request, :exception]` metadata
+  are built from what the transport and the venue answered, and either can quote the request
+  back: a 401 body that names the key it was sent, an exception message built from a header
+  value. The values of credential-named headers (and the token after a scheme, so `Bearer abc`
+  also yields `abc`), a URL's userinfo, and the value of a credential-named query parameter
+  are therefore replaced with `[redacted]` in those texts. Values shorter than six bytes are
+  not hunted for. The `log_requests` line names the endpoint (`Telemetry.endpoint/1`), never
+  the URL, a header or a body.
+
   ## The limiter is resolved at call time
 
   Never at compile time. `Application.compile_env/3` would freeze whichever limiter the
@@ -445,9 +456,16 @@ defmodule DpExchange.Core.HttpClient do
         # with `raw_status: true`, where a 4xx is handed back whole, and this put an
         # uncapped venue error page into the error tuple. `inspect/2` with these limits is
         # byte-identical for a body inside them, so a message a caller matches is unchanged.
+        # And scrubbed of the credentials the request carried, like every message built from a
+        # body (`secrets_in/2`). A `:headers` function cannot be read here, so it adds none.
+        secrets = secrets_in(full_url, Config.opt(opts, :headers, []))
+
         wrap_exchange_error(
           opts,
-          "HTTP #{status}: #{inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)}"
+          scrub(
+            "HTTP #{status}: #{inspect(body, limit: 50, printable_limit: @body_excerpt_bytes)}",
+            secrets
+          )
         )
 
       # `request/5` has already tagged its own failures with the venue when `:provider` was
@@ -961,6 +979,10 @@ defmodule DpExchange.Core.HttpClient do
 
     start_time = Telemetry.request_start(metadata)
 
+    # The credential values this request carries, so that no error text built from the
+    # transport's or the venue's answer can echo one back. See `secrets_in/2`.
+    secrets = secrets_in(url, headers)
+
     request_opts =
       [
         # `:timeout` is documented as the REQUEST timeout, and `receive_timeout` alone is not
@@ -1037,14 +1059,14 @@ defmodule DpExchange.Core.HttpClient do
                   if Config.opt(opts, :raw_status, false) do
                     {:ok, response}
                   else
-                    {:error, "Client error (#{status}): #{format_body(resp_body)}"}
+                    {:error, "Client error (#{status}): #{format_body(resp_body, secrets)}"}
                   end
 
                 status when status in 500..599 ->
-                  {:error, "Server error (#{status}): #{format_body(resp_body)}"}
+                  {:error, "Server error (#{status}): #{format_body(resp_body, secrets)}"}
 
                 _value ->
-                  {:error, "Unexpected status (#{status}): #{format_body(resp_body)}"}
+                  {:error, "Unexpected status (#{status}): #{format_body(resp_body, secrets)}"}
               end
 
             {outcome, status}
@@ -1054,7 +1076,7 @@ defmodule DpExchange.Core.HttpClient do
           # request that never got a status must not put a value into a numeric series that
           # means "not a status at all".
           {:error, reason} ->
-            {{:error, "Request failed: #{describe(reason)}"}, nil}
+            {{:error, "Request failed: #{describe(reason, secrets)}"}, nil}
         end
 
       Telemetry.request_stop(start_time, metadata, telemetry_outcome(result, status))
@@ -1073,13 +1095,13 @@ defmodule DpExchange.Core.HttpClient do
         # fired, and one grouping by `:status` saw the key absent rather than `nil`.
         Telemetry.request_exception(start_time, metadata,
           kind: :error,
-          reason: describe(error),
+          reason: describe(error, secrets),
           stacktrace: scrub_stacktrace(__STACKTRACE__),
           status: nil,
           result: :exception
         )
 
-        {:error, "Request exception: #{describe(error)}"}
+        {:error, "Request exception: #{describe(error, secrets)}"}
     catch
       # **An exit is not a raise, and `rescue` does not see it.** A pool checkout that times
       # out, a transport process that is not running, or a linked process dying all leave the
@@ -1093,13 +1115,13 @@ defmodule DpExchange.Core.HttpClient do
       kind, reason when kind in [:exit, :throw] ->
         Telemetry.request_exception(start_time, metadata,
           kind: kind,
-          reason: describe(reason),
+          reason: describe(reason, secrets),
           stacktrace: scrub_stacktrace(__STACKTRACE__),
           status: nil,
           result: :exception
         )
 
-        {:error, "Request exception: #{describe(reason)}"}
+        {:error, "Request exception: #{describe(reason, secrets)}"}
     end
   end
 
@@ -1122,8 +1144,102 @@ defmodule DpExchange.Core.HttpClient do
 
   # Bounded text for a reason that reaches an error message and telemetry. Byte-identical to
   # `inspect/1` for anything inside the limits, so a message a caller matches is unchanged.
-  defp describe(term),
-    do: term |> redact_reason() |> inspect(limit: 50, printable_limit: @body_excerpt_bytes)
+  defp describe(term, secrets) do
+    term
+    |> redact_reason()
+    |> inspect(limit: 50, printable_limit: @body_excerpt_bytes)
+    |> scrub(secrets)
+  end
+
+  # The shortest value worth hunting for in an error text. A shorter one is not a credential
+  # (a venue's key is dozens of characters) and would mangle ordinary words if replaced.
+  @scrub_min_bytes 6
+
+  # Query parameters whose name marks the value as a credential, by fragment.
+  @credential_query_fragments ~w(key sign token secret pass auth)
+
+  # **The credential values this request carries, so an error text can be scrubbed of them.**
+  # `redact_reason/1` removes the two places a transport is known to echo a header or a
+  # target, but a transport or a venue can quote a credential anywhere: an `ArgumentError`
+  # message built from a header value, and the commonest of all, a venue's own 4xx body
+  # ("invalid api key sk-live-...") that is pasted into the error tuple, the retry warning and
+  # the caller's log. The values are known here, so they are removed by value rather than by
+  # guessing where each library prints them. Header values of a credential-named header (and
+  # the token after a scheme: `Bearer abc` also yields `abc`), a URL's userinfo, and the
+  # value of a credential-named query parameter. Values under `@scrub_min_bytes` are skipped.
+  defp secrets_in(url, headers) do
+    found = header_secrets(headers) ++ url_secrets(url)
+
+    found
+    |> Enum.filter(&(byte_size(&1) >= @scrub_min_bytes))
+    |> Enum.flat_map(&spellings/1)
+    |> Enum.uniq()
+  end
+
+  defp header_secrets(headers) when is_list(headers) or is_map(headers) do
+    Enum.flat_map(headers, fn
+      {name, value} -> if credential_name?(name), do: header_values(value), else: []
+      _other -> []
+    end)
+  end
+
+  defp header_secrets(_headers), do: []
+
+  defp header_values(values) when is_list(values), do: Enum.flat_map(values, &header_values/1)
+
+  defp header_values(value) when is_binary(value) do
+    token = value |> String.split(" ", trim: true) |> Enum.take(-1)
+    [value | token]
+  end
+
+  defp header_values(_other), do: []
+
+  defp credential_name?(name) do
+    name = name |> to_string() |> String.downcase()
+    Enum.any?(@credential_header_fragments, &String.contains?(name, &1))
+  end
+
+  defp url_secrets(url) do
+    uri = URI.parse(url)
+    userinfo_secrets(uri.userinfo) ++ query_secrets(uri.query)
+  end
+
+  defp userinfo_secrets(userinfo) when is_binary(userinfo) do
+    password = userinfo |> String.split(":", parts: 2) |> Enum.take(-1)
+    [userinfo | password]
+  end
+
+  defp userinfo_secrets(_none), do: []
+
+  defp query_secrets(query) when is_binary(query) do
+    query
+    |> URI.query_decoder()
+    |> Enum.flat_map(&query_pair_secret/1)
+  rescue
+    # A query that is not valid percent-encoding has no decoded pairs to read; nothing is
+    # scrubbed from it, and it is never echoed by this module (`Telemetry.endpoint/1`).
+    ArgumentError -> []
+  end
+
+  defp query_secrets(_none), do: []
+
+  defp query_pair_secret({key, value}) do
+    key = String.downcase(key)
+
+    if Enum.any?(@credential_query_fragments, &String.contains?(key, &1)),
+      do: [value],
+      else: []
+  end
+
+  # A value as it is written and as `inspect/2` escapes it (quotes, newlines), since the text
+  # being scrubbed is usually an inspected struct.
+  defp spellings(value) do
+    escaped = value |> inspect() |> String.slice(1..-2//1)
+    Enum.uniq([value, escaped])
+  end
+
+  defp scrub(text, []), do: text
+  defp scrub(text, secrets), do: String.replace(text, secrets, "[redacted]")
 
   # **An exception struct can carry the request it failed on, and `describe/1` prints it.**
   # Mint refuses a header it cannot send with `{:invalid_header_value, name, VALUE}`: the
@@ -1689,6 +1805,18 @@ defmodule DpExchange.Core.HttpClient do
   # in the family reads the body back out of this message — venues match the status in its
   # prefix, and a venue that needs the body passes `raw_status: true` and gets it whole.
   # The cut is marked with the full size, so a truncated message never reads as complete.
+  #
+  # **And scrubbed of this request's own credential values** (`secrets_in/2`): a venue that
+  # answers 401 by quoting the key it was sent put that key into the error tuple and the retry
+  # warning.
+  #
+  # A text body is scrubbed BEFORE it is cut to the excerpt, so a value straddling the cut
+  # is not left half-printed.
+  defp format_body(body, secrets) when is_binary(body),
+    do: body |> scrub(secrets) |> format_body()
+
+  defp format_body(body, secrets), do: body |> format_body() |> scrub(secrets)
+
   defp format_body(body) when is_binary(body) and byte_size(body) > @body_excerpt_bytes,
     do: text_or_inspected(excerpt(body)) <> "… (#{byte_size(body)} bytes)"
 

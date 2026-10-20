@@ -120,7 +120,7 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
     else
       raise ArgumentError,
             "OrderBookDelta.new/1: field :levels must be a list of {side, price, quantity} " <>
-              "with side :bid or :ask, got #{inspect(built.levels, limit: 5)}"
+              "with side :bid or :ask, got #{Validate.show(built.levels)}"
     end
   end
 
@@ -136,7 +136,7 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
   defp check_values!({_side, price, quantity} = level) do
     if Decimal.compare(price, 0) != :gt or Decimal.compare(quantity, 0) == :lt do
       raise ArgumentError,
-            "OrderBookDelta.new/1: field :levels holds #{inspect(level)} — a price must be " <>
+            "OrderBookDelta.new/1: field :levels holds #{Validate.show(level)} — a price must be " <>
               "above zero and a quantity must not be negative (0 removes the level)"
     end
   end

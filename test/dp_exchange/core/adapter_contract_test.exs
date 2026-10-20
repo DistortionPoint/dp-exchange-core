@@ -24,6 +24,8 @@ defmodule DpExchange.Core.AdapterContractTest do
     # padded with whitespace.
     unlisted_symbol: "NOPE-USD",
     padded_credentials: %{api_key: " reference\n", api_secret: "reference"},
+    # Assertion 51's seam: a process holding the credential, started with no network.
+    process_probe: {DpExchange.Core.ReferenceVenue.ProcessProbe, :start_link},
     # Assertion 42's seam. The reference venue sends nothing, so the fault after the send is
     # stood in for here: a request that passes its own checks is answered as a timeout that
     # came after the send; one it refuses keeps its refusal.
