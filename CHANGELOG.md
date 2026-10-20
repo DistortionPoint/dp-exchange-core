@@ -21,6 +21,11 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- Design record for tick AO (hot paths, process identity, secret hygiene), implemented across
+  the family with its retrospective, in `docs/design/closed/`.
+
 ## [0.3.114] - 2026-10-20
 
 ### Fixed
