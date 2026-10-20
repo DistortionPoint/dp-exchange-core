@@ -386,8 +386,15 @@ guessing which symbol to blame. A `refusals` list with an element that is not
 a crash of the feed.
 
 `:interval_ms` and `:fetch_timeout_ms` must be positive integers and `:start_delay_ms` a
-non-negative one; anything else stops the feed at start with `{:invalid_option, key, value}`.
+non-negative one, none above 4_294_967_295 milliseconds (the longest a timer arms); anything
+else stops the feed at start with `{:invalid_option, key, value}`.
 An interval of `0` is refused because it would re-poll the venue as fast as the fetch returns.
+
+**One clock, and only its own tick counts.** Each symbol (or, with `:fetch_all`, the whole set)
+has at most one tick armed, and the tick carries a token the feed checks. A tick that is not
+the armed one (a duplicate, one left in the mailbox when its symbol left scope, one sent by
+hand) is ignored: it starts no fetch and no second clock, so the request rate stays the one
+configured however the feed was poked.
 
 ## Reconnection is the package's problem, and the notice is yours
 

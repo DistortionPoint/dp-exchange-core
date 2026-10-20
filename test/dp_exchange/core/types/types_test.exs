@@ -112,13 +112,16 @@ defmodule DpExchange.Core.TypesTest do
     test "a Quote keeps the venue's instant it was constructed with, however old" do
       ancient = ~U[2019-01-01 00:00:00Z]
 
-      quote_struct = %Quote{
-        symbol: "BTC-USD",
-        price: dec(42_000),
-        venue_time: ancient,
-        observed_at: ~U[2026-09-10 00:00:00Z],
-        provider: :test_venue
-      }
+      # Through `new/1`, which is what a venue calls: a constructor that refused or replaced an
+      # old venue time would fail here, where a struct literal could only hand its field back.
+      quote_struct =
+        Quote.new(
+          symbol: "BTC-USD",
+          price: dec(42_000),
+          venue_time: ancient,
+          observed_at: ~U[2026-09-10 00:00:00Z],
+          provider: :test_venue
+        )
 
       assert quote_struct.venue_time == ancient
     end

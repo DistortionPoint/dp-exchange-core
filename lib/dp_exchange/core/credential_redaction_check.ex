@@ -60,30 +60,30 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
 
   ## The secret-name list, and why each name is on it
 
-  Twenty-seven names, as atoms, matched against a struct field's own name exactly — never a
+  Thirty-seven names, as atoms, matched against a struct field's own name exactly — never a
   substring match, so a field called `token_type` or `tokenizer_state` is not caught by
   `token` and is not meant to be:
 
       api_key api_secret app_key app_secret secret password passphrase token
       access_token refresh_token client_secret private_key signature authorization bearer
       x_api_key signing_key cookie session_token id_token jwt secret_key api_passphrase
-      api_token auth_token bearer_token private_key_pem
+      api_token auth_token bearer_token private_key_pem access_key secret_access_key
+      api_secret_key x_signature x_auth_token proxy_authorization set_cookie cb_access_key
+      cb_access_sign cb_access_passphrase
 
   The first fifteen are what this moduledoc and `usage-rules/adapter.md` used to say were
-  all of them; the twelve after `bearer` were added later (`x_api_key` onward) and the
-  prose stayed behind, so a reader checking their own struct against "fifteen names"
-  concluded a `secret_key` field was unchecked when it has been checked since.
+  all of them; the rest were added later and the prose stayed behind, so a reader checking
+  their own struct against "fifteen names" concluded a `secret_key` field was unchecked when
+  it has been checked since.
 
-  Most of these are `DpExchange.Core.Notice`'s own `@credential_keys` (`api_key`,
-  `api_secret`, `secret`, `password`, `passphrase`, `token`, `access_token`,
-  `refresh_token`, `private_key`, `signature`, `authorization`, `bearer`, `client_secret`,
-  `x_api_key`, `app_secret`, `signing_key`, `cookie`) — already the family's answer to
-  "what does a secret-shaped key look like," shipped for a different purpose (rejecting a
-  credential-shaped key from a `Notice`'s `:details`) but the identical question: does
-  this name, on its own, mean "do not print this value." Reused rather than reinvented,
-  the same way `LinkSafetyCheck` reused `UnwiredCheck`'s `start_link/1,2`/`child_spec/1,2`
-  exclusion rather than re-deriving it. The two lists are kept alike by hand; this one is
-  the superset.
+  Every name of `DpExchange.Core.Notice`'s own `@credential_keys` is here, and `app_key` too
+  — already the family's answer to "what does a secret-shaped key look like," shipped for a
+  different purpose (rejecting a credential-shaped key from a `Notice`'s `:details`) but the
+  identical question: does this name, on its own, mean "do not print this value." Reused
+  rather than reinvented, the same way `LinkSafetyCheck` reused `UnwiredCheck`'s
+  `start_link/1,2`/`child_spec/1,2` exclusion rather than re-deriving it. The two lists are
+  kept alike by hand, and a test holds the claim: this one is the superset, and a `Notice`
+  key it lacks fails that test.
 
   Three names extend `Notice`'s original list, each because a real, shipped `Credentials`
   struct in this family has a field by that name and `Notice`'s list did not cover it:
@@ -181,15 +181,24 @@ defmodule DpExchange.Core.CredentialRedactionCheck do
   # secret under a name that is not here was never looked at: `defstruct [:secret_key]`
   # printed in cleartext and passed. `credentials` is deliberately absent: it usually holds
   # a struct that is itself redacted, and flagging it would fail correct code.
+  #
+  # **The last ten are the rest of `Core.Notice`'s `@credential_keys`.** This list said it was
+  # the superset of that one and was not: `access_key`, `secret_access_key`, `api_secret_key`,
+  # `x_signature`, `x_auth_token`, `proxy_authorization`, `set_cookie` and the three `cb_access_*`
+  # names were refused as a `Notice` detail key and unchecked here, so a struct holding an
+  # `:access_key` printed it in cleartext and passed group 19.
   @secret_field_names ~w(api_key api_secret app_key app_secret secret password passphrase
                          token access_token refresh_token client_secret private_key
                          signature authorization bearer x_api_key signing_key cookie
                          session_token id_token jwt secret_key api_passphrase api_token
-                         auth_token bearer_token private_key_pem)a
+                         auth_token bearer_token private_key_pem
+                         access_key secret_access_key api_secret_key x_signature
+                         x_auth_token proxy_authorization set_cookie cb_access_key
+                         cb_access_sign cb_access_passphrase)a
 
   # A plain list, not a `MapSet`: see `DpExchange.Core.Notice`'s own `@credential_keys` for
   # why — a `MapSet` literal built from a module attribute fails Dialyzer's PLT check with
-  # a `call_without_opaque` mismatch against `MapSet.member?/2`'s own opaque spec. Twenty-seven
+  # a `call_without_opaque` mismatch against `MapSet.member?/2`'s own opaque spec. Thirty-seven
   # entries make a linear scan irrelevant next to that, the same conclusion `Notice` and
   # `LinkSafetyCheck` each already reached independently.
 

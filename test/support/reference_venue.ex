@@ -42,10 +42,11 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   ## The two rules it follows, from thirteen real bug reports
 
-  Eleven of the thirteen bugs found in a comparable in-process fake were the fake
-  diverging from the real client. They split into six *loud* divergences — the fake
-  rejecting what the real thing accepts — and three *silent* ones, which are the dangerous
-  half. So:
+  Most of the bugs found in a comparable in-process fake were the fake diverging from the
+  real client. (An earlier version of this note gave counts, "eleven of thirteen, six loud
+  and three silent", that do not add up; the source is not recorded here, so only the shape
+  is kept.) Some were *loud* — the fake rejecting what the real thing accepts — and some
+  *silent*, which are the dangerous kind. So:
 
     1. **Less capable is allowed; differently capable is not.** Where this fake cannot
        answer, it returns an error. It never returns an empty success for something

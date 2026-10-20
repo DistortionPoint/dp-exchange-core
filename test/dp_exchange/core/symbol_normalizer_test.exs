@@ -15,13 +15,10 @@ defmodule DpExchange.Core.SymbolNormalizerTest do
     test "neither direction is optional" do
       # This is what makes the multi-venue promise safe: a package shipping only one
       # direction fails the compiler's missing-callback check rather than silently
-      # round-tripping wrong. `optional_callbacks` is absent, so the list is empty.
-      optional =
-        SymbolNormalizer.module_info(:attributes)
-        |> Keyword.get_values(:optional_callbacks)
-        |> List.flatten()
-
-      assert optional == []
+      # round-tripping wrong. Asked of `behaviour_info/1`, the function the compiler's own
+      # missing-callback check reads: a read of `module_info(:attributes)` for an
+      # `optional_callbacks` key answered `[]` whether or not any callback was optional.
+      assert SymbolNormalizer.behaviour_info(:optional_callbacks) == []
     end
   end
 end

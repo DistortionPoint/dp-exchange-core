@@ -48,6 +48,9 @@ defmodule DpExchange.Core.Types.StakingReward do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  `:period_start` and `:period_end` are each a `DateTime` or `nil`: the window travels with the
+  number (see above), and a window a consumer cannot compare is no window.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -55,6 +58,7 @@ defmodule DpExchange.Core.Types.StakingReward do
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.decimals!([:amount, :apy_pct])
     |> Validate.non_negative!([:amount, :apy_pct])
+    |> Validate.datetimes!([:period_start, :period_end])
     |> accrual_count!()
   end
 

@@ -382,7 +382,8 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     end
 
     test "a fake that delivers no notice is judged on nothing, and says so with a zero" do
-      assert AdapterContract.captured_notice_faults(ReferenceVenue, ["ETH-USD"], [], nil, 50) ==
+      # The quiet period is the only guard on "nothing was sent", so it is a real window.
+      assert AdapterContract.captured_notice_faults(ReferenceVenue, ["ETH-USD"], [], nil, 500) ==
                {0, []}
     end
 

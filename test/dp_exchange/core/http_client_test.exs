@@ -1107,6 +1107,32 @@ defmodule DpExchange.Core.HttpClientTest do
       assert :counters.get(counter, 1) == 0
     end
 
+    test ":max_retry_after_s past what a limiter can hold is refused, and the bound works" do
+      # A venue's wait goes to `penalize/3` in milliseconds and the limiter refuses a hold past
+      # 2^32 - 1 ms. A ceiling above that raised from inside the 429 handling, in the caller,
+      # on the first 429 that asked for that long.
+      use_stub()
+      counter = :counters.new(1, [])
+
+      plug = fn conn ->
+        :counters.add(counter, 1, 1)
+        Plug.Conn.send_resp(conn, 429, "")
+      end
+
+      assert_raise ArgumentError, ~r/:max_retry_after_s.*4294967/, fn ->
+        get(plug: plug, max_retry_after_s: 4_294_968)
+      end
+
+      assert :counters.get(counter, 1) == 0
+
+      # The bound itself is a ceiling like any other, and what reaches the limiter fits it.
+      plug = responding(429, %{}, [{"retry-after", "99999999999"}])
+      assert {:error, message} = get(plug: plug, max_retry_after_s: 4_294_967, provider: "v")
+      assert {:exchange_error, "v", text} = message
+      assert text =~ "retry after 4294967s"
+      assert_received {:penalized, "v", 4_294_967_000}
+    end
+
     test ":timeout, :weight and the boolean flags are refused before anything is sent" do
       counter = :counters.new(1, [])
 

@@ -202,8 +202,9 @@ defmodule DpExchange.Core.HttpClient do
     empty (default: `false`). The wait is bounded by `:timeout`.
   - `:weight` - Tokens this request costs (default: 1)
   - `:max_retry_after_s` - Ceiling, in seconds, on a venue's `Retry-After` that is
-    honoured (default: 600). A non-negative integer, or `ArgumentError` before anything is
-    sent.
+    honoured (default: 600). A non-negative integer of at most 4_294_967 (the seconds whose
+    milliseconds are the longest hold a limiter can serve), or `ArgumentError` before anything
+    is sent.
   - `:account_id`, `:user_id`, `:operation` - Forwarded to the limiter, which may use them
     (optional, no defaults). `DefaultRateLimiter` ignores all three: the ceiling is per
     venue, never per key.
@@ -395,12 +396,8 @@ defmodule DpExchange.Core.HttpClient do
   # through to the catch-all below and go out over plain http unrefused.
   defp credentials_in?(headers) when is_list(headers) or is_map(headers) do
     Enum.any?(headers, fn
-      {name, _value} ->
-        name = name |> to_string() |> String.downcase()
-        Enum.any?(@credential_header_fragments, &String.contains?(name, &1))
-
-      _other ->
-        false
+      {name, _value} -> credential_name?(name)
+      _other -> false
     end)
   end
 
@@ -977,11 +974,16 @@ defmodule DpExchange.Core.HttpClient do
       method: method
     }
 
-    start_time = Telemetry.request_start(metadata)
-
     # The credential values this request carries, so that no error text built from the
     # transport's or the venue's answer can echo one back. See `secrets_in/2`.
+    #
+    # Computed BEFORE `:start` is emitted. It reads the caller's header names and URL, and a
+    # header name that is not text raised from here: with `:start` already out and the `try`
+    # below not yet entered, the span was never closed, though the moduledoc of `Core.Telemetry`
+    # promises every `:start` exactly one `:stop` or `:exception`.
     secrets = secrets_in(url, headers)
+
+    start_time = Telemetry.request_start(metadata)
 
     request_opts =
       [
@@ -1194,10 +1196,15 @@ defmodule DpExchange.Core.HttpClient do
 
   defp header_values(_other), do: []
 
-  defp credential_name?(name) do
+  # Only an atom or a binary can name a header. Any other term raised from `to_string/1`
+  # (a tuple has no `String.Chars`), and this runs for every request before the transport is
+  # asked: that header is not a credential's name, and the transport decides what to do with it.
+  defp credential_name?(name) when is_atom(name) or is_binary(name) do
     name = name |> to_string() |> String.downcase()
     Enum.any?(@credential_header_fragments, &String.contains?(name, &1))
   end
+
+  defp credential_name?(_not_a_name), do: false
 
   defp url_secrets(url) do
     uri = URI.parse(url)
@@ -1363,19 +1370,29 @@ defmodule DpExchange.Core.HttpClient do
   # The longest venue `Retry-After` honoured, in seconds — see `parse_retry_after_header/2`.
   @max_retry_after_s 600
 
+  # The largest `:max_retry_after_s` accepted: the most seconds whose millisecond count a
+  # limiter's `penalize/3` can hold (`@max_sleep_ms`, 2^32 - 1 ms).
+  @max_retry_after_cap_s div(@max_sleep_ms, 1_000)
+
   # **Refused in the caller, before anything is sent.** It was read only on a 429 and fed to
   # `min/2`, so a mistyped ceiling was never refused: `"30"` and `:infinity` sort above every
   # integer and were silently ignored (the venue's wait honoured uncapped up to 600 s), and
   # `-5` became a negative wait handed to the limiter.
+  #
+  # **And no longer than the limiter can hold.** A venue's wait is handed to `penalize/3` in
+  # milliseconds, and `DefaultRateLimiter` refuses a hold past 2^32 - 1 ms (the longest a
+  # process can sleep, so a longer one could never be served). A ceiling of ten million seconds
+  # passed every check above and then raised `ArgumentError` from `hold_for_retry_after/2`, in
+  # the CALLING process, on the first 429 that asked for that long. Refused here instead.
   defp max_retry_after_s!(opts) do
     case Config.opt(opts, :max_retry_after_s, @max_retry_after_s) do
-      ceiling when is_integer(ceiling) and ceiling >= 0 ->
+      ceiling when is_integer(ceiling) and ceiling >= 0 and ceiling <= @max_retry_after_cap_s ->
         ceiling
 
       other ->
         raise ArgumentError,
-              ":max_retry_after_s must be a non-negative integer of seconds, got " <>
-                inspect(other)
+              ":max_retry_after_s must be a non-negative integer of seconds, no greater than " <>
+                "#{@max_retry_after_cap_s}, got " <> inspect(other)
     end
   end
 

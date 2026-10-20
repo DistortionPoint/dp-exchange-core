@@ -207,8 +207,11 @@ defmodule DpExchange.Core.Capabilities do
   queued"*. It is the first venue in the family to do so, and it found this gap.
 
   Optional, not required, because a venue that does not publish a burst depth must not be
-  made to invent one — and `nil` here means "not published", which a consumer can tell
-  apart from a declared burst of zero.
+  made to invent one — and an absent `:burst` means "not published", never a depth of zero.
+  A present `:burst` is a `pos_integer()`: `Capabilities.new/1` refuses `0`, which allows
+  nothing at once, so even an idle bucket's first request would wait a whole interval.
+  (`DefaultRateLimiter` accepts `burst: 0`, a test's way to build an exhausted bucket, but a
+  venue's declaration is a claim about the venue and no venue publishes that.)
 
   ## `max_leverage: :per_account`, for venues that margin without a single ceiling
 
@@ -869,8 +872,8 @@ defmodule DpExchange.Core.Capabilities do
     end
 
     # `:burst` is optional, but a present one must be a real depth. A burst of zero would
-    # be a limiter that never lets anything through, and a string here would reach the
-    # limiter's arithmetic before anyone noticed.
+    # make every request wait an emission interval even from an idle bucket, and a string
+    # here would reach the limiter's arithmetic before anyone noticed.
     case ceiling do
       %{burst: burst} when not (is_integer(burst) and burst > 0) ->
         raise ArgumentError,

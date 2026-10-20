@@ -264,15 +264,19 @@ defmodule DpExchange.Core.DefaultRateLimiter do
 
   Never shortens a hold already in place. Like `record/3` it does not fail because of the
   limiter: a limiter that is not running answers `:ok`. It does **raise `ArgumentError`**
-  for an `ms` that is not a non-negative integer, because that is a caller's mistake and
-  not something metering may swallow.
+  for an `ms` that is not a non-negative integer of at most 4_294_967_295, the longest
+  `Process.sleep/1` accepts, because that is a caller's mistake and not something metering may
+  swallow. A hold past that bound could never be served: `acquire/3` answers
+  `{:error, :rate_limit_timeout}` for any wait over it, even under `timeout: :infinity`, so the
+  bucket would stay closed to every caller for as long as the limiter ran.
   """
   @impl DpExchange.Core.RateLimitBehaviour
   @spec penalize(atom() | String.t(), non_neg_integer(), keyword()) :: :ok
   def penalize(provider, ms, opts \\ []) do
-    unless is_integer(ms) and ms >= 0 do
+    unless is_integer(ms) and ms >= 0 and ms <= @max_sleep_ms do
       raise ArgumentError,
-            "penalize/3 :ms must be a non-negative integer of milliseconds, got #{inspect(ms)}"
+            "penalize/3 :ms must be a non-negative integer of milliseconds no greater than " <>
+              "#{@max_sleep_ms}, got #{inspect(ms)}"
     end
 
     # No `catch`: `call/2` returns an `{:error, _}` for every exit, so this cannot exit.

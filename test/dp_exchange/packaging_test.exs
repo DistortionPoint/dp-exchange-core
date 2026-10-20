@@ -44,8 +44,13 @@ defmodule DpExchange.PackagingTest do
       assert "usage-rules.md" in files
       assert "usage-rules" in files
 
-      for guide <- ~w(adapter symbols feeds testing) do
+      # Every guide the README links, not a hand-picked four: a link to a file that is not in
+      # the tarball is a dead link in every consumer's copy.
+      guides = ~w(adapter auth environments feeds money-movement symbols testing)
+
+      for guide <- guides do
         assert File.exists?("usage-rules/#{guide}.md")
+        assert File.read!("README.md") =~ "usage-rules/#{guide}.md"
       end
     end
 

@@ -235,6 +235,12 @@ defmodule DpExchange.Core.VenueTest do
     end
   end
 
+  # What follows, to the end of the money-movement group, calls `ReferenceVenue` and asserts
+  # what IT answers. That pins the reference fixture's canned answers (the shape a venue author
+  # copies, and the shape `AdapterContract` is then run against), not any Core logic: it fails
+  # when the fixture is edited, never when a venue is wrong. The Core code under test is the
+  # `Types.*` functions (`Trade.notional/1`, `FxRate.convert/2`) and the `peripheral_endpoints/0`
+  # reasons. The rules these answers illustrate are enforced by the conformance groups.
   describe "the public tape" do
     test "get_trades/2 excludes broken trades by default" do
       # An exchange that busts an erroneous print has said it did not stand. Leaving it in

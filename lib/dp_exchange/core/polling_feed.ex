@@ -113,6 +113,20 @@ defmodule DpExchange.Core.PollingFeed do
   Without that the callback's failure restarted the feed, and the restart lost every scope
   set by `update_symbols/2`. A callback that fails on every event is therefore a log line per
   event, not a restart loop.
+
+  **What this does not bound is a callback that never returns.** The fetch runs in a task with
+  a timeout; the callbacks run in the feed's own process and have none, so one that blocks (a
+  `GenServer.call/3` to a stalled consumer, a lock never released) stops the feed: no tick is
+  handled, and `coverage/1` and `status/1` time out in their callers for as long as it lasts.
+  No callback is invoked from a `handle_call/3`: `coverage/1` and `status/1` answer from state
+  and run nothing of the consumer's, so the callbacks reach the call path only by occupying the
+  process (they are called from `handle_info/2`, after a fetch's result arrives or a timer
+  fires). They are not moved to a task because the feed's order guarantee depends on them
+  running inline: an event reaches the sink before `last_ok` is read by the next `status/1`, a
+  refusal is reported once before the next result is applied, and a notice precedes the state
+  change it announces. A task would reorder all three. A `:sink` should hand the event on
+  without waiting (`Core.Fanout.deliver/4` is a `send/2` and
+  a mailbox-length read, and never blocks), and an `:on_notice` or `:on_refusal` likewise.
   """
 
   use GenServer
@@ -440,10 +454,15 @@ defmodule DpExchange.Core.PollingFeed do
       # `update_symbols` comment says it exists to prevent, arriving through the one door the
       # guard did not cover.
       scheduled: MapSet.new(),
-      # Per-symbol mode: the pending `{:poll, symbol}` timer ref for each symbol that has one,
-      # kept so `update_symbols/2` can cancel it when the symbol leaves scope. A subset of
-      # `scheduled`: a symbol queued or in flight has no pending timer.
-      timers: %{}
+      # Per-symbol mode: the pending `{:poll, symbol, token}` timer for each symbol that has
+      # one, kept so `update_symbols/2` can cancel it when the symbol leaves scope. A subset
+      # of `scheduled`: a symbol queued or in flight has no pending timer.
+      timers: %{},
+      # Bulk mode: the token of the one `{:poll_all, token}` tick that is armed, or `nil`
+      # while a job is queued or in flight. Only the tick carrying it is acted on, exactly as
+      # the per-symbol `timers` hold their tokens: a bare or duplicate tick used to enqueue a
+      # job and re-arm the clock, which started a second tick chain that never ended.
+      poll_all: nil
     }
 
     case validate_options(state, symbols_opt) do
@@ -585,7 +604,9 @@ defmodule DpExchange.Core.PollingFeed do
   # idle after the last unsubscribe, escalated to "delivering nothing" and warned every
   # interval about symbols nobody had asked for. The clock keeps running, so the next tick
   # after `update_symbols/2` adds one fetches it, on the one timer chain there is.
-  def handle_info(:poll_all, state) do
+  def handle_info({:poll_all, token}, %{poll_all: token} = state) when is_reference(token) do
+    state = %{state | poll_all: nil}
+
     if MapSet.size(state.symbols) == 0,
       do: {:noreply, reschedule(state, :all)},
       else: {:noreply, enqueue(state, :all)}
@@ -796,10 +817,7 @@ defmodule DpExchange.Core.PollingFeed do
 
   defp fetch_fun(%{fetch: fetch}, {:one, symbol}), do: fn -> fetch.(symbol) end
 
-  defp reschedule(state, :all) do
-    Process.send_after(self(), :poll_all, state.interval_ms)
-    state
-  end
+  defp reschedule(state, :all), do: arm_poll_all(state, state.interval_ms)
 
   defp reschedule(state, {:one, symbol}) do
     # Only a symbol still in scope is re-armed. It used to re-arm unconditionally and let
@@ -1295,9 +1313,15 @@ defmodule DpExchange.Core.PollingFeed do
     }
   end
 
-  defp start_polling(state) do
-    Process.send_after(self(), :poll_all, state.start_delay_ms)
-    state
+  defp start_polling(state), do: arm_poll_all(state, state.start_delay_ms)
+
+  # The one bulk tick. Its token is kept in `state.poll_all` and is what `handle_info/2` checks,
+  # so a tick that is not the armed one (hand-sent, duplicated, left in the mailbox) is ignored
+  # instead of enqueueing a job and arming a second clock.
+  defp arm_poll_all(state, delay_ms) do
+    token = make_ref()
+    Process.send_after(self(), {:poll_all, token}, delay_ms)
+    %{state | poll_all: token}
   end
 
   # Start times spread across the interval, so the venue sees a flat request

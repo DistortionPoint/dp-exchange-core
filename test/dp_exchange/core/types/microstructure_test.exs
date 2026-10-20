@@ -55,15 +55,22 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
     end
 
     test "the three prices are three fields, and none of them is 'the price'" do
+      # Through `new/1`, so a constructor that collapsed them into one would fail here; a
+      # struct literal handed back its own fields could not.
       full =
-        imbalance(%{
+        AuctionImbalance.new(
+          symbol: "AAPL",
+          auction: :closing,
+          observed_at: ~U[2026-08-28 20:00:00Z],
+          provider: :reference,
           reference_price: Decimal.new("253.83"),
           near_price: Decimal.new("253.93"),
           far_price: Decimal.new("253.98")
-        })
+        )
 
-      refute Decimal.equal?(full.reference_price, full.near_price)
-      refute Decimal.equal?(full.near_price, full.far_price)
+      assert Decimal.equal?(full.reference_price, Decimal.new("253.83"))
+      assert Decimal.equal?(full.near_price, Decimal.new("253.93"))
+      assert Decimal.equal?(full.far_price, Decimal.new("253.98"))
       # A venue publishing only some of them leaves the rest nil.
       assert imbalance().near_price == nil
     end
@@ -230,12 +237,17 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
       # A venue that classifies some prints as neither aggressive buy nor sell reports
       # totals that do not reconcile, and that gap is information about its classifier
       # rather than a fault to paper over.
+      # Built by `new/1`: a constructor that reconciled the figures would change the delta.
       disagreeing =
-        profile(%{
+        VolumeProfile.new(
+          symbol: "AAPL",
+          timeframe: "5m",
+          opened_at: ~U[2026-08-28 12:00:00Z],
+          provider: :reference,
           delta: Decimal.new("50"),
           buy_volume: Decimal.new("600"),
           sell_volume: Decimal.new("400")
-        })
+        )
 
       assert Decimal.equal?(disagreeing.delta, Decimal.new("50"))
 
@@ -248,7 +260,16 @@ defmodule DpExchange.Core.Types.MicrostructureTest do
     test "the price maps stay keyed on the venue's own strings" do
       # Two strings that parse to equal decimals are the same level; re-keying would
       # silently merge two of the venue's rows into one.
-      assert Map.has_key?(profile().buy_at_price, "24.20")
+      built =
+        VolumeProfile.new(
+          symbol: "AAPL",
+          timeframe: "5m",
+          opened_at: ~U[2026-08-28 12:00:00Z],
+          provider: :reference,
+          buy_at_price: %{"24.20" => Decimal.new("1"), "24.2" => Decimal.new("2")}
+        )
+
+      assert Enum.sort(Map.keys(built.buy_at_price)) == ["24.2", "24.20"]
     end
   end
 end

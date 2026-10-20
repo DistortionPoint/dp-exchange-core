@@ -582,6 +582,40 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       refute Enum.any?(violations, &(&1.module == safe))
     end
+
+    test "every credential key Core.Notice refuses is a secret field name here too" do
+      # The moduledoc called this list the superset of `Notice`'s `@credential_keys` and it was
+      # not: `access_key`, `secret_access_key`, `x_signature` and seven more were refused as a
+      # notice detail key and unchecked here, so a struct holding an `:access_key` printed it in
+      # cleartext and passed group 19. Read from the source, because the attribute is private.
+      source = File.read!("lib/dp_exchange/core/notice.ex")
+      [_whole, listed] = Regex.run(~r/@credential_keys ~w\((.*?)\)a/s, source)
+      keys = String.split(listed)
+
+      assert length(keys) > 30
+      assert "access_key" in keys
+
+      u = uniq()
+      fields = Enum.map_join(keys, ", ", &":#{&1}")
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "notice_keys.ex",
+            code: """
+            defmodule NoticeKeys#{u} do
+              defstruct [#{fields}]
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      mod = Module.concat([:"Elixir", "NoticeKeys#{u}"])
+      found = for {^mod, field} <- violation_fields(violations), do: Atom.to_string(field)
+
+      assert Enum.sort(found) == Enum.sort(keys)
+    end
   end
 
   describe "format/1" do

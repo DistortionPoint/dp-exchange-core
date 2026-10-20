@@ -49,8 +49,9 @@ defmodule DpExchange.Core.Types.Validate do
 
   **Value rules a type's own doc states are held per type too**, by `positive!/2` (a traded
   price, a resting bid or ask, a position or withdrawal size, a strike), `non_negative!/2`,
-  `text!/2` (an address, network, asset or id is a non-blank string), `maps!/2`, `dates!/2` and
-  `symbol_lists!/2` (a container of the right shape or `nil`). Each names module, field and
+  `text!/2` (an address, network, asset or id is a non-blank string), `maps!/2`, `dates!/2`,
+  `datetimes!/2` (a time field `new!/3` cannot recognise by name) and `symbol_lists!/2` (a
+  container of the right shape or `nil`). Each names module, field and
   value, accepts `nil` (presence is `new!/3`'s job) and never repairs the input.
 
   ## Struct literals still work
@@ -206,6 +207,24 @@ defmodule DpExchange.Core.Types.Validate do
   def dates!(%module{} = built, fields) when is_list(fields) do
     each_present(built, fields, fn field, value ->
       unless is_struct(value, Date), do: raise_shape!(module, field, value, "a Date")
+    end)
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or a `DateTime`, and raises `ArgumentError`
+  naming module, field and value otherwise.
+
+  For a time whose field name `new!/3` cannot recognise as one. `new!/3` holds `:venue_time`,
+  `:timestamp`, `:as_of`, `:active_from` and every `*_at` to this rule by name; a field typed
+  `DateTime.t()` outside that vocabulary (`StakingReward`'s `:period_start` and `:period_end`,
+  which cannot join the global rule because a filing's same-named fields are `Date`s) is named
+  here by its type instead. A `Date`, a string or an epoch integer there built, and then
+  crashed `DateTime.compare/2` in the consumer. A `NaiveDateTime` is refused by `new!/3` first.
+  """
+  @spec datetimes!(struct(), [atom()]) :: struct()
+  def datetimes!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless is_struct(value, DateTime), do: raise_shape!(module, field, value, "a DateTime")
     end)
   end
 
@@ -438,7 +457,8 @@ defmodule DpExchange.Core.Types.Validate do
   # `venue_time: 1_760_000_000` built, and a consumer that compared them with
   # `DateTime.compare/2` or `DateTime.diff/3` crashed in its own process. `nil` passes because
   # presence is `new!/3`'s job. `period_start` and `period_end` are not in this rule: a
-  # filing's are `Date`s.
+  # filing's are `Date`s. `StakingReward`'s are `DateTime`s and hold themselves to it with
+  # `datetimes!/2`; they built from a `Date`, a string or an epoch integer before that.
   @time_fields [:venue_time, :timestamp, :as_of, :active_from]
 
   # A `NaiveDateTime` is left to `refuse_value!/4`, which names it.

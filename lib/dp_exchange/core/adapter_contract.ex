@@ -188,15 +188,16 @@ defmodule DpExchange.Core.AdapterContract do
        "include_partial must be a boolean — a non-boolean on get_historical_prices/4 is " <>
          "{:invalid_option, :include_partial, v}"},
       {37,
-       "candles are oldest first, aligned to their width (30-minute grid for a wider " <>
-         "intraday width on a session-traded venue), and a range is :start inclusive, " <>
-         ":end exclusive"},
+       "candles are labelled with the width asked for, oldest first, aligned to their width " <>
+         "(30-minute grid for a wider intraday width on a session-traded venue), and a " <>
+         "range is :start inclusive, :end exclusive"},
       {38,
        "order book options — :depth caps the levels per side; :limit is refused " <>
          "{:unsupported_option, :limit}, honoured natively or tolerated, never a stray error"},
       {39,
        "prices and sizes are positive — every Quote, Trade and Candle price, every book " <>
-         "level's price and size, with books best first"},
+         "level's price and size, with books best first; a group that inspected no value " <>
+         "(every answer refused, empty or without a level) fails rather than passes"},
       {40,
        "wanted/1 — optional; when the fake exports it, it holds every symbol subscribed and " <>
          "every symbol coverage/1 reports, as a list or a MapSet"},
@@ -926,6 +927,11 @@ defmodule DpExchange.Core.AdapterContract do
   @doc """
   What is wrong with the candles a fake returned for `timeframe`, or `nil`. Assertion 37.
 
+    * `{:wrong_timeframe, label}` — a bar labelled with a width other than the one asked for.
+      A bar stamped `"1d"` that was asked for as `"1h"` is a missing granularity becoming
+      the closest one in the label, which is how every bar then gets joined to the wrong
+      series; group 21 holds the refusal of an unserved width, and this holds the label of a
+      served one. Judged first.
     * `{:unordered, opened_at}` — a bar that is not later than the one before it. Oldest
       first, strictly.
     * `{:unaligned, opened_at}` — a bar not on its width's grid. The grid is
@@ -936,13 +942,23 @@ defmodule DpExchange.Core.AdapterContract do
       strict. Widths the vocabulary does not model are not judged.
   """
   @spec candle_series_fault([struct()], String.t(), [atom()]) ::
-          nil | {:unordered | :unaligned, term()}
+          nil | {:wrong_timeframe | :unordered | :unaligned, term()}
   def candle_series_fault(candles, timeframe, asset_classes) do
+    label_fault(candles, timeframe) || grid_fault(candles, timeframe, asset_classes)
+  end
+
+  defp grid_fault(candles, timeframe, asset_classes) do
     times = Enum.map(candles, & &1.opened_at)
 
     Enum.find_value(times, fn at ->
       if not on_grid?(at, timeframe, asset_classes), do: {:unaligned, at}
     end) || ascending_fault(times)
+  end
+
+  defp label_fault(candles, timeframe) do
+    Enum.find_value(candles, fn candle ->
+      if candle.timeframe != timeframe, do: {:wrong_timeframe, candle.timeframe}
+    end)
   end
 
   defp on_grid?(at, timeframe, asset_classes) do
@@ -1036,6 +1052,24 @@ defmodule DpExchange.Core.AdapterContract do
   @spec nothing_examined?([term()], [boolean()]) :: boolean()
   def nothing_examined?([], _examined), do: false
   def nothing_examined?(_endpoints, examined), do: true not in examined
+
+  @doc """
+  Whether `value`, the success of a price endpoint, gave assertion 39 anything to inspect.
+
+  A struct does, except an `OrderBook` with no level on either side and a `TopOfBook` with
+  neither a bid nor an ask (nothing there for `market_value_fault/1` to hold). A list does when
+  one of its elements does, so `{:ok, []}` from `get_trades/2` or an empty candle list does
+  not. Anything else, a bare map or a scalar, is not something `market_value_fault/1` judges.
+
+  `{:ok, _}` of any shape used to count as examined, so a fake answering `{:ok, []}` for every
+  price endpoint passed the group having looked at no price, size or level at all.
+  """
+  @spec value_examined?(term()) :: boolean()
+  def value_examined?(%DpExchange.Core.Types.OrderBook{bids: [], asks: []}), do: false
+  def value_examined?(%DpExchange.Core.Types.TopOfBook{bid: nil, ask: nil}), do: false
+  def value_examined?(%_struct{}), do: true
+  def value_examined?(values) when is_list(values), do: Enum.any?(values, &value_examined?/1)
+  def value_examined?(_other), do: false
 
   @doc "The `:depth` assertion 38 asks for: one level per side."
   @spec book_probe_depth() :: pos_integer()
@@ -1612,8 +1646,9 @@ defmodule DpExchange.Core.AdapterContract do
   request was sent (a timeout, a dropped connection, a 503 on every attempt). It must be
   `{:error, {:order_unconfirmed, id, reason}}`: the order may have been placed, so a plain
   `{:error, _}` invites the caller to retry into a duplicate, and `{:refused, _}` claims
-  permanence the venue never gave. `id` is `nil`, a client order id, or a list of them, and
-  when the request carried a binary `client_order_id` (`sent_id`) it is that id.
+  permanence the venue never gave. `id` is a client order id, a list of them, or `nil` when
+  the venue has none and none was generated. When the request carried a binary
+  `client_order_id` (`sent_id`) it is that id: `nil` there is `{:unconfirmed_id, nil}`.
 
   `presend` is what the same path answered for a request refused **before** anything was
   sent. It must be an `{:error, _}` or `{:refused, _}` that is not `:order_unconfirmed`:
@@ -1634,6 +1669,10 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # A request that carried its own `client_order_id` is one the caller can look up by it, and
+  # only if the venue hands it back: `nil` there throws away the one key reconciliation needs.
+  # It was accepted, so the documented "it is that id" held only for a non-nil answer.
+  defp unconfirmed_id_fault(nil, sent_id) when is_binary(sent_id), do: {:unconfirmed_id, nil}
   defp unconfirmed_id_fault(nil, _sent_id), do: nil
   defp unconfirmed_id_fault(id, nil) when is_binary(id), do: nil
   defp unconfirmed_id_fault(id, sent_id) when is_binary(id) and id == sent_id, do: nil
@@ -1650,6 +1689,42 @@ defmodule DpExchange.Core.AdapterContract do
   defp presend_fault({:error, _reason}), do: nil
   defp presend_fault({:refused, _reason}), do: nil
   defp presend_fault(other), do: {:presend_not_refused, other}
+
+  @doc """
+  What is wrong with a venue's `coverage_by_kind/1` answer, given the `coverage/1` map of the
+  same moment and the declared `streamable` kinds, or `nil`. Assertion 15.
+
+  `{:union_mismatch, kind_symbols, coverage_symbols}` (both sorted) when the symbols across
+  every kind are not exactly the symbols `coverage/1` reports, the two being meant as one
+  fact; `{:undeclared_kinds, kinds}` when it reports a kind `streamable` does not declare. The
+  union is judged first.
+  """
+  @spec coverage_by_kind_fault(%{atom() => map()}, map(), [atom()]) ::
+          nil | {:union_mismatch, [String.t()], [String.t()]} | {:undeclared_kinds, [atom()]}
+  def coverage_by_kind_fault(by_kind, coverage, streamable) do
+    union = by_kind |> Map.values() |> Enum.flat_map(&Map.keys/1) |> Enum.uniq() |> Enum.sort()
+    covered = coverage |> Map.keys() |> Enum.sort()
+    undeclared = by_kind |> Map.keys() |> Enum.reject(&(&1 in streamable))
+
+    cond do
+      union != covered -> {:union_mismatch, union, covered}
+      undeclared != [] -> {:undeclared_kinds, undeclared}
+      true -> nil
+    end
+  end
+
+  @doc """
+  The callbacks `Core.Venue` requires that `module` does not export, as `{name, arity}`.
+  Assertion 1.
+  """
+  @spec missing_required_callbacks(module()) :: [{atom(), arity()}]
+  def missing_required_callbacks(module) do
+    Code.ensure_loaded!(module)
+
+    Enum.reject(DpExchange.Core.Venue.required_callbacks(), fn {name, arity} ->
+      function_exported?(module, name, arity)
+    end)
+  end
 
   @doc """
   What is wrong with a fake's `subscribe/2` given `to: nil`, or `nil`. Assertion 27.
@@ -2405,12 +2480,9 @@ defmodule DpExchange.Core.AdapterContract do
 
       describe "1. behaviour completeness" do
         test "implements every required facade callback" do
-          Code.ensure_loaded!(@venue)
-
-          missing =
-            Enum.reject(Venue.required_callbacks(), fn {name, arity} ->
-              function_exported?(@venue, name, arity)
-            end)
+          # The decision is `AdapterContract.missing_required_callbacks/1`, public so a teeth
+          # test can hand it a module that implements almost nothing.
+          missing = DpExchange.Core.AdapterContract.missing_required_callbacks(@venue)
 
           assert missing == [],
                  "#{inspect(@venue)} is missing required facade callbacks: #{inspect(missing)}"
@@ -3067,26 +3139,21 @@ defmodule DpExchange.Core.AdapterContract do
                      "so the union equality below compares two empty sets and cannot fail. " <>
                      "See assertion 14's own message for the two things that cause this."
 
-            union =
-              by_kind
-              |> Map.values()
-              |> Enum.flat_map(&Map.keys/1)
-              |> MapSet.new()
+            # The decision is `AdapterContract.coverage_by_kind_fault/3`, public so a teeth test
+            # can hand it a fake whose union drops a symbol or names an undeclared kind.
+            fault =
+              DpExchange.Core.AdapterContract.coverage_by_kind_fault(
+                by_kind,
+                fake.coverage(opts),
+                @venue.capabilities().streamable
+              )
 
-            assert union == coverage_symbols,
-                   "coverage_by_kind/1's symbols #{inspect(MapSet.to_list(union))} are not " <>
-                     "the union coverage/1 reports (#{inspect(MapSet.to_list(coverage_symbols))}) " <>
-                     "— the two are meant to be definitionally the same fact, and letting them " <>
-                     "drift is what this assertion exists to stop"
-
-            declared = MapSet.new(@venue.capabilities().streamable)
-            reported = by_kind |> Map.keys() |> MapSet.new()
-            undeclared = MapSet.difference(reported, declared)
-
-            assert MapSet.size(undeclared) == 0,
-                   "coverage_by_kind/1 reports #{inspect(MapSet.to_list(undeclared))}, which " <>
-                     "capabilities().streamable does not declare — a venue reporting coverage " <>
-                     "for a kind it does not claim to stream contradicts its own declaration"
+            assert fault == nil,
+                   "coverage_by_kind/1 disagrees with coverage/1 or with " <>
+                     "capabilities().streamable: #{inspect(fault, limit: 12)}. Its symbols are " <>
+                     "meant to be definitionally the union coverage/1 reports, and letting them " <>
+                     "drift is what this assertion exists to stop; a kind it reports must be " <>
+                     "one the venue declares it streams"
           end
         end
       end
@@ -5109,10 +5176,12 @@ defmodule DpExchange.Core.AdapterContract do
             # skipped above (a refused item is not evidence), so a fake missing an
             # `endpoint_opts:` entry passed the group having looked at no value at all.
             refute DpExchange.Core.AdapterContract.nothing_examined?(endpoints, examined),
-                   "every active price endpoint (#{inspect(endpoints)}) was refused or " <>
-                     "failed, so no price, size or level was checked and this group passes " <>
-                     "for having looked at nothing. Declare what the fake needs in " <>
-                     "`endpoint_opts:`, or declare the endpoints `:unsupported`."
+                   "every active price endpoint (#{inspect(endpoints)}) was refused, " <>
+                     "failed or answered with nothing to inspect (an empty list, a book " <>
+                     "with no level), so no price, size or level was checked and this " <>
+                     "group passes for having looked at nothing. Declare what the fake " <>
+                     "needs in `endpoint_opts:`, give its fixture a row, or declare the " <>
+                     "endpoints `:unsupported`."
           end
         end
       end
@@ -5145,7 +5214,9 @@ defmodule DpExchange.Core.AdapterContract do
             assert fault == nil,
                    "#{name} returned a value that breaks the price conventions: #{inspect(fault)}"
 
-            true
+            # Examined only if there was something in it to inspect: `{:ok, []}` is a success
+            # that gave this group no price, size or level to hold.
+            DpExchange.Core.AdapterContract.value_examined?(value)
 
           _not_a_success ->
             false

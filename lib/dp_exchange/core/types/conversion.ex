@@ -82,7 +82,13 @@ defmodule DpExchange.Core.Types.Conversion do
   end
 
   @doc """
-  Whether a quote has passed its stated expiry, as at `now`.
+  Whether a quote has reached its stated expiry, as at `now`.
+
+  **The instant of `:expires_at` itself is expired.** A rate held "until 12:00:00" is not one
+  to commit at 12:00:00: the venue's clock is not this caller's, and a commit that lands on the
+  boundary is the one that is refused or filled at the current rate. So `now == expires_at` is
+  `true`, and a quote is open only strictly before it. The caller's clock skew is the caller's
+  to allow for: pass a `now` ahead of its own clock by that margin.
 
   Returns `nil` when the venue stated no expiry — **unknown, not "still valid"**. A caller
   that cannot establish the window should re-quote rather than assume it has one.
@@ -95,6 +101,6 @@ defmodule DpExchange.Core.Types.Conversion do
   def expired?(%__MODULE__{expires_at: nil}, _now), do: nil
 
   def expired?(%__MODULE__{expires_at: expires_at}, now) do
-    DateTime.compare(now, expires_at) == :gt
+    DateTime.compare(now, expires_at) != :lt
   end
 end

@@ -49,8 +49,9 @@ runs your **real** `place_order/3` path with a transport fault after the send, f
 
     ambiguous_place_order: fn request -> MyVenue.place_order(creds, request, plug: down_plug) end
 
-Group 42 asserts that answer is `{:error, {:order_unconfirmed, id, reason}}` (`id` is `nil`,
-the request's `client_order_id`, or a list of ids), and that the same function given a request
+Group 42 asserts that answer is `{:error, {:order_unconfirmed, id, reason}}` (`id` is the
+request's `client_order_id` when the request carried one, else `nil`, and a list of ids for a
+batch), and that the same function given a request
 refused before sending (no `:order_type`) is a plain or refused error, never `:order_unconfirmed`.
 
 **Group 43 needs nothing from you: it holds your fake to refusing an option nothing reads, on

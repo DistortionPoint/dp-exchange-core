@@ -172,8 +172,9 @@ Every `Core.Types.*` module exposes a validating `new/1`, built on
 `@enforce_keys` names is present **and non-`nil`**, raising `ArgumentError` naming the
 offending field when it is not. It also refuses, in any field and however deeply nested, a
 `Decimal` that is `NaN` or infinite and a `NaiveDateTime`. A time field (`observed_at`,
-`venue_time`, `timestamp`, `as_of`, `active_from` and every `*_at`) must be a `DateTime` or
-`nil`: a string, an epoch integer or a `Date` is refused. A non-`nil` `:symbol` must be a
+`venue_time`, `timestamp`, `as_of`, `active_from` and every `*_at`, plus `StakingReward`'s
+`period_start` and `period_end`) must be a `DateTime` or `nil`: a string, an epoch integer or
+a `Date` is refused. A non-`nil` `:symbol` must be a
 non-blank string and a non-`nil` `:provider` an atom or a string; `Position`'s
 `:instrument_type` must be an atom or `nil`.
 
@@ -342,8 +343,9 @@ options, then the credentials. An option error is decided before anything is sen
 plain `{:error, _}`, never `:order_unconfirmed`. A function that answers
 `Venue.not_supported()` keeps answering it whatever the options.
 
-Conformance group 43 holds the Fake to this on the five market-data reads; see
-`usage-rules/testing.md`.
+Conformance group 43 holds the Fake to this on every endpoint it serves, reads, writes and
+feed calls alike (the few callbacks that cannot take the probe are listed with a reason in
+`AdapterContract.unknown_option_exclusions/0`); see `usage-rules/testing.md`.
 
 **Transport keys only where read (0.3.104).** `transport_options/0` names the shared keys; it
 is not a list every call accepts. A call that sends an HTTP request allows
@@ -697,12 +699,14 @@ Four venues shipped exactly this fix independently: `dp_exchange_coinbase` `4d00
 pipelines and never holds a credential in process state.
 
 Assertion 19 checks this **behaviourally**, not by looking for `@derive` in your source.
-For every struct your `lib/` defines, if any field is named one of twenty-seven known secret
+For every struct your `lib/` defines, if any field is named one of thirty-seven known secret
 names (`api_key`, `api_secret`, `app_key`, `app_secret`, `secret`, `password`,
 `passphrase`, `token`, `access_token`, `refresh_token`, `client_secret`, `private_key`,
 `signature`, `authorization`, `bearer`, `x_api_key`, `signing_key`, `cookie`,
 `session_token`, `id_token`, `jwt`, `secret_key`, `api_passphrase`, `api_token`,
-`auth_token`, `bearer_token`, `private_key_pem` — see
+`auth_token`, `bearer_token`, `private_key_pem`, `access_key`, `secret_access_key`,
+`api_secret_key`, `x_signature`, `x_auth_token`, `proxy_authorization`, `set_cookie`,
+`cb_access_key`, `cb_access_sign`, `cb_access_passphrase` — see
 `DpExchange.Core.CredentialRedactionCheck`'s moduledoc for why each name is on the list,
 and why `client_id` deliberately is not), it builds a real instance of your struct with a
 distinctive value in that field and searches the actual `inspect/1` output for it. A
@@ -872,7 +876,9 @@ Candles are asked for at `"1h"` if you declare it, else your first fixed-width t
 - **36.** `get_historical_prices/4` with `include_partial:` set to `"true"`, `"false"`, `0`,
   `1` or `:yes` answers `{:error, {:invalid_option, :include_partial, value}}`. (`nil` is not
   tried: it is an absent option on several venues.) Check it before credentials.
-- **37.** The candles the fake returns are strictly oldest first and aligned: crypto-only
+- **37.** The candles the fake returns each carry the `timeframe` that was asked for (a bar
+  labelled with another width is `{:wrong_timeframe, label}`), are strictly oldest first and
+  aligned: crypto-only
   venues on the strict UTC grid (`Timeframe.aligned?/2`); other venues strict for widths of
   30 minutes and under and for daily and longer, and on a 30-minute grid for the widths in
   between (US equity sessions open at 09:30 ET). Then the suite re-asks from the fake's own
@@ -891,7 +897,8 @@ Candles are asked for at `"1h"` if you declare it, else your first fixed-width t
   should still refuse it, as the family-option rule above says.
 - **39.** Every `Quote`, `Trade` and `Candle` price the fake returns is above zero; a
   `TopOfBook` bid or ask is `nil` or above zero; every `OrderBook` level has a price and a
-  size above zero and each side is best first.
+  size above zero and each side is best first. The group fails if it inspected no value at all:
+  every answer refused, an empty list, a book with no level, or a `TopOfBook` with neither side.
 - **A write that may have reached the venue is not an ordinary error.** `place_order/3` and
   `replace_order/4` answer `{:error, {:order_unconfirmed, client_order_id_or_nil, reason}}`
   (the id is a **list of ids** for a batch placement, Webull's);

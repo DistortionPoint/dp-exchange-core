@@ -13,7 +13,8 @@ call these endpoints.
 ## The decision is the host's
 
 The package will place a withdrawal you ask for. It will not decide that one should happen,
-will not retry one, and will not pick a default for anything that determines where funds go.
+will not retry one except under an idempotency key (see "What this package never does"), and
+will not pick a default for anything that determines where funds go.
 
 **Every parameter that decides a destination is required and never defaulted.** Not the
 network, not the address, not the memo. A package choosing a default network is a package
@@ -126,7 +127,10 @@ asking it is cheaper than discovering a missing role from a refused withdrawal.
 
 ## What this package never does
 
-- never retries a money-moving call on your behalf
+- never retries a money-moving call on your behalf, except under an idempotency key the venue
+  honours (`Core.Venue` rule W2): without one it is sent once, and an outcome that may have
+  reached the venue is `{:error, {:write_unconfirmed, key_or_nil, reason}}`, which you
+  reconcile and do not simply call again
 - never defaults a network, an address, or a memo
 - never treats a success without the field it needed as a success
 - never turns a `nil` the venue sent into a `false` you can act on

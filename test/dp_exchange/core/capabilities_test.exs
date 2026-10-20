@@ -171,16 +171,16 @@ defmodule DpExchange.Core.CapabilitiesTest do
     end
 
     test "a ceiling without a burst is still valid — most venues publish none" do
-      # `nil` here means "not published", which a consumer can tell apart from a declared
-      # burst. A venue that does not state one must not be made to invent it.
+      # An absent `:burst` means "not published", never a depth of zero (which is refused
+      # below). A venue that does not state one must not be made to invent it.
       declaration = caps(public_ceiling: %{limit: 10, per_ms: 1_000})
 
       refute Map.has_key?(declaration.public_ceiling, :burst)
     end
 
     test "a burst that is not a positive integer is refused" do
-      # A burst of zero is a limiter that never lets anything through, and a string
-      # reaches the limiter's arithmetic before anyone notices.
+      # A burst of zero makes even an idle bucket's first request wait a whole interval, and
+      # a string reaches the limiter's arithmetic before anyone notices.
       for bad <- [0, -1, "5", 5.0] do
         assert_raise ArgumentError, ~r/:burst must be a pos_integer/, fn ->
           caps(public_ceiling: %{limit: 10, per_ms: 1_000, burst: bad})

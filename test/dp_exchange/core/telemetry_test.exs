@@ -237,6 +237,41 @@ defmodule DpExchange.Core.TelemetryTest do
       assert metadata.status == 503
     end
 
+    test "a header whose name is not text cannot leave a :start with no :stop or :exception" do
+      # The credential values a request carries are collected from its header names so that no
+      # error text can echo one. That ran after `:start` was emitted and outside the `try`, and a
+      # name with no `String.Chars` (a tuple) raised from it: the span opened and never closed,
+      # against the documented "every :start is followed by exactly one :stop or :exception".
+      provider = unique_provider()
+
+      events = [
+        [:dp_exchange, :request, :start],
+        [:dp_exchange, :request, :stop],
+        [:dp_exchange, :request, :exception]
+      ]
+
+      :ok = attach(events, provider)
+
+      limiter = start_limiter(%{default: %{limit: 1_000, per_ms: 1_000, burst: 1_000}})
+      opts = [provider: provider, plug: responding(200, %{ok: true}), retry_attempts: 0]
+      headers = [{{:not, :text}, "value"}]
+
+      # The call must answer, not raise out of the span: what it answers is not the point.
+      _answer =
+        HttpClient.request(:get, "https://api.test/v1/ping", headers, nil, opts ++ limiter)
+
+      assert_receive {:telemetry, [:dp_exchange, :request, :start], _m, _md}, 5_000
+
+      # The receive pattern IS the assertion: only a :stop or :exception closes the span.
+      receive do
+        {:telemetry, [:dp_exchange, :request, kind], _m, _md}
+        when kind in [:stop, :exception] ->
+          :closed
+      after
+        5_000 -> flunk("the span was opened and never closed")
+      end
+    end
+
     test "a venue 429 emits a rate_limit hit in milliseconds, whatever unit the venue used" do
       provider = unique_provider()
       :ok = attach([[:dp_exchange, :rate_limit, :hit]], provider)

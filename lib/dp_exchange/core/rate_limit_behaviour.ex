@@ -97,7 +97,9 @@ defmodule DpExchange.Core.RateLimitBehaviour do
   Optional. `HttpClient` calls it only when the limiter exports it, so a limiter written
   before it existed keeps working. The limiter being unreachable must not fail it, for the
   reason `c:record/3` cannot; an `ms` that is not a non-negative integer is a caller's
-  mistake, and `Core.DefaultRateLimiter` raises `ArgumentError` for it.
+  mistake, and `Core.DefaultRateLimiter` raises `ArgumentError` for it. So does it for an `ms`
+  above 4_294_967_295, the longest wait a process can sleep: a hold it could never serve. The
+  `:max_retry_after_s` option of `Core.HttpClient` is bounded to keep its own calls under that.
   """
   @callback penalize(provider(), non_neg_integer(), opts()) :: :ok
 

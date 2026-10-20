@@ -557,6 +557,25 @@ defmodule DpExchange.Core.DefaultRateLimiterTest do
       end
     end
 
+    test "a hold longer than a process can sleep is refused, and holds nothing" do
+      # `acquire/3` answers `:rate_limit_timeout` for any wait past 2^32 - 1 ms even under
+      # `timeout: :infinity`, so such a hold could never be served: it closed the bucket for
+      # as long as the limiter ran.
+      opts = start_limiter(fast())
+      longest = 4_294_967_295
+
+      assert_raise ArgumentError, ~r/4294967296/, fn ->
+        Limiter.penalize("v", longest + 1, opts)
+      end
+
+      assert :ok = Limiter.check("v", 1, opts)
+
+      # The bound itself is a hold like any other.
+      assert :ok = Limiter.penalize("v", longest, opts)
+      assert {:rate_limited, wait_ms} = Limiter.check("v", 1, opts)
+      assert wait_ms > longest - 60_000 and wait_ms <= longest
+    end
+
     test "holds a bucket with room closed for the stated time" do
       opts = start_limiter(fast())
 

@@ -41,7 +41,15 @@ defmodule DpExchange.Core.Types.PositionTest do
     end
 
     test "realised and unrealised pnl are separate fields" do
-      p = position(realised_pnl: Decimal.new("1234.5"), unrealised_pnl: Decimal.new("999.9"))
+      p =
+        Position.new(
+          symbol: "BTC-GUSD-PERP",
+          side: :short,
+          quantity: Decimal.new("0.2"),
+          provider: :reference,
+          realised_pnl: Decimal.new("1234.5"),
+          unrealised_pnl: Decimal.new("999.9")
+        )
 
       # Never summed by this layer: one has happened, the other is an opinion that changes
       # with the next tick and may never be realised.

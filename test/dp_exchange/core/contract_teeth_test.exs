@@ -575,23 +575,17 @@ defmodule DpExchange.Core.ContractTeethTest do
 
   describe "assertion 1 catches an incomplete facade" do
     test "a module missing a required callback is detectable" do
-      missing =
-        Enum.reject(Venue.required_callbacks(), fn {name, arity} ->
-          function_exported?(Broken.OverDeclares, name, arity)
-        end)
+      missing = AdapterContract.missing_required_callbacks(Broken.OverDeclares)
 
       assert length(missing) > 20, "an almost-empty module must fail behaviour completeness"
+      assert {:get_price, 2} in missing
+      refute {:get_transfers, 2} in missing
+      # It exports `capabilities/0` and `get_transfers/2`, and nothing else that is required.
+      assert length(missing) == length(Venue.required_callbacks()) - 2
     end
 
     test "the reference venue is complete" do
-      Code.ensure_loaded!(ReferenceVenue)
-
-      missing =
-        Enum.reject(Venue.required_callbacks(), fn {name, arity} ->
-          function_exported?(ReferenceVenue, name, arity)
-        end)
-
-      assert missing == []
+      assert AdapterContract.missing_required_callbacks(ReferenceVenue) == []
     end
   end
 
@@ -638,38 +632,41 @@ defmodule DpExchange.Core.ContractTeethTest do
     # by kind" group runs, against the same fixtures — proving the computation itself is
     # right, the same pattern assertions 1, 4 and 12 above use in this file.
 
+    # Each test runs `AdapterContract.coverage_by_kind_fault/3`, the decision the group makes.
+    defp by_kind_fault(fixture) do
+      AdapterContract.coverage_by_kind_fault(
+        fixture.coverage_by_kind([]),
+        fixture.coverage([]),
+        fixture.capabilities().streamable
+      )
+    end
+
     test "a conforming fake satisfies both checks" do
-      fixture = Broken.CoverageByKind.Conforming
-      by_kind = fixture.coverage_by_kind([])
-      coverage_symbols = fixture.coverage([]) |> Map.keys() |> MapSet.new()
-      union = by_kind |> Map.values() |> Enum.flat_map(&Map.keys/1) |> MapSet.new()
-
-      assert union == coverage_symbols
-
-      declared = MapSet.new(fixture.capabilities().streamable)
-      reported = by_kind |> Map.keys() |> MapSet.new()
-      assert MapSet.subset?(reported, declared)
+      assert by_kind_fault(Broken.CoverageByKind.Conforming) == nil
     end
 
     test "a fake whose union drops a symbol coverage/1 reports is caught" do
-      fixture = Broken.CoverageByKind.UnionViolation
-      by_kind = fixture.coverage_by_kind([])
-      coverage_symbols = fixture.coverage([]) |> Map.keys() |> MapSet.new()
-      union = by_kind |> Map.values() |> Enum.flat_map(&Map.keys/1) |> MapSet.new()
-
-      refute union == coverage_symbols,
-             "this fixture drops ETH-USD from coverage_by_kind/1 on purpose — the suite " <>
-               "must reject the drift"
+      # Drops ETH-USD from coverage_by_kind/1 on purpose.
+      assert by_kind_fault(Broken.CoverageByKind.UnionViolation) ==
+               {:union_mismatch, ["BTC-USD"], ["BTC-USD", "ETH-USD"]}
     end
 
     test "a fake reporting a kind it does not declare streamable is caught" do
-      fixture = Broken.CoverageByKind.UndeclaredKind
-      declared = MapSet.new(fixture.capabilities().streamable)
-      reported = fixture.coverage_by_kind([]) |> Map.keys() |> MapSet.new()
+      # Reports :order_book while streamable declares only :quotes.
+      assert by_kind_fault(Broken.CoverageByKind.UndeclaredKind) ==
+               {:undeclared_kinds, [:order_book]}
+    end
 
-      refute MapSet.subset?(reported, declared),
-             "this fixture reports :order_book while streamable declares only :quotes — " <>
-               "the suite must reject a venue contradicting its own declaration"
+    test "a symbol kind-reported and not in coverage/1 is a mismatch too, and the union " <>
+           "is judged before the kinds" do
+      assert AdapterContract.coverage_by_kind_fault(
+               %{quotes: %{"A" => :stream, "B" => :stream}},
+               %{"A" => :stream},
+               [:quotes]
+             ) == {:union_mismatch, ["A", "B"], ["A"]}
+
+      assert AdapterContract.coverage_by_kind_fault(%{books: %{"A" => :stream}}, %{}, [:quotes]) ==
+               {:union_mismatch, ["A"], []}
     end
 
     test "the reference venue does not export coverage_by_kind/1, and the suite around " <>
@@ -785,23 +782,25 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert {:get_balances, 2} in gated_and_active
 
-      assert match?(
-               {:ok, _},
-               Broken.CredentialGate.NeverChecks.get_balances(%{}, [])
-             ),
-             "this fixture answers :ok with stripped credentials on purpose — the suite " <>
-               "must reject a fake that does this"
+      # The decision the group makes about the stripped call's answer, not a match on the
+      # fixture's own canned one: this fixture answers `:ok` with stripped credentials on
+      # purpose, and the suite must reject a fake that does.
+      stripped = Broken.CredentialGate.NeverChecks.get_balances(%{}, [])
+      assert AdapterContract.credential_gate_fault(stripped) == {:succeeded, {:ok, []}}
     end
 
     test "a fake that actually gates on credentials satisfies the same check" do
       caps = Broken.CredentialGate.Conforming.capabilities()
       assert caps.credential_benefit == :required
 
-      refute match?(
-               {:ok, _},
-               Broken.CredentialGate.Conforming.get_balances(%{}, [])
-             ),
+      stripped = Broken.CredentialGate.Conforming.get_balances(%{}, [])
+
+      assert AdapterContract.credential_gate_fault(stripped) == nil,
              "the conforming fixture refuses stripped credentials and must not be flagged"
+
+      # A raise or exit is not a refusal either: the gate holds for the wrong reason.
+      assert {:raised, _exception} =
+               AdapterContract.credential_gate_fault({:raised, %ArgumentError{}})
 
       assert match?(
                {:ok, _},
@@ -865,10 +864,11 @@ defmodule DpExchange.Core.ContractTeethTest do
                venue.asset_classes()
              )
 
-      assert match?({:ok, _}, venue.market_status(credentials: %{})),
-             "this fixture answers :ok with stripped credentials on purpose — a venue " <>
-               "serving more than crypto is not exempt, so a real fake shaped this way " <>
-               "must be rejected the same as any other unchecked credentialed callback"
+      # Answers `:ok` with stripped credentials on purpose: a venue serving more than crypto
+      # is not exempt, so a real fake shaped this way is rejected like any other unchecked
+      # credentialed callback.
+      answer = venue.market_status(credentials: %{})
+      assert {:succeeded, _answer} = AdapterContract.credential_gate_fault(answer)
     end
 
     # `get_fees/2` is not a name-based exemption and not crypto-only-exempt — whether
@@ -898,11 +898,11 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert {:get_fees, 2} in AdapterContract.credential_gated_endpoints(caps, [:equity])
 
-      assert match?({:ok, _}, venue.get_fees(%{}, [])),
-             "this fixture answers :ok with stripped credentials on purpose — with no " <>
-               "no_venue_contact declaration this is exactly the 2026-09-06 " <>
-               "dp_exchange_webull defect, and a real fake shaped this way must still " <>
-               "be rejected"
+      # Answers `:ok` with stripped credentials on purpose: with no `no_venue_contact`
+      # declaration this is the 2026-09-06 dp_exchange_webull defect, and a real fake shaped
+      # this way must still be rejected.
+      answer = venue.get_fees(%{}, [])
+      assert {:succeeded, _answer} = AdapterContract.credential_gate_fault(answer)
     end
   end
 
@@ -1292,6 +1292,23 @@ defmodule DpExchange.Core.ContractTeethTest do
                {:unaligned, off}
     end
 
+    test "a bar labelled with another width than the one asked for is faulted, first" do
+      # Group 21 holds the refusal of a width the venue does not serve. This holds the label
+      # of one it does: a served width answered with bars stamped as another is the same
+      # substitution, one field later, and every bar then joins the wrong series.
+      at = ~U[2026-08-27 10:00:00Z]
+      daily = %{bar(at) | timeframe: "1d"}
+
+      assert AdapterContract.candle_series_fault([bar(at), daily], "1h", [:crypto]) ==
+               {:wrong_timeframe, "1d"}
+
+      # Judged before the grid and the order: the label is what is wrong with this series.
+      off_grid_and_mislabelled = %{bar(~U[2026-08-27 10:30:00Z]) | timeframe: "1m"}
+
+      assert AdapterContract.candle_series_fault([off_grid_and_mislabelled], "1h", [:crypto]) ==
+               {:wrong_timeframe, "1m"}
+    end
+
     test "a session-traded venue gets a 30-minute grid for a wider intraday width only" do
       open = ~U[2026-08-27 13:30:00Z]
 
@@ -1305,10 +1322,14 @@ defmodule DpExchange.Core.ContractTeethTest do
       # 30 minutes and under stay strict, and so do days.
       quarter = ~U[2026-08-27 13:20:00Z]
 
-      assert AdapterContract.candle_series_fault([bar(quarter)], "15m", [:equity]) ==
+      quarter_bar = %{bar(quarter) | timeframe: "15m"}
+
+      assert AdapterContract.candle_series_fault([quarter_bar], "15m", [:equity]) ==
                {:unaligned, quarter}
 
-      assert AdapterContract.candle_series_fault([bar(open)], "1d", [:equity]) ==
+      daily_bar = %{bar(open) | timeframe: "1d"}
+
+      assert AdapterContract.candle_series_fault([daily_bar], "1d", [:equity]) ==
                {:unaligned, open}
 
       off = ~U[2026-08-27 13:45:00Z]

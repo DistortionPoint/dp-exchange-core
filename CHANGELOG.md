@@ -21,6 +21,86 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- `PollingFeed` in bulk mode (`:fetch_all`) ran its clock on a bare `:poll_all` message, so a
+  duplicate or hand-sent tick enqueued a fetch and its `reschedule/2` armed another tick: two
+  clocks for good, the venue polled at twice the configured rate. The tick now carries a token
+  kept in the feed's state (`{:poll_all, token}`), exactly as the per-symbol ticks already did,
+  and only the armed one is acted on. A bare `:poll_all` is ignored.
+- `DefaultRateLimiter.penalize/3` took any non-negative integer, so a hold past 2^32 - 1 ms (the
+  longest `acquire/3` can ever sleep, and its answer is `:rate_limit_timeout` for any longer
+  wait even under `timeout: :infinity`) closed a bucket for as long as the limiter ran. It
+  raises `ArgumentError` above that bound now. `HttpClient`'s `:max_retry_after_s` is bounded to
+  4_294_967 seconds to match, refused in the caller before anything is sent: a larger ceiling
+  used to raise from inside the 429 handling on the first venue `Retry-After` that reached it.
+- `HttpClient` opened its `[:dp_exchange, :request, :start]` span before it read the request's
+  header names for the credential values to scrub, and outside the `try` that closes the span: a
+  header whose name is not text (a tuple has no `String.Chars`) raised from there, leaving a
+  `:start` with no `:stop` or `:exception`, against the documented "exactly one of them". The
+  values are collected first, and a name that is not an atom or a binary is simply not a
+  credential's name (it also raised from the plain-http credential check).
+- `Types.StakingReward` built with a `:period_start` or `:period_end` that was a `Date`, a
+  string or an epoch integer, typed `DateTime.t() | nil`. `Validate.new!/3` cannot hold them by
+  name (a filing's same-named fields are `Date`s), so the new `Validate.datetimes!/2` does it
+  for this type.
+- `Types.Conversion.expired?/2` read the instant of `:expires_at` itself as still open. A rate
+  held until a time is not one to commit at that time, so it is expired from the instant
+  onward, the safe direction for a call that guards a funds-moving commit.
+- `CredentialRedactionCheck` (conformance group 19) did not look for ten secret field names that
+  `Core.Notice` refuses as detail keys (`access_key`, `secret_access_key`, `api_secret_key`,
+  `x_signature`, `x_auth_token`, `proxy_authorization`, `set_cookie`, `cb_access_key`,
+  `cb_access_sign`, `cb_access_passphrase`), though its moduledoc called its list the superset
+  of `Notice`'s: a struct holding an `:access_key` printed it in cleartext and passed. The list
+  is 37 names now, and a test holds every `Notice` key to being on it.
+
+### Changed
+
+- Conformance group 39 (positive prices and sizes) counted any `{:ok, _}` as having examined a
+  value, so a fake answering `{:ok, []}` for every price endpoint passed having looked at no
+  price, size or level. A success counts only when it holds something to inspect
+  (`AdapterContract.value_examined?/1`: a struct, a non-empty list, a book with a level).
+- Conformance group 37 (candles) now also refuses a bar labelled with another width than the
+  one asked for (`{:wrong_timeframe, label}` from `candle_series_fault/3`, judged first):
+  group 21 held the refusal of an unserved width, nothing held the label of a served one.
+- Conformance group 42 (ambiguous write): when the request carried a `client_order_id`, an
+  `{:order_unconfirmed, nil, _}` is `{:unconfirmed_id, nil}`. The doc always said the id is
+  the one sent; the check accepted `nil`. No venue's group-42 request carries one today.
+- Conformance groups 1 (required callbacks), 15 (`coverage_by_kind/1` agrees with `streamable`)
+  and 17 (credential gate) decided their verdict inside the generated test body, where the
+  teeth tests could only assert canned answers. The decisions are public now:
+  `AdapterContract.missing_required_callbacks/1` and `coverage_by_kind_fault/3` (which also
+  names a coverage map that disagrees with the union of the by-kind sets, as
+  `{:union_mismatch, union, covered}`), and the group-17 teeth tests assert what
+  `credential_gate_fault/1` answers. No change to what a conforming venue passes.
+
+### Documentation
+
+- `usage-rules.md`: the "which rows the suite asserts" paragraph named group 43 as the five
+  market-data reads (it holds every endpoint) and omitted groups 46, 47, 49 and 50; the
+  `HttpClient` option paragraph omits `:decode_body` as a flag and the write-retry default
+  (`:retry_attempts` is 1 for a write, 3 for a read). `usage-rules/feeds.md`: the timer bound on
+  `PollingFeed`'s durations and the one-clock, token-checked tick. `usage-rules/testing.md`:
+  group 42's id. `usage-rules/adapter.md`: the 37 secret names. `docs/guides/`: 51 groups, not 50.
+- `PollingFeed` moduledoc: its callbacks run in the feed's own process with no timeout, so one
+  that never returns stops the feed (the fetch, in its task, is the only thing bounded).
+- Two `PollingFeed` tests guarded a negative with a zero-wait `refute_received` on a message
+  sent by a fetch task, which no reply of the feed orders; they wait a real 500 ms now.
+- `PollingFeed` moduledoc: no callback (`:sink`, `:on_refusal`, `:on_notice`) is invoked from a
+  `handle_call/3`, so a slow one cannot time out `status/1` or `coverage/1`; they run in the
+  feed's own handlers, inline, because the feed's ordering guarantee depends on it.
+- `usage-rules/adapter.md` and `usage-rules/money-movement.md` were read against the code and
+  corrected where they disagreed with it (see the test changes below for what now holds them).
+- Tests that could not fail now can: `PurityTest` read `Mix.Project.config()` for an
+  `:application` key that is never there; the package test names every guide the README links;
+  the zero-notice wait in `ReferenceVenue`'s decisions test and two `Fanout` refutes were
+  zero-wait guards on messages sent from other processes (500 ms now); several `Types.*` tests
+  asserted a struct literal's own fields and build through `new/1`; the `SymbolNormalizer`
+  optional-callback test asked `module_info/1` for an attribute that is never there. The
+  reference-venue canned answers in `VenueTest` are labelled as what they are.
+- `Capabilities`: the `:burst` typedoc said an absent burst could be told apart from "a declared
+  burst of zero", and `new/1` has always refused a zero. It says what is true.
+
 ## [0.3.115] - 2026-10-20
 
 ### Documentation

@@ -347,7 +347,10 @@ defmodule DpExchange.Core.FanoutTest do
       # The witness monitor proves the subscriber is really dead before the absence of the
       # forgotten monitor's `:DOWN` is asserted.
       assert_receive {:DOWN, ^witness, :process, ^subscriber, _reason}, 5_000
-      refute_received {:DOWN, _ref, :process, ^subscriber, _reason}
+      # Two monitors of one dying process are signalled one after the other, in no order the
+      # runtime documents, so the witness's `:DOWN` arriving first does not mean a stray one
+      # is not still on its way. A real window, not a zero-wait.
+      refute_receive {:DOWN, _ref, :process, ^subscriber, _reason}, 500
     end
 
     test "forget/2 on a pid that was never watched is a no-op, not a crash" do

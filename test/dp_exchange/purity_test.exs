@@ -96,6 +96,10 @@ defmodule DpExchange.PurityTest do
         end)
         |> Enum.uniq()
 
+      # An empty scan is not a clean one: a wrong build path or a changed app name matched no
+      # beam, `called` was `[]`, and the check below passed having read nothing.
+      assert length(called) > 10, "the scan found no compiled lib/ module to examine"
+
       unexpected =
         Enum.reject(called, fn module ->
           name = to_string(module)
@@ -153,10 +157,12 @@ defmodule DpExchange.PurityTest do
   describe "a library does not start itself" do
     test "there is no Application callback module" do
       # A consumer that has not asked for a venue must not find a socket open.
-      config = Mix.Project.config()
-      refute Keyword.has_key?(config[:app] && config, :mod)
-
-      application = Mix.Project.config()[:application] || []
+      #
+      # `:mod` lives in what `application/0` returns, not in `Mix.Project.config/0`: the old
+      # check read the config for `:application`, which is never there, so it compared an
+      # empty list and could not fail however the project was written.
+      application = Mix.Project.get!().application()
+      assert Keyword.keyword?(application)
       refute Keyword.has_key?(application, :mod)
     end
   end

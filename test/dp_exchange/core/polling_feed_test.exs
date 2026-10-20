@@ -711,7 +711,10 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert %{"A" => {^token, ^timer}} = state.timers
       assert is_integer(Process.read_timer(timer))
       assert state.scheduled == MapSet.new(["A"])
-      refute_received {:fetched, _symbol}
+
+      # The fetch would run in a task, whose message is not ordered behind the state read
+      # above: a zero-wait `refute_received` could pass before a wrongly started fetch spoke.
+      refute_receive {:fetched, _symbol}, 500
     end
 
     test "a tick queued for a symbol that left before its turn is skipped, and a re-add is polled" do
@@ -742,7 +745,10 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert_receive {:published, %{symbol: ^first}}, 5_000
 
       _sync = PollingFeed.status(feed)
-      refute_received {:fetching, ^other, _task}
+
+      # A fetch started for the skipped symbol would announce itself from its own task, which
+      # the status call above does not order, so the window must be a real one.
+      refute_receive {:fetching, ^other, _task}, 500
 
       PollingFeed.update_symbols(feed, [first, other])
       assert_receive {:fetching, ^other, other_task}, 5_000
@@ -2094,6 +2100,70 @@ defmodule DpExchange.Core.PollingFeedTest do
 
       assert_receive {:task_heap, words}, 5_000
       assert words < 50_000
+    end
+  end
+
+  describe "found 2026-10-20 (bulk tick generations)" do
+    test "a bulk tick that is not the armed one is ignored, and starts no second chain" do
+      # The per-symbol tick carries a token and only the tracked one is acted on. The bulk
+      # tick was a bare `:poll_all`: a hand-sent or duplicated one enqueued a job, and the
+      # job's `reschedule/2` armed another tick, so the feed then ran two clocks at once,
+      # for good, polling the venue at twice the rate it was configured to.
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ~w(A),
+          interval_ms: 600_000,
+          fetch_all: fn symbols ->
+            send(test, {:fetched, symbols})
+            {:ok, Enum.map(symbols, &event/1)}
+          end
+        )
+
+      assert_receive {:fetched, ["A"]}, 5_000
+      assert_receive {:published, %{symbol: "A"}}, 5_000
+
+      # The status call is queued behind the finished job, so the next tick is armed by now.
+      assert PollingFeed.status(feed).covered == 1
+      armed = :sys.get_state(feed).poll_all
+      assert is_reference(armed)
+
+      send(feed, :poll_all)
+      send(feed, {:poll_all, make_ref()})
+      send(feed, {:poll_all, nil})
+
+      # Answered after the three ticks above were handled, in mailbox order.
+      assert PollingFeed.status(feed).symbols == 1
+      assert :sys.get_state(feed).poll_all == armed
+      refute_receive {:fetched, _symbols}, 500
+    end
+
+    test "the armed bulk tick still fetches, and arms the next one" do
+      test = self()
+
+      feed =
+        start_feed(
+          symbols: ~w(A),
+          interval_ms: 600_000,
+          start_delay_ms: 600_000,
+          fetch_all: fn symbols ->
+            send(test, {:fetched, symbols})
+            {:ok, Enum.map(symbols, &event/1)}
+          end
+        )
+
+      armed = :sys.get_state(feed).poll_all
+      assert is_reference(armed)
+
+      send(feed, {:poll_all, armed})
+      assert_receive {:fetched, ["A"]}, 5_000
+      assert_receive {:published, %{symbol: "A"}}, 5_000
+
+      assert PollingFeed.status(feed).covered == 1
+      rearmed = :sys.get_state(feed).poll_all
+      assert is_reference(rearmed)
+      assert rearmed != armed
     end
   end
 end

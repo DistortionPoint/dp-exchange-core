@@ -124,6 +124,53 @@ defmodule DpExchange.Core.WantedConformanceTest do
     end
   end
 
+  describe "value_examined?/1 (assertion 39)" do
+    alias DpExchange.Core.Types.{OrderBook, Quote, TopOfBook, Trade}
+
+    @now ~U[2026-10-20 12:00:00Z]
+
+    defp book(bids, asks),
+      do: %OrderBook{symbol: "A", bids: bids, asks: asks, observed_at: @now, provider: :v}
+
+    test "a success with nothing in it gave the group nothing to inspect" do
+      # `{:ok, []}` used to count as examined, so a fake answering an empty list for every
+      # price endpoint passed the group having looked at no price, size or level.
+      refute AdapterContract.value_examined?([])
+      refute AdapterContract.value_examined?([[], []])
+      refute AdapterContract.value_examined?(book([], []))
+
+      # A best bid and ask of neither: no resting order on either side, nothing to hold.
+      empty_top = %TopOfBook{symbol: "A", observed_at: @now, provider: :v}
+      refute AdapterContract.value_examined?(empty_top)
+
+      refute AdapterContract.value_examined?(%{not: :a_struct})
+      refute AdapterContract.value_examined?(nil)
+    end
+
+    test "a struct, a list holding one, and a book with a level are examined" do
+      price = Decimal.new(1)
+      quote_struct = %Quote{symbol: "A", price: price, observed_at: @now, provider: :v}
+      top = %TopOfBook{symbol: "A", bid: price, observed_at: @now, provider: :v}
+
+      trade = %Trade{
+        id: "t",
+        symbol: "A",
+        side: :buy,
+        price: price,
+        quantity: price,
+        timestamp: @now,
+        provider: :v
+      }
+
+      assert AdapterContract.value_examined?(quote_struct)
+      assert AdapterContract.value_examined?(top)
+      assert AdapterContract.value_examined?([trade])
+      assert AdapterContract.value_examined?([[], trade])
+      assert AdapterContract.value_examined?(book([{price, price}], []))
+      assert AdapterContract.value_examined?(book([], [{price, price}]))
+    end
+  end
+
   describe "family_reason_fault/3 (assertion 41)" do
     test "an unlisted symbol must be refused :not_listed" do
       assert AdapterContract.family_reason_fault({:refused, :not_listed}, nil, :v) == nil
@@ -178,8 +225,10 @@ defmodule DpExchange.Core.WantedConformanceTest do
       assert AdapterContract.ambiguous_write_fault(@unconfirmed, @refused, "cid-1") == nil
       assert AdapterContract.ambiguous_write_fault(@unconfirmed, {:refused, :x}, nil) == nil
 
+      # `nil` is the venue having no client order id and none generated: only when the request
+      # carried none.
       nil_id = {:error, {:order_unconfirmed, nil, :timeout}}
-      assert AdapterContract.ambiguous_write_fault(nil_id, @refused, "cid-1") == nil
+      assert AdapterContract.ambiguous_write_fault(nil_id, @refused, nil) == nil
 
       batch = {:error, {:order_unconfirmed, ["a", "b"], :timeout}}
       assert AdapterContract.ambiguous_write_fault(batch, @refused, nil) == nil
@@ -197,6 +246,13 @@ defmodule DpExchange.Core.WantedConformanceTest do
 
       assert AdapterContract.ambiguous_write_fault(wrong, @refused, "cid-1") ==
                {:unconfirmed_id, "other"}
+
+      # The request carried `"cid-1"`, so `nil` throws away the one key the caller looks the
+      # order up by (`Venue`: the id is the `client_order_id` actually sent).
+      nil_id = {:error, {:order_unconfirmed, nil, :timeout}}
+
+      assert AdapterContract.ambiguous_write_fault(nil_id, @refused, "cid-1") ==
+               {:unconfirmed_id, nil}
 
       bad = {:error, {:order_unconfirmed, 42, :timeout}}
       assert AdapterContract.ambiguous_write_fault(bad, @refused, nil) == {:unconfirmed_id, 42}

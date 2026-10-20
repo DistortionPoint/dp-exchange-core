@@ -238,10 +238,13 @@ never match a venue's wording. No venue text and no credential rides in a reason
 
 **Which rows the suite asserts:** `{:refused, :not_listed}` and `{:invalid_credentials, venue}`
 (group 41, opt-in), `:invalid_symbol(s)`/`:invalid_subscriber`/`:invalid_order_id` and the
-order-request tags (groups 32 to 35), `:order_unconfirmed` (group 42, opt-in) and
-`{:invalid_option, :include_partial, v}` (group 36), and `{:unknown_option, key}` on the five
-market-data reads (group 43). The others (`:no_quote`,
-`:account_not_found`, `:insecure_url`, the range tags) are held by each venue's own tests.
+order-request tags (groups 32 to 35, and 50 for preview and replace), `:order_unconfirmed`
+(group 42, opt-in) and `{:invalid_option, :include_partial, v}` (group 36), `{:unknown_option,
+key}` on every endpoint the venue's Fake serves, reads, writes and feed calls alike (group 43),
+`{:unknown_option, :timeout}` on `subscribe_notices/1` (group 46), `{:invalid_amount, v}` on the
+amount-taking writes (group 47) and `{:refused, :not_found}` for an order id nobody placed
+(group 49). The others (`:no_quote`, `:account_not_found`, `:insecure_url`, the range tags) are
+held by each venue's own tests.
 
 `venue` is the venue's `runtime_id/0` atom. A refusal is permanent and an error may be worth
 retrying, so a venue that gives a retryable error for an unlisted symbol or an unknown
@@ -357,10 +360,16 @@ backoff.
 
 `HttpClient.request/5` refuses, with `ArgumentError` before anything is sent, a mistyped
 option: `:timeout` must be a non-negative integer or `:infinity`, `:weight` a positive
-integer, and `:log_requests`, `:rate_limit_per_endpoint`, `:rate_limit_blocking` and
-`:raw_status` booleans (`raw_status: "false"` would otherwise be truthy). A forwarded `nil`
+integer, `:max_retry_after_s` a non-negative integer of at most 4_294_967 seconds, and
+`:log_requests`, `:rate_limit_per_endpoint`, `:rate_limit_blocking`, `:raw_status` and
+`:decode_body` booleans (`raw_status: "false"` would otherwise be truthy). A forwarded `nil`
 is read as absent. A `:get` that carries a non-empty body is refused the same way: Req 0.7.0
 to 0.7.2, which `mix.exs` admits, send it as a POST.
+
+**A write is sent once unless its venue says it may be repeated.** `:retry_attempts` defaults
+to 3 for a `:get` and to 1 for a `:post`, `:put` or `:delete`: a timeout after the venue took
+a write is not proof it did not, and a retry could place it twice. Only a venue package that
+holds an idempotency key passes an explicit `:retry_attempts` for a write.
 
 **`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
 it arrives and the transfer is halted at the limit, so an oversized or endless response is
