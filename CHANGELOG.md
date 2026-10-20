@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.113] - 2026-10-20
+
 ### Documentation
 
 - `Notice` moduledoc: a feed restarted by its supervisor that resumed what it had accepted says
