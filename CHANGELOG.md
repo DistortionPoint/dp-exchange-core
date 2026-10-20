@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.114] - 2026-10-20
+
 ### Fixed
 
 - `Options.check/2` raised `FunctionClauseError` on an improper list (`[a: 1 | :tail]`)
