@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.120] - 2026-10-21
+
 ### Added
 
 - **Conformance group 54: every Order and Fill a venue's fake answers is one its own
