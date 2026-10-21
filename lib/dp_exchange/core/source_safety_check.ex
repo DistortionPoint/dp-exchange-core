@@ -15,9 +15,11 @@ defmodule DpExchange.Core.SourceSafetyCheck do
   `ArgumentError` turned into a refusal. This is why `Core.Notice` tests credential keys as
   strings and `Core.FakeInjection` keeps one static key, and it is the shape of lens S of the
   tick AQ audit: `String.to_atom/1`, `List.to_atom/1`, `:erlang.binary_to_atom/1,2`,
-  `:erlang.list_to_atom/1`, `Module.concat/1,2` of anything but literals, and an interpolated
-  atom (`:"foo_\#{x}"`, which compiles to `:erlang.binary_to_atom/2`) are all flagged. An
-  argument that is a literal (`String.to_atom("ok")`) builds one fixed atom and is not.
+  `:erlang.list_to_atom/1`, and an interpolated atom (`:"foo_\#{x}"`, which compiles to
+  `:erlang.binary_to_atom/2`) are all flagged. An argument that is a literal
+  (`String.to_atom("ok")`) builds one fixed atom and is not. `Module.concat/1,2` composes module
+  names (a tree's `<name>.Feed`), so it is flagged only where an argument is visibly built from
+  text: an interpolation, a `<>`, a `term["key"]` read or a `Map.get`/`Map.fetch`.
 
   **`:erlang.binary_to_term/1` on bytes the package did not write leaks atoms, and can build
   funs.** `:erlang.binary_to_term(bin, [:safe])` refuses both, and is the only spelling
@@ -198,7 +200,7 @@ defmodule DpExchange.Core.SourceSafetyCheck do
 
   defp classify(:lib, [:String], :to_atom, args), do: atom_rule(args, "String.to_atom")
   defp classify(:lib, [:List], :to_atom, args), do: atom_rule(args, "List.to_atom")
-  defp classify(:lib, [:Module], :concat, args), do: atom_rule(args, "Module.concat")
+  defp classify(:lib, [:Module], :concat, args), do: concat_rule(args)
 
   # An interpolated atom, `:"a_\#{x}"`, is `:erlang.binary_to_atom(<<...>>, :utf8)` in the AST.
   defp classify(:lib, :erlang, function, args) when function in [:binary_to_atom, :list_to_atom],
@@ -212,6 +214,29 @@ defmodule DpExchange.Core.SourceSafetyCheck do
   defp atom_rule(args, call) do
     if args != [] and Enum.all?(args, &literal?/1), do: nil, else: {:atom_from_text, call}
   end
+
+  # **`Module.concat/1,2` composes module names, so a variable is not text.** Every venue's
+  # supervisor derives `<tree name>.Feed` from the consumer's own tree-name atom and a fixed
+  # suffix (tick AO): one atom per tree the consumer starts, never one per frame. Flagging every
+  # non-literal argument failed all five venues on that derivation. What is flagged is an
+  # argument visibly built from text: an interpolation, a `<>`, a `term["key"]` read, or a
+  # `Map.get`/`Map.fetch`. A bare capture or pipe target is still flagged (nothing is visible).
+  defp concat_rule([]), do: {:atom_from_text, "Module.concat"}
+
+  defp concat_rule(args) do
+    if Enum.any?(args, &textual?/1), do: {:atom_from_text, "Module.concat"}, else: nil
+  end
+
+  defp textual?({:<<>>, _meta, parts}), do: not Enum.all?(parts, &is_binary/1)
+  defp textual?({:<>, _meta, _operands}), do: true
+  defp textual?({{:., _meta, [Access, :get]}, _call, _args}), do: true
+
+  defp textual?({{:., _meta, [{:__aliases__, _alias, [:Map]}, function]}, _call, _args})
+       when function in [:get, :fetch, :fetch!],
+       do: true
+
+  defp textual?(list) when is_list(list), do: Enum.any?(list, &textual?/1)
+  defp textual?(_ast), do: false
 
   defp term_rule([_bytes, options]) when is_list(options) do
     if :safe in options, do: nil, else: {:unsafe_binary_to_term, ":erlang.binary_to_term"}

@@ -24,7 +24,7 @@ already states.** Group 52: a float, zero, a negative, NaN or infinity as the `:
 request must carry a `:quantity` or a `:price` to spoil, or the group fails rather than pass
 having probed nothing. Group 53 reads your source under `package_root:` (and the static
 `config/*.exs` files) and fails on an atom made from text (`String.to_atom/1`, `:"x_#{y}"`,
-`Module.concat/2` of anything but literals: use a closed lookup, or `String.to_existing_atom/1`
+`Module.concat/2` of an interpolation, `<>` or `term["key"]` read: use a closed lookup, or `String.to_existing_atom/1`
 with the `ArgumentError` turned into a refusal), on `:erlang.binary_to_term/1` without
 `[:safe]`, on `Application.compile_env/3` (read a consumer's configuration at call time with
 `Application.get_env/3`), and on `System.get_env/1` anywhere but `config/runtime.exs`. Group 26

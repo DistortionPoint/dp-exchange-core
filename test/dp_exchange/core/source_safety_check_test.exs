@@ -18,7 +18,7 @@ defmodule DpExchange.Core.SourceSafetyCheckTest do
     def c(chars), do: List.to_atom(chars)
     def d(text), do: :erlang.binary_to_atom(text, :utf8)
     def e(chars), do: :erlang.list_to_atom(chars)
-    def f(text), do: Module.concat(Foo, text)
+    def f(frame), do: Module.concat(Foo, frame["channel"])
     def g(text), do: text |> String.to_atom()
     def h, do: Enum.map(["a"], &String.to_atom/1)
     def i(bin), do: :erlang.binary_to_term(bin)
@@ -42,6 +42,7 @@ defmodule DpExchange.Core.SourceSafetyCheckTest do
     def existing(text), do: String.to_existing_atom(text)
     def sub, do: Module.concat(__MODULE__, Sub)
     def listed, do: Module.concat([Foo, Bar])
+    def derived(name, default), do: Module.concat(name, default |> Module.split() |> List.last())
     def safe(bin), do: :erlang.binary_to_term(bin, [:safe])
     def runtime, do: Application.get_env(:app, :key)
     def quoted_literal, do: :"fixed_atom"

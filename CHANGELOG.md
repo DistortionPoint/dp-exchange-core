@@ -21,6 +21,16 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Conformance group 53 failed every venue on its tree-name derivation.** `Module.concat/1,2`
+  was flagged for any argument that was not a literal, so each venue supervisor's
+  `Module.concat(name, "Feed")` (the consumer's own tree-name atom plus a fixed suffix, the
+  tick AO naming rule: one atom per tree started, never one per frame) read as an atom-table
+  leak. `Module.concat` is now flagged only where an argument is visibly built from text: an
+  interpolation, a `<>`, a `term["key"]` read or a `Map.get`/`Map.fetch`. The other
+  atom-from-text calls are unchanged.
+
 ## [0.3.118] - 2026-10-21
 
 Tick AQ: numbers and identifiers from venue text (lens S), configuration, startup and option
