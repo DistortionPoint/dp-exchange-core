@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.118] - 2026-10-21
+
 Tick AQ: numbers and identifiers from venue text (lens S), configuration, startup and option
 validation (lens T), unbounded state and resource cleanup (lens U), and the conformance groups
 that hold the three across the family. **The new groups run in every venue's CI: a package that
