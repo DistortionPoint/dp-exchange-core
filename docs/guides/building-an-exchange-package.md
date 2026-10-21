@@ -112,7 +112,7 @@ The per-repo checklist. Every step exists because skipping it has cost something
 
 ## 5. Test
 
-- [ ] `use DpExchange.Core.AdapterContract` — 53 assertion groups (see
+- [ ] `use DpExchange.Core.AdapterContract` — 54 assertion groups (see
       `DpExchange.Core.AdapterContract.assertions/0`), green. Several are opt-in and skip
       until you name the fact only your fixture knows: see `usage-rules/testing.md`.
 

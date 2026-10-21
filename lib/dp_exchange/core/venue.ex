@@ -522,6 +522,15 @@ defmodule DpExchange.Core.Venue do
   the zone it was written in. Converting the instant to UTC would move a New York bar onto the
   previous or next calendar day depending on the season.
 
+  ## A width the venue does not serve
+
+  A `timeframe` outside the venue's `historical_timeframes` is
+  `{:error, {:unsupported_timeframe, timeframe}}`, the width exactly as given, decided before
+  any request. It is never served at the nearest width the venue has. Conformance assertion 21
+  asks a Fake for the first width of `DpExchange.Core.Timeframe.nameable/0` the venue does not
+  declare and requires exactly this answer: any other error, a refusal or a raise does not
+  pass.
+
   ## Limits and options a venue cannot honour (MD4, MD11)
 
   `opts[:limit]` is sent to the venue where it has such a parameter. Above the venue's
@@ -1310,6 +1319,16 @@ defmodule DpExchange.Core.Venue do
   **A cancel is always sent once.** No venue retries it internally, whatever `:retry_attempts`
   the caller passes: a second cancel of an order that the first already cancelled would come
   back as a refusal that hides the success.
+
+  ## A terminal order stays terminal
+
+  `:filled`, `:cancelled`, `:rejected` and `:expired` are final (`Types.Order`). Cancelling an
+  order that is already final does not change it, and is never reported as a cancel that
+  happened: the answer is `{:refused, reason}` (the venue declined), or, where the venue's
+  cancel answer carries the order, the order **with the status it really has** (a `:filled`
+  order is still `:filled`). The bare `{:ok, :cancelled}` asserts that this call cancelled
+  the order, so a venue that cannot say so refuses instead. `replace_order/4` of a final order
+  is refused the same way and never re-opens it.
   """
   @callback cancel_order(credentials(), String.t(), keyword()) ::
               result(Types.Order.t() | :cancelled)

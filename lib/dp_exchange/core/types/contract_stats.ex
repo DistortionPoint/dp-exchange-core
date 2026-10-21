@@ -49,6 +49,10 @@ defmodule DpExchange.Core.Types.ContractStats do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:mark_price` or `:index_price` of zero or less (a valuation is above zero)
+  and on a negative `:open_interest` or `:open_interest_notional` (zero is legal, an instrument
+  nobody holds).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

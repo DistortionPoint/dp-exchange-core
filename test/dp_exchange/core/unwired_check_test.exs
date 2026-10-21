@@ -155,6 +155,40 @@ defmodule DpExchange.Core.UnwiredCheckTest do
       assert line == 2
     end
 
+    test "a default-argument function is one unit, wired by a call at any of its arities" do
+      u = uniq()
+
+      {beam_dir, lib_root} =
+        UnwiredFixture.compile!([
+          %{
+            path: "defaults.ex",
+            code: """
+            defmodule Defaults#{u} do
+              def used(a, b \\\\ 1), do: a + b
+              def dead(a, b \\\\ 1), do: a + b
+            end
+            """
+          },
+          %{
+            path: "caller.ex",
+            code: """
+            defmodule DefaultsCaller#{u} do
+              def entry, do: Defaults#{u}.used(1, 2)
+            end
+            """
+          }
+        ])
+
+      assert {:ok, violations} = UnwiredCheck.run(beam_dir, lib_root)
+      mfas = violation_mfas(violations)
+      mod = Module.concat([:"Elixir", "Defaults#{u}"])
+
+      # `used/1` forwards to `used/2`, and every caller passes both: still wired.
+      refute Enum.any?(mfas, &match?({^mod, :used, _arity}, &1))
+      # Its own generated wrapper must not wire a dead one; it is named once, at the top arity.
+      assert Enum.filter(mfas, &match?({^mod, :dead, _arity}, &1)) == [{mod, :dead, 2}]
+    end
+
     test "a call from a module whose source is outside lib_root does not count" do
       u = uniq()
 

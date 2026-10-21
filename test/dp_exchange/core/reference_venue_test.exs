@@ -236,6 +236,25 @@ defmodule DpExchange.Core.ReferenceVenueTest do
       assert {:refused, :not_found} = Reference.replace_order(%{}, "order-1", %{price: "1"}, [])
     end
 
+    test "a cancelled order is final: it is not cancelled again, replaced or re-opened" do
+      {:ok, %{id: id}} = Reference.place_order(%{}, @limit, [])
+
+      assert {:ok, %Types.Order{status: :cancelled}} = Reference.cancel_order(%{}, id, [])
+
+      assert {:refused, {:order_not_cancellable, :cancelled}} =
+               Reference.cancel_order(%{}, id, [])
+
+      assert {:refused, {:order_not_replaceable, :cancelled}} =
+               Reference.replace_order(%{}, id, %{price: "2"}, [])
+
+      assert {:ok, %Types.Order{status: :cancelled}} = Reference.get_order(%{}, id, [])
+    end
+
+    test "get_trade_history/2 answers a Fill that its own constructor builds" do
+      assert {:ok, [%Types.Fill{} = fill]} = Reference.get_trade_history(%{}, [])
+      assert fill == Types.Fill.new(Map.from_struct(fill))
+    end
+
     test "place_orders/3 refuses requests that are not a proper list, before the options" do
       for bad <- [nil, %{}, "orders", @limit, [@limit | @limit]] do
         refused = {:error, {:invalid_argument, :requests}}

@@ -13,9 +13,31 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Fifty-three assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifty-four assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Group 54 needs nothing from you and looks inside the orders and fills your fake answers.**
+It places the suite's own order, reads it back with `get_order/3`, lists with `get_orders/2`,
+reads `get_trade_history/2` and cancels last (each when active), and rebuilds every
+`Types.Order` and `Types.Fill` it got through its own `new/1`. So a fake is held to what the
+constructors refuse even though venues build these types as struct literals: a `:side`,
+`:order_type`, `:status` or `:time_in_force` outside the vocabulary (a time in force is one of
+`Capabilities.time_in_force/0`, never `:GTC` or `"gtc"`), a `:filled` or `:partially_filled`
+beside a `:filled_quantity` of zero, a `:pending`, `:open` or `:partially_filled` beside a
+filled quantity at or above the size, a `:filled` beside a filled quantity below it, a
+negative size, a float, a leg that is not an `OrderLeg`. A refusal is not judged, but with
+`place_order/3` active the group fails if it examined no order or fill at all, so declare what
+the fake needs in `endpoint_opts:`. A venue that cannot state a figure leaves it `nil`: nothing
+is judged against a `nil`, and `nil` is never filled in with the nearest atom.
+
+**Group 21 now requires the exact refusal.** The first width of `Timeframe.nameable/0` your
+`capabilities/0` does not declare is asked of `get_historical_prices/4` on your fake, and the
+answer must be `{:error, {:unsupported_timeframe, width}}` with the width as given. A success
+is the substitution the group exists for; any other error, a refusal or a raise also fails it
+(it used to pass them). **Group 5 now refuses a bare value:** `{:ok, nil}` or `{:ok, 5}` from
+a callback typed to return a `Types.*` struct is a fault, and `{:ok, :cancelled}` from
+`cancel_order/3` is the one bare value allowed.
 
 **Groups 52 and 53 need nothing from you and fail a package that breaks a rule the contract
 already states.** Group 52: a float, zero, a negative, NaN or infinity as the `:quantity` or
@@ -141,10 +163,11 @@ points the streaming calls at a feed nothing registered), `package_root:` (defau
 where groups 16, 18 and 19 scan your compiled modules; an empty scan fails them), and
 `unlisted_symbol:` / `padded_credentials:` for group 41.
 
-**A fake that refuses is not a pass.** Groups 5, 24, 25, 31, 37, 39, 43 and 48 fail when a fake
+**A fake that refuses is not a pass.** Groups 5, 24, 25, 31, 37, 39, 43, 48 and 54 fail when a fake
 refuses every endpoint they would have inspected (a missing `endpoint_opts:` entry, or a
 fixture with no bar, no balance or no book level), rather than skipping. Group 37 needs the
-unranged `get_historical_prices/4` to return at least one bar.
+unranged `get_historical_prices/4` to return at least one bar, and a range around that bar
+that must keep it to be answered rather than refused.
 
 **`fake:` and `sample_pairs:` are not optional in practice.** Every group that calls an
 active endpoint drives the fake, never the real venue, and several skip or loop zero times

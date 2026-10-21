@@ -131,12 +131,13 @@ defmodule DpExchange.Core.TypesTest do
       # time for a frame — Schwab's LEVELONE_* quotes, Gemini's partial-depth books — used
       # to leave a package choosing between lying in a field documented as the venue's and
       # dropping real data. `nil` here is information: the venue did not date this.
-      quote_struct = %Quote{
-        symbol: "BTC-USD",
-        price: dec(42_000),
-        observed_at: ~U[2026-09-10 00:00:00Z],
-        provider: :test_venue
-      }
+      quote_struct =
+        Quote.new(
+          symbol: "BTC-USD",
+          price: dec(42_000),
+          observed_at: ~U[2026-09-10 00:00:00Z],
+          provider: :test_venue
+        )
 
       assert is_nil(quote_struct.venue_time)
       assert DateTime.compare(quote_struct.observed_at, ~U[2026-09-10 00:00:00Z]) == :eq
@@ -172,15 +173,18 @@ defmodule DpExchange.Core.TypesTest do
     end
 
     test "an Order that the venue gave no times for keeps nil, not a substituted clock" do
-      order = %Order{
-        id: "abc",
-        symbol: "BTC-USD",
-        side: :buy,
-        order_type: :limit,
-        quantity: dec(1),
-        status: :open,
-        provider: :test_venue
-      }
+      # Through `new/1`, as a venue's decoder builds it: a constructor that filled the times in
+      # would fail here, where a struct literal could only hand its own default back.
+      order =
+        Order.new(
+          id: "abc",
+          symbol: "BTC-USD",
+          side: :buy,
+          order_type: :limit,
+          quantity: dec(1),
+          status: :open,
+          provider: :test_venue
+        )
 
       assert order.created_at == nil
       assert order.updated_at == nil
@@ -224,14 +228,15 @@ defmodule DpExchange.Core.TypesTest do
 
   describe "OrderBook levels" do
     test "holds {price, quantity} tuples on both sides" do
-      book = %OrderBook{
-        symbol: "BTC-USD",
-        bids: [{dec(100), dec(2)}, {dec(99), dec(5)}],
-        asks: [{dec(101), dec(1)}, {dec(102), dec(3)}],
-        venue_time: @ts,
-        observed_at: @ts,
-        provider: :test_venue
-      }
+      book =
+        OrderBook.new(
+          symbol: "BTC-USD",
+          bids: [{dec(100), dec(2)}, {dec(99), dec(5)}],
+          asks: [{dec(101), dec(1)}, {dec(102), dec(3)}],
+          venue_time: @ts,
+          observed_at: @ts,
+          provider: :test_venue
+        )
 
       assert [{best_bid, _bid_qty} | _rest_bids] = book.bids
       assert [{best_ask, _ask_qty} | _rest_asks] = book.asks

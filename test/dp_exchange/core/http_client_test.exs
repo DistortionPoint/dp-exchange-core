@@ -52,12 +52,23 @@ defmodule DpExchange.Core.HttpClientTest do
       report({which, :key, key})
       report({which, :called})
 
-      # A map answers per key, so one bucket can refuse while another has room.
-      case Config.get(:dp_exchange_core, :stub_answer, :ok) do
+      # A map answers per key, so one bucket can refuse while another has room. `check/3` may be
+      # answered apart from `acquire/3` (`:stub_check_answer`), which is how a bucket can be
+      # reported as having a wait while the reservation then succeeds.
+      case Config.get(:dp_exchange_core, seam(which), :ok) do
         %{} = per_key -> Map.get(per_key, key, :ok)
         answer -> answer
       end
     end
+
+    defp seam(:check) do
+      case Config.find_override(:stub_check_answer) do
+        {:ok, _answer} -> :stub_check_answer
+        :none -> :stub_answer
+      end
+    end
+
+    defp seam(_which), do: :stub_answer
 
     defp report(message) do
       case Config.find_override(:stub_report_to) do
@@ -275,13 +286,24 @@ defmodule DpExchange.Core.HttpClientTest do
     end
 
     test "blocking: waits within the timeout on both buckets still block and reserve both" do
-      use_stub(%{"v" => {:rate_limited, 10}, "v /never" => {:rate_limited, 10}})
+      # Both buckets report a short wait when asked (`check/3`), which is within the timeout, so
+      # the pre-check lets the request through and each bucket is then reserved by `acquire/3`.
+      # The two answers are separate here: the stub's acquire turns a rate-limited answer into
+      # a timeout, which used to stop this test at the first bucket and prove nothing about
+      # the second.
+      use_stub()
+
+      Config.put_override(:stub_check_answer, %{
+        "v" => {:rate_limited, 10},
+        "v /never" => {:rate_limited, 10}
+      })
 
       request(provider: "v", rate_limit_per_endpoint: true, rate_limit_blocking: true)
 
-      # The stub's acquire maps a rate-limited answer to a timeout, so the point here is only
-      # that the pre-check let both buckets through to the acquire step.
-      assert_received {:acquire, :key, "v"}
+      assert_received {:check, :key, "v"}
+      assert_received {:check, :key, "v /never"}
+      assert_received {:counted, "v", 1}
+      assert_received {:counted, "v /never", 1}
     end
 
     test "on a blocking limiter the request is signed again after the wait, and that is sent" do

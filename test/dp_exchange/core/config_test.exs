@@ -15,6 +15,27 @@ defmodule DpExchange.Core.ConfigTest do
     test "returns nil when no default is given" do
       assert Config.get(:dp_exchange_core, :never_set_anywhere) == nil
     end
+
+    test "returns the configured application value, and an override still beats it" do
+      # The fallback branch had only ever been shown returning the default: a `get/3` that
+      # ignored application env altogether passed every test above.
+      Application.put_env(:dp_exchange_core_test_fixture_app, :configured_seam, :from_env)
+
+      on_exit(fn ->
+        Application.delete_env(:dp_exchange_core_test_fixture_app, :configured_seam)
+      end)
+
+      assert Config.get(:dp_exchange_core_test_fixture_app, :configured_seam, :fallback) ==
+               :from_env
+
+      # Another app's env is not this one's.
+      assert Config.get(:dp_exchange_core, :configured_seam, :fallback) == :fallback
+
+      Config.put_override(:configured_seam, :from_process)
+
+      assert Config.get(:dp_exchange_core_test_fixture_app, :configured_seam, :fallback) ==
+               :from_process
+    end
   end
 
   describe "opt/3 — Keyword.get/3 that treats a present nil as absent (C1)" do
@@ -69,6 +90,23 @@ defmodule DpExchange.Core.ConfigTest do
 
       Config.delete_override(:temporary)
       assert Config.get(:dp_exchange_core, :temporary, :fallback) == :fallback
+    end
+
+    test "delete_override/1 clears only the calling process's own, never an ancestor's" do
+      Config.put_override(:ancestry, :parent)
+
+      task =
+        Task.async(fn ->
+          Config.put_override(:ancestry, :child)
+          before_delete = Config.get(:dp_exchange_core, :ancestry, :fallback)
+
+          Config.delete_override(:ancestry)
+          # The child's own is gone, so the walk reaches the parent's, which is untouched.
+          {before_delete, Config.get(:dp_exchange_core, :ancestry, :fallback)}
+        end)
+
+      assert Task.await(task) == {:child, :parent}
+      assert Config.get(:dp_exchange_core, :ancestry, :fallback) == :parent
     end
 
     test "overrides are keyed per seam, not shared" do

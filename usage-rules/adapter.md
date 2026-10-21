@@ -197,8 +197,18 @@ no indication which venue field caused it.
 `Types.Order` is the one type where this needs a caveat: it enforces the presence of seven
 keys, but its own moduledoc documents that all but `:provider` legitimately admit `nil` —
 "the venue's word, or nothing," since a venue can acknowledge a cancel with an id and
-nothing else. So `Order.new/1` narrows its check to `:provider` alone. Check a type's own
-moduledoc rather than assuming every enforced key must come out non-nil.
+nothing else. So `Order.new/1` narrows its presence check to `:provider` alone. Check a type's
+own moduledoc rather than assuming every enforced key must come out non-nil.
+
+What `Order.new/1` does refuse is a **word it does not know**, with no default: a `:side`
+outside `:buy | :sell | nil`, an `:order_type` or `:status` outside its type, a
+`:time_in_force` outside `DpExchange.Core.Capabilities.time_in_force/0`, a `:legs` that is not
+`nil` or a list of `OrderLeg`. An unrecognised venue word is `nil`, never the nearest atom. And
+it refuses a status beside a `:filled_quantity` that contradicts it (when both are stated):
+`:filled` or `:partially_filled` with nothing filled; `:pending`, `:open` or `:partially_filled`
+with the whole positive quantity filled; `:filled` with less than the whole quantity filled (a
+cancel after a part fill is `:cancelled` with the figure in `:filled_quantity`). Conformance
+group 54 applies the same refusals to the orders and fills your Fake answers.
 
 ## Fail closed; never substitute
 
@@ -210,7 +220,9 @@ does not surface as a failure.
 If asked for a timeframe you do not serve, return an error. Do not serve the nearest width.
 `AdapterContract`'s assertion 21 checks this against your Fake: it picks a width from
 `Timeframe.nameable/0` your `capabilities().historical_timeframes` does not name and asks
-`get_historical_prices/4` for it, which must not answer `{:ok, _}`.
+`get_historical_prices/4` for it, which must answer exactly
+`{:error, {:unsupported_timeframe, width}}` with the width as given. `{:ok, _}` is the
+substitution; any other error, a refusal or a raise does not pass either.
 
 ## Timestamps are the venue's own
 
@@ -594,7 +606,8 @@ Two things it deliberately does **not** do:
   `credential_benefit` would. See `Capabilities`'s own moduledoc for the full argument.
 - It does **not** assert that your fake's refusal has the same *shape* as your real
   venue's (`{:error, {:missing_credentials, :your_venue}}` vs whatever your fake
-  returns) — only that it is not `{:ok, _}`. Matching shapes would need to call the real
+  returns) — only that it is neither `{:ok, _}` nor a raise, exit or throw. Matching shapes
+  would need to call the real
   venue with stripped credentials too, and that is a live network call this suite will
   not make on your behalf.
 
@@ -759,9 +772,12 @@ send with `runtime_id()`, not a literal atom.
 The behavioural half of "Fail closed; never substitute" above, run against your Fake.
 Assertion 21 picks a width from `Timeframe.nameable/0` that your own
 `capabilities().historical_timeframes` does not name, and calls `get_historical_prices/4`
-with it. The answer must not be `{:ok, _}` — your fake either errors on the unrecognised
-width or (if you gate on credentials first) refuses for that reason instead, either of
-which proves the width was never silently served at the nearest one you do have.
+with it, from the venue's own symbol and options. The answer must be exactly
+`{:error, {:unsupported_timeframe, width}}`, the width as given: `{:ok, _}` is the
+substitution, and **any other answer fails too** (a different error, a refusal, a raise, or a
+credential refusal that came first), because only that tag shows the width was refused for
+being unserved and not for some other reason. It used to pass any non-`{:ok, _}` answer, which
+a fake answering `{:error, :boom}` to every width satisfied without refusing anything.
 
 A venue that declares the *entire* `Timeframe.nameable/0` vocabulary has nothing left for
 this assertion to pick, and the check is a no-op for it — it is not a way to avoid the
@@ -866,6 +882,10 @@ to them (and, for 32, your real facade on the no-feed path). A callback you decl
   request your fake accepts, which assertion 31 already needs). Account options for the id
   checks come from `endpoint_opts:`; the id is also tried with none, since it must be
   refused first.
+- **Assertions 33 and 35 fail for a call you declare active and do not export.** The calls
+  (`get_price/2`, `get_top_of_book/2`, `get_order/3`, `cancel_order/3`) are required callbacks,
+  so a fake missing one was previously judged on the other and passed; it now fails naming the
+  call. A call declared `:unsupported` is still not asked.
 
 ## Assertions 36 to 39 — the market-data conventions, on your fake
 
@@ -883,9 +903,13 @@ Candles are asked for at `"1h"` if you declare it, else your first fixed-width t
   30 minutes and under and for daily and longer, and on a 30-minute grid for the widths in
   between (US equity sessions open at 09:30 ET). Then the suite re-asks from the fake's own
   bars: with two or more, `start:` the first bar's `opened_at` and `end:` the last's must
-  keep the first and drop the last; with one bar, `start:` alone must keep it and `end:` alone
-  must drop it. **A refused range is skipped, not failed** (a venue window may not reach the
-  fake's fixed clock), so give the fake a few bars if you want both bounds exercised.
+  keep the first and drop the last; with one bar, `start:` that bar and `end:` one width later
+  (`start:` alone for a width Core has no rule for) must keep it and `end:` alone must drop it.
+  **A range that must keep a bar and is refused fails** (`{:not_answered, answer}`): the ranges
+  come from the fake's own bars, so a window around them has data, and a fake that refuses
+  every range examined no bound. Only the ask that must drop the bar may be refused. A fake
+  whose fixed bar is older than the venue's own history window therefore needs a bar relative to
+  the clock, not a fixed date.
 - **38.** `get_order_book/2` with `depth: 1` returns at most one level per side, so the fake
   must honour `:depth`, not only validate it. Anything but a book is a failure, apart from
   the venue's own minimum, `{:error, {:invalid_option, :depth, v}}`: a fake that refuses

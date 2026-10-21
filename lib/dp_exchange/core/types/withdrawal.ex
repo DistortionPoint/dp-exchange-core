@@ -73,6 +73,11 @@ defmodule DpExchange.Core.Types.Withdrawal do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on an `:amount` of zero or less, a negative `:fee`, a `:status` outside the six
+  above (a venue's own word is the venue's news to map, never the nearest atom), and a
+  `:broadcast` withdrawal with no `:tx_id`: a withdrawal that claims a transaction it cannot
+  name has already moved money.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

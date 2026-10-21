@@ -19,7 +19,8 @@ defmodule DpExchange.Core.SourceSafetyCheck do
   `:erlang.binary_to_atom/2`) are all flagged. An argument that is a literal
   (`String.to_atom("ok")`) builds one fixed atom and is not. `Module.concat/1,2` composes module
   names (a tree's `<name>.Feed`), so it is flagged only where an argument is visibly built from
-  text: an interpolation, a `<>`, a `term["key"]` read or a `Map.get`/`Map.fetch`.
+  text: an interpolation, a `<>`, a `term["key"]` read, a `Map.get`/`Map.fetch`, or a call that
+  makes text (`String.*`, `to_string/1`, `inspect/1`, `Enum.join/2`, `Atom.to_string/1`).
 
   **`:erlang.binary_to_term/1` on bytes the package did not write leaks atoms, and can build
   funs.** `:erlang.binary_to_term(bin, [:safe])` refuses both, and is the only spelling
@@ -233,6 +234,21 @@ defmodule DpExchange.Core.SourceSafetyCheck do
 
   defp textual?({{:., _meta, [{:__aliases__, _alias, [:Map]}, function]}, _call, _args})
        when function in [:get, :fetch, :fetch!],
+       do: true
+
+  # A call that produces or reshapes text: `String.*`, `Atom.to_string/1`, `Enum.join/1,2`,
+  # `to_string/1` and `inspect/1,2`. `Module.concat(Foo, String.capitalize(channel))` is a module
+  # (so an atom) per distinct frame, exactly as `Module.concat(Foo, "x" <> channel)` is.
+  defp textual?({{:., _meta, [{:__aliases__, _alias, [:String]}, _function]}, _call, _args}),
+    do: true
+
+  defp textual?({{:., _meta, [{:__aliases__, _alias, [:Atom]}, :to_string]}, _call, _args}),
+    do: true
+
+  defp textual?({{:., _meta, [{:__aliases__, _alias, [:Enum]}, :join]}, _call, _args}), do: true
+
+  defp textual?({function, _meta, args})
+       when function in [:to_string, :inspect] and is_list(args),
        do: true
 
   defp textual?(list) when is_list(list), do: Enum.any?(list, &textual?/1)

@@ -12,6 +12,29 @@ defmodule DpExchange.Core.TimeframeTest do
       assert {:ok, 86_400} = Timeframe.seconds("1d")
     end
 
+    test "the whole table is pinned, so a wrong width cannot hide among the unpinned ones" do
+      expected = [
+        {"1m", 60},
+        {"5m", 300},
+        {"10m", 600},
+        {"15m", 900},
+        {"30m", 1_800},
+        {"1h", 3_600},
+        {"2h", 7_200},
+        {"4h", 14_400},
+        {"6h", 21_600},
+        {"12h", 43_200},
+        {"1d", 86_400}
+      ]
+
+      for {label, width} <- expected do
+        assert Timeframe.seconds(label) == {:ok, width}
+      end
+
+      assert Timeframe.known() == Enum.map(expected, &elem(&1, 0))
+      assert Timeframe.nameable() == Timeframe.known() ++ ~w(1w 1M 1y)
+    end
+
     test "10m is modelled — Schwab serves it, and 600 seconds is not ambiguous" do
       # Added when Schwab's /pricehistory turned out to serve a 10-minute candle.
       # Its absence here was not neutral: `aligned?/2` returns true for a width it

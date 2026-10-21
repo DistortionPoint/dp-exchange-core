@@ -38,6 +38,9 @@ defmodule DpExchange.Core.Types.NewsItem do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:symbols` that is not a proper list of non-blank strings. `nil` is "the
+  venue did not tag this item" and `[]` is "tagged, and nothing"; the two stay apart.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

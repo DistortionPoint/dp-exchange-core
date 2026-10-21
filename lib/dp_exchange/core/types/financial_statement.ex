@@ -59,6 +59,10 @@ defmodule DpExchange.Core.Types.FinancialStatement do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:kind` outside `:balance_sheet | :income | :cash_flow | :indicators |
+  :other`, on `:line_items` that is not a plain map (an empty map is legal: the venue sent no
+  lines), and on a `:period_end` that is not a `Date`.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

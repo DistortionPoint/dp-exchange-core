@@ -61,6 +61,11 @@ defmodule DpExchange.Core.Types.CorporateEvent do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:kind` outside `:dividend | :earnings | :split | :other`, on a date field that
+  is not a `Date` (a `DateTime` carries an instant these four do not have), on a `:details` that
+  is not a plain map, on a `:confirmed` that is not `true`, `false` or `nil` (`nil` is "the venue
+  did not say", never confirmed) and on an `:amount` that is not a number.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

@@ -29,6 +29,29 @@ defmodule DpExchange.Core.NoticeTest do
       at = ~U[2026-08-27 12:00:00Z]
       assert %Notice{at: ^at} = Notice.new(:link_up, :v, at: at)
     end
+
+    test "a provider that is not a venue atom or a name is refused" do
+      # A notice a consumer routes by provider, built with `nil`, a boolean, a number or a
+      # blank string, was a notice routed nowhere.
+      for bad <- [nil, true, false, "", 42, {:v}, %{}, ["v"]] do
+        error = assert_raise ArgumentError, fn -> Notice.new(:link_up, bad) end
+
+        assert error.message =~ "notice provider must be a venue atom or name"
+      end
+
+      assert %Notice{provider: :coinbase} = Notice.new(:link_up, :coinbase)
+      assert %Notice{provider: "polling-feed"} = Notice.new(:link_up, "polling-feed")
+    end
+
+    test "a time that is not a DateTime is refused, a NaiveDateTime included" do
+      naive = ~N[2026-08-27 12:00:00]
+
+      for bad <- [naive, ~D[2026-08-27], "2026-08-27T12:00:00Z", 1_700_000_000] do
+        error = assert_raise ArgumentError, fn -> Notice.new(:link_up, :v, at: bad) end
+
+        assert error.message =~ "notice :at must be a DateTime"
+      end
+    end
   end
 
   describe "the kind vocabulary is closed" do
@@ -85,8 +108,17 @@ defmodule DpExchange.Core.NoticeTest do
   # The canonical credential vocabulary, hardcoded here rather than read off the
   # module: `@credential_keys` is a private attribute, not a public surface to reach
   # into, the same reasoning the kind vocabulary above is exercised under.
+  #
+  # **All thirty-seven names `Notice` refuses**, not the first twelve it used to be tried
+  # with: the rest (`cb_access_sign`, `set_cookie`, `secret_access_key`, ...) could be removed
+  # from the vocabulary and every test here still passed.
   @credential_words ~w(api_key api_secret secret password passphrase token access_token
-                       refresh_token private_key signature authorization bearer)
+                       refresh_token private_key signature authorization bearer client_secret
+                       x_api_key app_secret signing_key cookie session_token id_token jwt
+                       secret_key api_passphrase api_token auth_token bearer_token
+                       private_key_pem cb_access_key cb_access_sign cb_access_passphrase
+                       x_signature x_auth_token proxy_authorization set_cookie access_key
+                       secret_access_key api_secret_key)
 
   defp mixed_case(word) do
     word
@@ -262,6 +294,22 @@ defmodule DpExchange.Core.NoticeTest do
       assert Notice.new(:catalog_change, :v).severity == :info
     end
 
+    test "every kind's default is the documented one" do
+      for kind <- [:link_down, :session_refresh_failed, :credentials_rejected] do
+        assert Notice.new(kind, :v).severity == :error
+      end
+
+      for kind <- [:link_reconnecting, :credentials_expiring, :rate_limited, :degraded] do
+        assert Notice.new(kind, :v).severity == :warning
+      end
+
+      assert Notice.new(:data_quality, :v).severity == :warning
+
+      for kind <- [:link_up, :link_recovered, :coverage_change, :catalog_change, :refusal] do
+        assert Notice.new(kind, :v).severity == :info
+      end
+    end
+
     test "a caller with better information overrides the default" do
       assert Notice.new(:catalog_change, :v, severity: :error).severity == :error
     end
@@ -332,6 +380,20 @@ defmodule DpExchange.Core.NoticeTest do
     test "a non-string reason is inspected" do
       notice = Notice.new(:data_quality, :webull, details: %{reason: {:tick, :undecodable}})
       assert notice.message == "webull data quality: {:tick, :undecodable}"
+    end
+
+    test "a long reason is cut to a line, as text and as an inspected term" do
+      long = String.duplicate("x", 5_000)
+
+      for reason <- [long, {:body, long}] do
+        notice = Notice.new(:link_down, :v, details: %{reason: reason})
+
+        # "v link down: " is 13 characters; the quoted reason is bounded at 1_024 either way.
+        assert String.length(notice.message) < 13 + 1_100
+        assert String.starts_with?(notice.message, "v link down: ")
+        # The reason itself is not altered, only its quotation in the message.
+        assert notice.details.reason == reason
+      end
     end
 
     test "without a reason, the provider and kind still say what happened" do

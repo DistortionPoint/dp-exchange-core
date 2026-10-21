@@ -55,6 +55,8 @@ defmodule DpExchange.Core.Types.StakingRate do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a negative `:rate_pct`, `:apy_pct` or `:deposit_limit_usd` (zero is legal).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

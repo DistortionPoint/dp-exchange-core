@@ -581,6 +581,14 @@ defmodule DpExchange.Core.Capabilities do
   @spec data_kinds() :: [data_kind()]
   def data_kinds, do: @data_kinds
 
+  @doc """
+  The time-in-force vocabulary: the atoms `supported_time_in_force` may name, and the only ones
+  `DpExchange.Core.Types.Order.new/1` accepts for an order's `:time_in_force`. One list for both,
+  so a venue cannot declare a duration the order it then returns is unable to carry.
+  """
+  @spec time_in_force() :: [atom()]
+  def time_in_force, do: @time_in_force
+
   # --- validations -------------------------------------------------------
 
   defp validate_endpoints!(%__MODULE__{endpoints: endpoints}) when is_map(endpoints) do
@@ -846,7 +854,8 @@ defmodule DpExchange.Core.Capabilities do
     :ok
   end
 
-  #  is `non_neg_integer` rather than `pos_integer`, and the zero is deliberate.
+  # A ceiling's `:limit` is `non_neg_integer` rather than `pos_integer`, and the zero is
+  # deliberate.
   # Schwab registers applications with an order throughput anywhere in `0..120` per
   # minute, and **zero is a legal registration**. It is not the same as `:unsupported`:
   # the endpoint exists and the venue serves it — this application cannot use it. A

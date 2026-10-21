@@ -70,6 +70,9 @@ defmodule DpExchange.Core.Types.StakingBalance do
   `%{}`, the struct's own default, per this module's "`:by_provider` defaults to `%{}`"
   section above — "the venue does not break the position down" is not a caller mistake to
   raise on.
+
+  Also raises on a negative `:staked`, `:available_to_trade` or `:available_for_withdrawal`
+  (zero is legal), and on a `:by_provider` holding a value that is not a number.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

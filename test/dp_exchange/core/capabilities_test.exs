@@ -207,6 +207,20 @@ defmodule DpExchange.Core.CapabilitiesTest do
       end
     end
 
+    test "a time in force outside the vocabulary is refused, and the vocabulary is public" do
+      assert_raise ArgumentError, ~r/supported_time_in_force/, fn ->
+        caps(supported_time_in_force: [:gtc, :forever])
+      end
+
+      # The one list `Order.new/1` checks a `:time_in_force` against, so a declaration and an
+      # order cannot disagree about what a time in force is.
+      assert Capabilities.time_in_force() == [:gtc, :ioc, :fok, :gtd, :day, :gfw, :gfm]
+
+      for tif <- Capabilities.time_in_force() do
+        assert caps(supported_time_in_force: [tif]).supported_time_in_force == [tif]
+      end
+    end
+
     test "the four equity order types Core learned from Schwab are accepted" do
       # These are real order types Schwab serves and Core had no word for, so a venue
       # serving them had to under-declare — safe, and still a lie about the venue.

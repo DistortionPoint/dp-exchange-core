@@ -46,6 +46,10 @@ defmodule DpExchange.Core.Types.OptionChain do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on `:expiries` that is not a map of `Date` to a map of `Decimal` strike to row
+  (a string key sorts wrongly or raises in `expiry_dates/1` and `strikes/2`, in the consumer's
+  process, far from the decode), and on an `:underlying_price` that is not a number.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

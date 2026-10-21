@@ -131,5 +131,18 @@ defmodule DpExchange.Core.InstrumentTest do
       assert :unknown = Instrument.status_from("halted_pending_news")
       assert :unknown = Instrument.status_from(nil)
     end
+
+    test "the venue's case does not change the reading, and a non-string is never one" do
+      assert :tradable = Instrument.status_from("ONLINE")
+      assert :tradable = Instrument.status_from("Limit_Only")
+      assert :delisted = Instrument.status_from("Delisted")
+      assert :delisted = Instrument.status_from("OFFLINE")
+      assert :perp = Instrument.instrument_from("SWAP")
+
+      # An atom is not the venue's string: `:online` is no evidence of anything.
+      assert :unknown = Instrument.status_from(:online)
+      assert :unknown = Instrument.status_from(1)
+      assert :unknown = Instrument.status_from("")
+    end
   end
 end

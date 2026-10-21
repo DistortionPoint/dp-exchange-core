@@ -43,11 +43,37 @@ defmodule DpExchange.Core.Types.ConversionTest do
     end
   end
 
-  describe "status" do
-    test "a quote is not a conversion that happened" do
+  describe "new/1 status and values" do
+    @attrs [id: "q-1", from_asset: "USD", to_asset: "BTC", provider: :reference]
+
+    test "every documented status builds, and a quote is not coerced into a conversion" do
       # :quoted means a rate is held and nothing has moved. Reporting it as complete would
-      # report an intention as a fact.
-      assert conversion(nil).status == :quoted
+      # report an intention as a fact, so the constructor must hand back the status it was given.
+      for status <- [:quoted, :committed, :settled, :expired, :failed, :cancelled] do
+        assert %Conversion{status: ^status} = Conversion.new([status: status] ++ @attrs)
+      end
+    end
+
+    test "a status outside the six is refused, whatever it resembles" do
+      for bad <- [:complete, :pending, "quoted", "settled", nil] do
+        assert_raise ArgumentError, ~r/status/, fn -> Conversion.new([status: bad] ++ @attrs) end
+      end
+    end
+
+    test "a rate of zero or less and a negative amount are refused, zero amounts are legal" do
+      base = [status: :quoted] ++ @attrs
+
+      for bad <- [Decimal.new(0), Decimal.new("-1.5")] do
+        assert_raise ArgumentError, ~r/rate/, fn -> Conversion.new([rate: bad] ++ base) end
+      end
+
+      for field <- [:from_amount, :to_amount] do
+        assert_raise ArgumentError, ~r/#{field}/, fn ->
+          Conversion.new([{field, Decimal.new("-1")}] ++ base)
+        end
+
+        assert %Conversion{} = Conversion.new([{field, Decimal.new(0)}] ++ base)
+      end
     end
   end
 end

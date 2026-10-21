@@ -88,6 +88,11 @@ defmodule DpExchange.Core.Types.OptionContract do
   Also raises on a `:right` that is not `:call` or `:put`. `right: "call"` or `:CALL` built
   fine and then matched neither clause of `in_the_money?/2`, which raised in the consumer's
   process far from the decode that produced it.
+
+  A `:strike` or `:multiplier` of zero or less raises (both are above zero), an `:expiry` or
+  `:last_trading_day` that is not a `Date` raises, and so does an `:index_option`, `:mini` or
+  `:non_standard` that is not `true`, `false` or `nil`: `nil` is "the venue did not say", and
+  is never read as `false`.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

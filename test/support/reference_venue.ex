@@ -793,10 +793,21 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def cancel_order(credentials, id, opts) do
-    with {:ok, order} <- get_order(credentials, id, opts) do
+    # Only a working order is cancelled. A filled, cancelled, rejected or expired one is final:
+    # answering `{:ok, order}` for it would report a cancel that did not happen (a filled order
+    # told "cancelled" is a position the caller believes it does not hold), and overwriting its
+    # status would turn a terminal state into another one.
+    with {:ok, order} <- get_order(credentials, id, opts),
+         :ok <- working(order, :order_not_cancellable) do
       {:ok, remember_order(%{order | status: :cancelled})}
     end
   end
+
+  # The statuses of an order that is still live. Everything else is terminal and stays so.
+  @working [:pending, :open, :partially_filled]
+
+  defp working(%Types.Order{status: status}, _reason) when status in @working, do: :ok
+  defp working(%Types.Order{status: status}, reason), do: {:refused, {reason, status}}
 
   # The reference venue implements both, because it exists to be a complete facade — a
   # venue that genuinely has neither returns `Venue.not_supported()` and declares
@@ -818,7 +829,10 @@ defmodule DpExchange.Core.ReferenceVenue do
     # options; the order must be one this process placed.
     with :ok <- check_order_id(id),
          {:ok, _plan} <- plan_changes(changes),
-         {:ok, order} <- get_order(credentials, id, opts) do
+         {:ok, order} <- get_order(credentials, id, opts),
+         :ok <- working(order, :order_not_replaceable) do
+      # A terminal order is refused above, never re-opened: this used to set `:open` on a
+      # cancelled order, which is a terminal state becoming a live one.
       {:ok, remember_order(%{order | status: :open})}
     end
   end
@@ -1263,7 +1277,26 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_trade_history(_credentials, opts) do
-    with :ok <- check_options(opts), do: {:ok, []}
+    # One fill, so the answer is something group 54 can judge and a consumer's test can read:
+    # an empty list is a success that proves nothing about the `Fill` a venue returns.
+    with :ok <- check_options(opts) do
+      {:ok,
+       [
+         %Types.Fill{
+           order_id: "ref-order-1",
+           trade_id: "ref-fill-1",
+           symbol: "BTC-USD",
+           side: :buy,
+           quantity: Decimal.new("0.5"),
+           price: Decimal.new("42000.50"),
+           fee: Decimal.new("10.50"),
+           fee_currency: "USD",
+           timestamp: ~U[2026-08-27 12:00:00Z],
+           liquidity: :taker,
+           provider: runtime_id()
+         }
+       ]}
+    end
   end
 
   # --- streaming ---------------------------------------------------------

@@ -48,6 +48,9 @@ defmodule DpExchange.Core.Types.Portfolio do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:deleted` that is not `true`, `false` or `nil` (`nil` is "the venue did not
+  say", and is never read as live).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

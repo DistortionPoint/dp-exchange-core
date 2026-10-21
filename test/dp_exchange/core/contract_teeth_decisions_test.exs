@@ -303,7 +303,7 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
   use ExUnit.Case, async: true
 
   alias DpExchange.Core.{AdapterContract, Capabilities, Notice, ReferenceVenue}
-  alias DpExchange.Core.Types.{Balance, OrderBook, TopOfBook}
+  alias DpExchange.Core.Types.{Balance, Fill, Order, OrderBook, TopOfBook}
   alias DpExchange.Core.Types.Quote, as: Q
 
   defp d(text), do: Decimal.new(text)
@@ -507,6 +507,30 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
       assert AdapterContract.answer_type_fault({:error, :nope}, [Balance]) == nil
       assert AdapterContract.answer_type_fault({:refused, :not_listed}, [Balance]) == nil
       assert AdapterContract.answer_type_fault(:ok, [Balance]) == nil
+    end
+
+    test "a bare value as the success is named: nil, a number, text, an atom or a tuple" do
+      # These all reached the final clause and counted as conforming, so a fake answering
+      # `{:ok, nil}` for `get_order/3` passed the group named for return types.
+      for bare <- [nil, 5, "text", :accepted, {:order, 1}, 1.5, true, self()] do
+        fault = AdapterContract.answer_type_fault({:ok, bare}, [Balance])
+
+        assert is_binary(fault)
+        assert fault =~ "a bare value"
+      end
+    end
+
+    test "the one bare value a struct-typed callback allows is :cancelled, and only that" do
+      assert AdapterContract.answer_type_fault({:ok, :cancelled}, [Order]) == nil
+      assert AdapterContract.answer_type_fault({:ok, :canceled}, [Order]) =~ ":canceled"
+    end
+
+    test "the promised callbacks include the order calls, so those are the ones this guards" do
+      promised = AdapterContract.promised_types()
+
+      assert promised[{:get_order, 3}] == [Order]
+      assert promised[{:cancel_order, 3}] == [Order]
+      assert promised[{:place_order, 3}] == [Order]
     end
   end
 
@@ -1368,6 +1392,222 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
 
       assert length(faults) == 10
       assert Enum.all?(faults, &match?({:place_order, 3, _expected, :raised}, &1))
+    end
+  end
+
+  defp literal_order(overrides \\ []) do
+    struct!(
+      Order,
+      Keyword.merge(
+        [
+          id: "o-1",
+          symbol: "BTC-USD",
+          side: :buy,
+          order_type: :limit,
+          quantity: d("2"),
+          status: :open,
+          provider: :teeth
+        ],
+        overrides
+      )
+    )
+  end
+
+  defp literal_fill(overrides \\ []) do
+    struct!(
+      Fill,
+      Keyword.merge(
+        [
+          order_id: "o-1",
+          symbol: "BTC-USD",
+          side: :buy,
+          quantity: d("1"),
+          price: d("100"),
+          timestamp: @now,
+          provider: :teeth
+        ],
+        overrides
+      )
+    )
+  end
+
+  describe "assertion 54: an Order or Fill a fake answers is one its constructor builds" do
+    test "a conforming order, fill, list and success tuple are not faulted" do
+      order = literal_order()
+      fill = literal_fill()
+
+      assert AdapterContract.order_value_fault(order) == nil
+      assert AdapterContract.order_value_fault(fill) == nil
+      assert AdapterContract.order_value_fault({:ok, order}) == nil
+      assert AdapterContract.order_value_fault({:ok, [order, fill]}) == nil
+      assert AdapterContract.order_value_fault([]) == nil
+
+      # The venue's silence stays silence: a cancel acknowledgement with an id and nothing else.
+      ack = literal_order(symbol: nil, side: nil, order_type: nil, quantity: nil, status: nil)
+      assert AdapterContract.order_value_fault(ack) == nil
+    end
+
+    test "a status outside the vocabulary, a wrong spelling of a side or a type is named" do
+      for {field, bad} <- [
+            status: :canceled,
+            status: "open",
+            side: "buy",
+            side: :long,
+            order_type: :LIMIT,
+            time_in_force: :GTC,
+            time_in_force: "gtc"
+          ] do
+        assert {:order, message} =
+                 AdapterContract.order_value_fault(literal_order([{field, bad}]))
+
+        assert message =~ inspect(field)
+      end
+    end
+
+    test "a status that contradicts the filled quantity is named, as a struct literal skips new/1" do
+      filled_nothing = literal_order(status: :filled, filled_quantity: d("0"))
+
+      assert {:order, message} = AdapterContract.order_value_fault(filled_nothing)
+      assert message =~ "contradicts"
+      assert message =~ "nothing is filled"
+
+      open_but_full = literal_order(status: :open, filled_quantity: d("2"))
+      assert {:order, message} = AdapterContract.order_value_fault(open_but_full)
+      assert message =~ "the whole quantity is filled"
+
+      part_filled = literal_order(status: :filled, filled_quantity: d("1"))
+      assert {:order, message} = AdapterContract.order_value_fault(part_filled)
+      assert message =~ "only part of the quantity is filled"
+    end
+
+    test "a negative size, a float and a leg that is not an OrderLeg are named" do
+      assert {:order, negative} = AdapterContract.order_value_fault(literal_order(quantity: -1))
+      assert negative =~ "never negative"
+
+      assert {:order, float} = AdapterContract.order_value_fault(literal_order(price: 1.5))
+      assert float =~ "float"
+
+      assert {:order, legs} = AdapterContract.order_value_fault(literal_order(legs: [%{}]))
+      assert legs =~ "OrderLeg"
+    end
+
+    test "a fill at a price of zero, or on a side that is not buy or sell, is named" do
+      assert {:fill, price} = AdapterContract.order_value_fault(literal_fill(price: d("0")))
+      assert price =~ "above zero"
+
+      assert {:fill, side} = AdapterContract.order_value_fault(literal_fill(side: :long))
+      assert side =~ ":side"
+
+      assert {:fill, liquidity} =
+               AdapterContract.order_value_fault(literal_fill(liquidity: "maker"))
+
+      assert liquidity =~ ":liquidity"
+    end
+
+    test "the first fault in a list is the one named, and the kind says which type it is" do
+      bad_fill = literal_fill(price: d("-1"))
+      bad_order = literal_order(side: "buy")
+
+      assert {:fill, _message} =
+               AdapterContract.order_value_fault({:ok, [literal_order(), bad_fill, bad_order]})
+
+      assert {:order, _message} =
+               AdapterContract.order_value_fault([literal_order(), bad_order, bad_fill])
+    end
+
+    test "what is not an Order or Fill is not judged: a refusal, a map, :cancelled, nil" do
+      for other <- [
+            {:error, :not_supported},
+            {:refused, :not_found},
+            {:ok, :cancelled},
+            {:ok, %{"order_id" => "1"}},
+            %{status: :canceled},
+            :ok,
+            nil
+          ] do
+        assert AdapterContract.order_value_fault(other) == nil
+      end
+    end
+
+    test "the examined count is the structs judged, and refusals and empty lists are none" do
+      order = literal_order()
+      fill = literal_fill()
+
+      assert AdapterContract.order_values_examined(order) == 1
+      assert AdapterContract.order_values_examined(fill) == 1
+      assert AdapterContract.order_values_examined({:ok, order}) == 1
+      assert AdapterContract.order_values_examined({:ok, [order, fill, order]}) == 3
+      assert AdapterContract.order_values_examined([{:ok, order}, {:error, :x}, %{}]) == 1
+
+      for none <- [{:ok, []}, [], {:error, :x}, {:refused, :not_found}, {:ok, :cancelled}, nil] do
+        assert AdapterContract.order_values_examined(none) == 0
+      end
+    end
+
+    test "every order and fill the reference venue answers is one its constructor builds" do
+      request = %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+
+      assert {:ok, %Order{id: id}} = placed = ReferenceVenue.place_order(%{}, request, [])
+      fetched = ReferenceVenue.get_order(%{}, id, [])
+      listed = ReferenceVenue.get_orders(%{}, [])
+      fills = ReferenceVenue.get_trade_history(%{}, [])
+      cancelled = ReferenceVenue.cancel_order(%{}, id, [])
+      closed = ReferenceVenue.close_position(%{}, "BTC-USD", [])
+
+      answers = [placed, fetched, listed, fills, cancelled, closed]
+
+      for answer <- answers do
+        assert AdapterContract.order_value_fault(answer) == nil
+      end
+
+      # Each answered something judged: the fills list is no longer an empty success.
+      assert {:ok, [%Fill{}]} = fills
+      assert Enum.all?(answers, &(AdapterContract.order_values_examined(&1) >= 1))
+    end
+  end
+
+  describe "the reference venue keeps a terminal order terminal" do
+    @placed %{symbol: "BTC-USD", side: :buy, order_type: :limit, quantity: "1", price: "1"}
+
+    test "a second cancel is refused with the status, and changes nothing" do
+      assert {:ok, %Order{id: id}} = ReferenceVenue.place_order(%{}, @placed, [])
+
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.cancel_order(%{}, id, [])
+
+      assert ReferenceVenue.cancel_order(%{}, id, []) ==
+               {:refused, {:order_not_cancellable, :cancelled}}
+
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.get_order(%{}, id, [])
+    end
+
+    test "a cancelled order is not replaced back to open" do
+      assert {:ok, %Order{id: id}} = ReferenceVenue.place_order(%{}, @placed, [])
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.cancel_order(%{}, id, [])
+
+      assert ReferenceVenue.replace_order(%{}, id, %{price: "2"}, []) ==
+               {:refused, {:order_not_replaceable, :cancelled}}
+
+      # Still cancelled: the refused replace did not re-open it.
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.get_order(%{}, id, [])
+    end
+
+    test "a working order is replaced, stays working, and can still be cancelled" do
+      assert {:ok, %Order{id: id}} = ReferenceVenue.place_order(%{}, @placed, [])
+
+      assert {:ok, %Order{id: ^id, status: :open}} =
+               ReferenceVenue.replace_order(%{}, id, %{price: "2"}, [])
+
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.cancel_order(%{}, id, [])
+    end
+
+    test "a closing order is working until it is cancelled, and final after" do
+      assert {:ok, %Order{id: id, status: :pending}} =
+               ReferenceVenue.close_position(%{}, "BTC-USD", [])
+
+      assert {:ok, %Order{status: :cancelled}} = ReferenceVenue.cancel_order(%{}, id, [])
+
+      assert {:refused, {:order_not_cancellable, :cancelled}} =
+               ReferenceVenue.cancel_order(%{}, id, [])
     end
   end
 

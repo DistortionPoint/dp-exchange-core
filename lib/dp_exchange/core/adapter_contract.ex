@@ -62,7 +62,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Fifty-three groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifty-four groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -254,7 +254,13 @@ defmodule DpExchange.Core.AdapterContract do
       {53,
        "source safety — the package's own source builds no atom from text, calls no " <>
          "binary_to_term without [:safe], reads no compile_env, and reads the environment " <>
-         "nowhere but config/runtime.exs; the scan refuses to examine nothing"}
+         "nowhere but config/runtime.exs; the scan refuses to examine nothing"},
+      {54,
+       "order and fill values — every Order and Fill the fake answers to place_order/3, " <>
+         "get_order/3, get_orders/2, get_trade_history/2 and cancel_order/3 is one its own " <>
+         "new/1 builds: side, type, status and time in force inside the vocabulary, a status " <>
+         "that agrees with the filled quantity, and at least one examined when place_order/3 " <>
+         "is active"}
     ]
   end
 
@@ -539,16 +545,22 @@ defmodule DpExchange.Core.AdapterContract do
   end
 
   @doc """
-  What is wrong with a call's answer to a timeframe the venue does not declare, or `nil`.
-  Assertion 21.
+  What is wrong with a call's answer to `width`, a timeframe the venue does not declare, or
+  `nil`. Assertion 21.
 
-  `:substituted` is `{:ok, _}`: the venue served the width it has in place of the one asked
-  for, a missing granularity becoming the closest one, which mislabels every candle it
-  touches. A refusal, an error and a raise are not this check's business.
+  The answer must be exactly `{:error, {:unsupported_timeframe, width}}`, the width as given
+  (`DpExchange.Core.Venue.get_historical_prices/4`). `:substituted` is `{:ok, _}`: the venue
+  served the width it has in place of the one asked for, a missing granularity becoming the
+  closest one, which mislabels every candle it touches. `{:wrong_answer, answer}` is any other
+  answer: a different error, a refusal, a raise, or the tag with another value. It used to be
+  `nil` for all of them, so a fake that answered `{:error, :boom}` to every width it was asked
+  for passed a group documented as "refused, never served at the nearest width"; the refusal
+  was assumed, not seen.
   """
-  @spec timeframe_fault(term()) :: nil | :substituted
-  def timeframe_fault({:ok, _candles}), do: :substituted
-  def timeframe_fault(_answer), do: nil
+  @spec timeframe_fault(term(), String.t()) :: nil | :substituted | {:wrong_answer, term()}
+  def timeframe_fault({:error, {:unsupported_timeframe, width}}, width), do: nil
+  def timeframe_fault({:ok, _candles}, _width), do: :substituted
+  def timeframe_fault(answer, _width), do: {:wrong_answer, answer}
 
   # --- the family conventions (assertions 32-35) ---------------------------------------
   #
@@ -593,6 +605,33 @@ defmodule DpExchange.Core.AdapterContract do
 
       function_exported?(module, name, arity) and
         DpExchange.Core.Capabilities.active?(caps, {name, arity})
+    end)
+  end
+
+  @doc """
+  The `{name, arity}` of each call in `cases` that `caps` declares active and `module` does not
+  export, in the order first met.
+
+  `eligible_cases/3` drops such a case without a word, so a fake missing one of two calls was
+  judged on the other and passed. Used by assertions 33 and 35, whose calls
+  (`get_price/2`, `get_top_of_book/2`, `get_order/3`, `cancel_order/3`) are required
+  `Core.Venue` callbacks, so a declaration of one active with no export behind it is a fake that
+  cannot be asked, not a call the venue does not serve.
+  """
+  @spec unexported_calls(
+          module(),
+          DpExchange.Core.Capabilities.t(),
+          [{atom(), list(), term()}]
+        ) :: [{atom(), arity()}]
+  def unexported_calls(module, %DpExchange.Core.Capabilities{} = caps, cases) do
+    Code.ensure_loaded(module)
+
+    cases
+    |> Enum.map(fn {name, args, _expected} -> {name, length(args)} end)
+    |> Enum.uniq()
+    |> Enum.filter(fn {name, arity} ->
+      DpExchange.Core.Capabilities.active?(caps, {name, arity}) and
+        not function_exported?(module, name, arity)
     end)
   end
 
@@ -1016,15 +1055,32 @@ defmodule DpExchange.Core.AdapterContract do
   bars (oldest first). Two or more bars: `start` the first bar's `opened_at` and `end` the last
   one's, which must keep the first and drop the last. One bar: `start` alone (keeps it) and
   `end` alone (drops it). None: nothing to ask.
+
+  With `timeframe` given and a fixed width, the one-bar ask that must keep the bar is
+  `start:` the bar and `end:` one width later, not `start:` alone. A `start:` with no `end:` runs
+  to the venue's "now", and a venue that bounds a window by its width (Coinbase's 350 buckets)
+  refuses a fake's old fixed bar for being too far back, which is a refusal about the clock the
+  fake was written against and not about the range. A width Core has no rule for (`1w`) keeps
+  `start:` alone.
   """
-  @spec candle_range_probes([struct()]) :: [{keyword(), [DateTime.t()]}]
-  def candle_range_probes([]), do: []
+  @spec candle_range_probes([struct()], String.t() | nil) :: [{keyword(), [DateTime.t()]}]
+  def candle_range_probes(candles, timeframe \\ nil)
 
-  def candle_range_probes([only]),
-    do: [{[start: only.opened_at], [only.opened_at]}, {[end: only.opened_at], []}]
+  def candle_range_probes([], _timeframe), do: []
 
-  def candle_range_probes([first | rest]) do
+  def candle_range_probes([only], timeframe) do
+    [{keep_one_range(only.opened_at, timeframe), [only.opened_at]}, {[end: only.opened_at], []}]
+  end
+
+  def candle_range_probes([first | rest], _timeframe) do
     [{[start: first.opened_at, end: List.last(rest).opened_at], [first.opened_at]}]
+  end
+
+  defp keep_one_range(at, timeframe) do
+    case timeframe && DpExchange.Core.Timeframe.seconds(timeframe) do
+      {:ok, width} -> [start: at, end: DateTime.add(at, width, :second)]
+      _no_fixed_width -> [start: at]
+    end
   end
 
   @doc """
@@ -1032,11 +1088,15 @@ defmodule DpExchange.Core.AdapterContract do
   `opened_at`: `{:outside_range, opened_at}` for a bar outside `range`, `{:missing,
   opened_at}` for one of `must_include` that was dropped.
 
-  An answer that is not `{:ok, candles}` is `nil`: a venue may refuse a range its window cannot
-  reach, and a refusal is not evidence about the bounds.
+  **A range chosen to keep a bar must be answered.** The ranges come from the fake's own bars, so
+  a window around them is one the venue has data for, and an answer that is not `{:ok, list}` is
+  `{:not_answered, answer}`: a fake refusing every range it was asked passed this group for
+  having examined no bound. When `must_include` is empty (the ask that must drop the bar) a
+  refusal stays `nil`: a venue may decline a window with nothing in it, and a refusal there says
+  nothing about the bounds.
   """
   @spec range_fault(keyword(), term(), [DateTime.t()]) ::
-          nil | {:outside_range | :missing, DateTime.t()}
+          nil | {:outside_range | :missing | :not_answered, term()}
   def range_fault(range, {:ok, candles}, must_include) when is_list(candles) do
     times = Enum.map(candles, & &1.opened_at)
 
@@ -1046,7 +1106,8 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
-  def range_fault(_range, _answer, _must_include), do: nil
+  def range_fault(_range, _answer, []), do: nil
+  def range_fault(_range, answer, _must_include), do: {:not_answered, answer}
 
   defp missing_fault(times, must_include) do
     Enum.find_value(must_include, fn wanted ->
@@ -1405,6 +1466,56 @@ defmodule DpExchange.Core.AdapterContract do
   def unknown_id_fault(answer), do: {:wrong_answer, answer}
 
   @doc """
+  What is wrong with an `Order` or `Fill` a fake answered, or `nil`. Assertion 54.
+
+  `answer` is a struct, a list of them, or `{:ok, either}`; anything else (a refusal, `:ok`, a
+  map) is not judged. Each struct is rebuilt through its own `new/1` (`Types.Order.new/1`,
+  `Types.Fill.new/1`), so a fake's order is held to everything the type refuses: a side, type,
+  status or time in force outside the vocabulary, a status beside a fill figure that
+  contradicts it, a negative size, a float, a leg that is not an `OrderLeg`. The fault is
+  `{:order, message}` or `{:fill, message}`, the constructor's own `ArgumentError` message.
+
+  Groups 5 and 31 judge only that a success is an `Order` and that its id is accepted back; a
+  fake that answered `%Order{status: :filled, filled_quantity: 0}` or `side: "buy"` passed
+  both. Every venue in the family builds its orders as struct literals, which skips the
+  constructor, so this is the only place the constructor's refusals reach a venue's Fake.
+  """
+  @spec order_value_fault(term()) :: nil | {:order | :fill, String.t()}
+  def order_value_fault({:ok, value}), do: order_value_fault(value)
+
+  def order_value_fault(values) when is_list(values),
+    do: Enum.find_value(values, &order_value_fault/1)
+
+  def order_value_fault(%DpExchange.Core.Types.Order{} = order), do: rebuild_fault(:order, order)
+  def order_value_fault(%DpExchange.Core.Types.Fill{} = fill), do: rebuild_fault(:fill, fill)
+  def order_value_fault(_other), do: nil
+
+  defp rebuild_fault(kind, %module{} = value) do
+    value |> Map.from_struct() |> module.new()
+    nil
+  rescue
+    error in ArgumentError -> {kind, Exception.message(error)}
+  end
+
+  @doc """
+  How many `Order` and `Fill` structs `answer` holds (a struct, a list of them, or
+  `{:ok, either}`), the number assertion 54 actually judged.
+
+  A group over a fake that refused every call, or answered `{:ok, []}` everywhere, judged
+  nothing and must not read as a pass; assertion 54 requires at least one when
+  `place_order/3` is active.
+  """
+  @spec order_values_examined(term()) :: non_neg_integer()
+  def order_values_examined({:ok, value}), do: order_values_examined(value)
+
+  def order_values_examined(values) when is_list(values),
+    do: values |> Enum.map(&order_values_examined/1) |> Enum.sum()
+
+  def order_values_examined(%DpExchange.Core.Types.Order{}), do: 1
+  def order_values_examined(%DpExchange.Core.Types.Fill{}), do: 1
+  def order_values_examined(_other), do: 0
+
+  @doc """
   What is wrong with a no-request call's answer to `timeout: 5_000`, or `nil`. Assertion 46.
 
   `subscribe_notices/1` sends no HTTP request, so a transport key there is
@@ -1542,7 +1653,9 @@ defmodule DpExchange.Core.AdapterContract do
   success hold the `Core.Types` struct (one of `modules`) its callback promises?
 
   Returns a short description of the offence: a struct of another module, a raw map, a list
-  holding something else, or a raise. A refusal or an error is not a success and is not judged.
+  holding something else, a bare value (`{:ok, nil}`, `{:ok, 5}`; only `{:ok, :cancelled}` is
+  allowed, as `cancel_order/3` types it) or a raise. A refusal or an error is not a success and
+  is not judged.
   """
   @spec answer_type_fault(term(), [module()]) :: nil | String.t()
   def answer_type_fault({:ok, %module{}}, modules),
@@ -1557,6 +1670,17 @@ defmodule DpExchange.Core.AdapterContract do
 
   def answer_type_fault({:ok, %{} = raw}, _modules),
     do: "a raw map #{raw |> inspect() |> String.slice(0, 60)}"
+
+  # `cancel_order/3` is typed `Types.Order.t() | :cancelled`, and a venue whose cancel answer
+  # carries no order says `:cancelled` (`Core.Venue.cancel_order/3`). It is the one bare value a
+  # callback with a struct in its success type allows.
+  def answer_type_fault({:ok, :cancelled}, _modules), do: nil
+
+  # Any other bare value, `nil` and `{:ok, 5}` and `{:ok, "text"}` included, is not a struct of
+  # the promised kind either. These used to reach the final clause and count as conforming, so a
+  # fake that answered `{:ok, nil}` for `get_order/3` passed the group named for return types.
+  def answer_type_fault({:ok, other}, _modules),
+    do: "a bare value #{other |> inspect() |> String.slice(0, 60)}"
 
   # A fake that raised did not answer, and counted as conforming: a fake crashing on every
   # endpoint passed this group.
@@ -2401,6 +2525,8 @@ defmodule DpExchange.Core.AdapterContract do
       process_redaction(),
       order_value_refusals(),
       source_safety(),
+      order_values(),
+      order_value_helpers(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -4278,9 +4404,13 @@ defmodule DpExchange.Core.AdapterContract do
                     arg_value(:opts, {:get_historical_prices, 4})
                   ])
 
-                assert DpExchange.Core.AdapterContract.timeframe_fault(result) == nil,
-                       "get_historical_prices/4 answered {:ok, _} for #{inspect(unserved)}, " <>
-                         "a width capabilities().historical_timeframes does not name — a " <>
+                fault = DpExchange.Core.AdapterContract.timeframe_fault(result, unserved)
+
+                assert fault == nil,
+                       "get_historical_prices/4 for #{inspect(unserved)}, a width " <>
+                         "capabilities().historical_timeframes does not name, must answer " <>
+                         "{:error, {:unsupported_timeframe, #{inspect(unserved)}}}; got " <>
+                         "#{inspect(result, limit: 8)} (#{inspect(fault, limit: 4)}). A " <>
                          "missing granularity becoming the closest one mislabels every " <>
                          "candle it touches"
             end
@@ -4675,7 +4805,8 @@ defmodule DpExchange.Core.AdapterContract do
                 &stripped_arg_value(:opts, {&1, 2})
               )
 
-            assert_conventions(@fake, cases, "the fake's single-symbol reads", false)
+            assert_calls_exported(@fake, cases, "the fake's single-symbol reads")
+            assert_conventions(@fake, cases, "the fake's single-symbol reads", true)
           end
         end
       end
@@ -4731,7 +4862,8 @@ defmodule DpExchange.Core.AdapterContract do
                 Enum.uniq([stripped_arg_value(:opts, {name, 3}), [credentials: %{}]])
               end)
 
-            assert_conventions(@fake, cases, "the fake's order id reads", false)
+            assert_calls_exported(@fake, cases, "the fake's order id reads")
+            assert_conventions(@fake, cases, "the fake's order id reads", true)
           end
         end
       end
@@ -4767,7 +4899,9 @@ defmodule DpExchange.Core.AdapterContract do
     quote location: :keep do
       describe "37. candles are oldest first, on their grid, and a range is [start, end)" do
         # MD2 and MD3. The range is chosen from the fake's own bars, so a venue is never asked
-        # for a window it has no data in; a refused range is not evidence and is skipped.
+        # for a window it has no data in: a range that must keep a bar and is refused fails (a
+        # fake refusing every range examined no bound). The range that must drop the bar may be
+        # refused, which says nothing about the bounds.
         test "the fake's candles and the ranges re-asked from them" do
           caps = @venue.capabilities()
           timeframe = DpExchange.Core.AdapterContract.probe_timeframe(caps)
@@ -4821,7 +4955,7 @@ defmodule DpExchange.Core.AdapterContract do
                  "#{timeframe} (Core.Timeframe.aligned?/2; a session-traded venue needs " <>
                  "30-minute alignment for a wider intraday width). Got #{inspect(fault)}"
 
-        probes = DpExchange.Core.AdapterContract.candle_range_probes(candles)
+        probes = DpExchange.Core.AdapterContract.candle_range_probes(candles, timeframe)
         for {range, must} <- probes, do: assert_range_kept(timeframe, range, must)
       end
 
@@ -4830,7 +4964,8 @@ defmodule DpExchange.Core.AdapterContract do
         fault = DpExchange.Core.AdapterContract.range_fault(range, answer, must_include)
 
         assert fault == nil,
-               "a range is `:start` inclusive and `:end` exclusive on opened_at. Asked " <>
+               "a range is `:start` inclusive and `:end` exclusive on opened_at, and a range " <>
+                 "around the fake's own bars must be answered, not refused. Asked " <>
                  "#{inspect(range)}, got #{inspect(fault)}"
       end
     end
@@ -5191,6 +5326,97 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # --- 54. the orders and fills a fake answers are values their own constructors build -----
+  #
+  # Groups 5 and 31 hold that an order call answers an `Order` and that its id is accepted
+  # back; neither looks inside. Every venue in this family builds its orders as struct literals
+  # (`%Order{...}`), which skips `Order.new/1`, so a status outside the vocabulary, a
+  # `:filled` beside a filled quantity of zero or a `"buy"` side reached a consumer's suite
+  # unchallenged. The decision is `order_value_fault/1`, public so the teeth tests can show it
+  # bites; it rebuilds each struct through `new/1`. Only the calls that need no more than the
+  # suite's own arguments are asked: one placement, its read-back, the list, the fills, and
+  # the cancel last (so a cancel cannot be blamed for a read). A refusal is not judged, but the
+  # group fails when `place_order/3` is active and no order or fill was examined at all.
+  defp order_values do
+    quote location: :keep do
+      describe "54. order and fill values" do
+        test "every Order and Fill the fake answers is one its own constructor builds" do
+          if @fake, do: assert_order_values(@fake, @venue.capabilities())
+        end
+      end
+
+      defp assert_order_values(fake, caps) do
+        answers = order_value_answers(fake, caps)
+
+        faults =
+          for {endpoint, answer} <- answers,
+              fault = DpExchange.Core.AdapterContract.order_value_fault(answer),
+              do: {endpoint, fault}
+
+        shown = inspect(faults, limit: 8, printable_limit: 400)
+
+        assert faults == [],
+               "an Order or Fill the fake answered is not one its constructor builds " <>
+                 "(`{endpoint, {kind, message}}`): #{shown}. Venues build orders as struct " <>
+                 "literals, which skips `new/1`; the same refusals apply to what the " <>
+                 "fake returns."
+
+        examined =
+          answers
+          |> Enum.map(fn {_endpoint, answer} -> answer end)
+          |> DpExchange.Core.AdapterContract.order_values_examined()
+
+        assert examined > 0 or not Capabilities.active?(caps, {:place_order, 3}),
+               "place_order/3 is active but no Order or Fill was answered by it, get_order/3, " <>
+                 "get_orders/2, get_trade_history/2 or cancel_order/3, so this group passes " <>
+                 "for having looked at nothing. Declare what the fake needs in " <>
+                 "`endpoint_opts:`, or give its fixture an order."
+      end
+    end
+  end
+
+  # Group 54's calls, quoted apart from its test so neither block is one long function.
+  defp order_value_helpers do
+    quote location: :keep do
+      # The placement first (its id feeds the read-back and the cancel), then the rest, the
+      # cancel last.
+      defp order_value_answers(fake, caps) do
+        place_args = endpoint_args(:place_order, 3)
+        placed = order_value_call(fake, caps, {:place_order, 3}, place_args)
+        id = placed_order_id(placed)
+        placed_opts = List.last(place_args)
+
+        calls = [
+          {{:get_order, 3}, id && round_trip_args(:get_order, id, placed_opts)},
+          {{:get_orders, 2}, endpoint_args(:get_orders, 2)},
+          {{:get_trade_history, 2}, endpoint_args(:get_trade_history, 2)},
+          {{:cancel_order, 3}, id && round_trip_args(:cancel_order, id, placed_opts)}
+        ]
+
+        later =
+          for {endpoint, args} <- calls,
+              answer <- order_value_call(fake, caps, endpoint, args),
+              do: answer
+
+        placed ++ later
+      end
+
+      defp order_value_call(_fake, _caps, _endpoint, nil), do: []
+
+      defp order_value_call(fake, caps, endpoint, args) do
+        if Capabilities.active?(caps, endpoint),
+          do: [{endpoint, call_on(fake, endpoint, args)}],
+          else: []
+      end
+
+      defp placed_order_id([{_endpoint, {:ok, %DpExchange.Core.Types.Order{id: id}}}])
+           when is_binary(id) and id != "",
+           do: id
+
+      defp placed_order_id(_not_an_order_with_an_id), do: nil
+    end
+  end
+
   # --- 44. the fake exports everything the facade does ------------------------------------
   #
   # Each venue's own tests held this (`facade -- fake == []`), so a sixth venue could ship a
@@ -5345,6 +5571,17 @@ defmodule DpExchange.Core.AdapterContract do
 
   defp convention_helpers do
     quote location: :keep do
+      # A call declared active and not exported is a call this group cannot make, and
+      # `eligible_cases/3` would drop it without a word (see `unexported_calls/3`).
+      defp assert_calls_exported(module, cases, what) do
+        missing =
+          DpExchange.Core.AdapterContract.unexported_calls(module, @venue.capabilities(), cases)
+
+        assert missing == [],
+               "#{what}: capabilities/0 declares #{inspect(missing)} active but " <>
+                 "#{inspect(module)} does not export it, so it was never asked"
+      end
+
       # Runs `cases` against `module`, skipping a callback `capabilities/0` declares
       # `:unsupported`. `required?` refuses a run that examined nothing: a loop over no calls
       # reports green having checked none, which is the failure this suite exists against.

@@ -21,6 +21,68 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **Conformance group 54: every Order and Fill a venue's fake answers is one its own
+  constructor builds.** `place_order`, `get_order`, `get_orders`, `get_trade_history` and
+  `cancel_order` answers are rebuilt through `Order.new/1` / `Fill.new/1`. An unknown status,
+  side, type or time_in_force, or a status beside a contradicting filled quantity, fails the
+  group. It fails when `place_order` is active and nothing was examined. Public decisions
+  `order_value_fault/1` and `order_values_examined/1`, with teeth tests.
+- `Capabilities.time_in_force/0`, the closed time_in_force vocabulary.
+- Tests: `Types.Order` lifecycle (vocabularies, time_in_force, status against filled quantity,
+  legs); a precedence test for all four fake-injection rules; `link_event/2` and `link_up/1`
+  telemetry shapes; whole-table `Timeframe` pin; every `Notice` kind's default severity and
+  every credential word; `Config.get/3` and `delete_override/1`; `:blocking` buckets in
+  `HttpClient`; a default-argument group in `UnwiredCheck`; `Conversion.new/1` status and
+  values; `Capabilities.time_in_force/0`; the Venue `cancel_order/3` and
+  `get_historical_prices/4` doc sections; Reference venue cancel-twice and replace-after-cancel.
+  Struct-literal tests that could not fail (`Order`, `OrderBook`, `Quote` defaults) now build
+  through `new/1`.
+
+### Changed
+
+- **`Order.new/1` refuses what it cannot vouch for.** `time_in_force` must be in the
+  vocabulary or nil; `:filled` / `:partially_filled` with a stated filled quantity of 0,
+  `:pending` / `:open` / `:partially_filled` with the whole quantity filled, and `:filled`
+  with only part filled all raise. `legs` must be nil or a list of `OrderLeg`. Terminal
+  statuses are not judged against filled quantity. **BREAKING ONLY FOR A CALLER THAT PASSED
+  ONE OF THESE TO `new/1`**: venues build struct literals and are unaffected unless group 54
+  finds a fake that answers one, and all five venues' decoders now refuse such a venue row
+  rather than build it.
+- **Group 21 requires the exact `{:error, {:unsupported_timeframe, width}}` tag** for an
+  undeclared width. Any other answer is `{:wrong_answer, answer}`; an `{:ok, _}` is still a
+  substitution.
+- **Group 5 refuses a bare scalar success** (`{:ok, :atom}` and the like) from a promised
+  callback; `{:ok, :cancelled}` from `cancel_order` stays allowed.
+- Reference venue: `cancel_order` and `replace_order` refuse a terminal order
+  (`{:order_not_cancellable, status}` / `{:order_not_replaceable, status}`), and
+  `get_trade_history` returns a `Fill`.
+- **Group 37: a range around the fake's own bars must be answered.** `range_fault/3` answers
+  `{:not_answered, answer}` for a refusal, raise or non-list success of a range that must keep a
+  bar; only the ask that must drop the bar may be refused. A fake refusing every range passed
+  having examined no bound. The one-bar keep ask is now `start:` the bar and `end:` one width
+  later (`candle_range_probes/2`), because a `start:` alone runs to "now" and a venue that bounds
+  a window by its width refuses an old fixed bar for being too far back.
+- **Groups 33 and 35 fail for a call declared active and not exported** (`unexported_calls/3`),
+  and no longer pass when nothing was eligible (`required?` is now true). A fake missing one of
+  two calls was judged on the other.
+- **`SourceSafetyCheck` (group 53): `Module.concat` over a call that makes text is flagged.**
+  `String.*`, `to_string/1`, `inspect/1`, `Enum.join/2` and `Atom.to_string/1` in an argument are
+  text, as `<>` and an interpolation are. A module name or a pipe over `Module.split/1` is not.
+
+### Documentation
+
+- `Venue.get_historical_prices` documents the unsupported-width tag; `Venue.cancel_order`
+  documents that a terminal order stays terminal. `usage-rules/testing.md`,
+  `usage-rules/adapter.md` and the building guide state 54 groups, the group 21 / 5 /
+  54 requirements and the `Order.new` refusals. The `new/1` doc of every `Types.*` module that
+  refused a value its doc did not name now names it (`CorporateEvent`, `Filing`,
+  `FinancialStatement`, `Funding`, `FxRate`, `NewsItem`, `OptionChain`, `OptionContract`,
+  `OptionGreeks`, `Portfolio`, `ScreenerResult`, `Staking*`, `Watchlist`, `Withdrawal`,
+  `ContractStats`), `OrderBook` says a zero-size level is dropped by the decoder and refused by
+  `new/1`, and a stale comment in `LinkSafetyCheck` is corrected.
+
 ## [0.3.119] - 2026-10-21
 
 ### Fixed

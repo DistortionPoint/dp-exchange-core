@@ -456,6 +456,32 @@ defmodule DpExchange.Core.TelemetryTest do
       assert metadata.type == :order_book
     end
 
+    test "an event from a route that cannot measure wire size has no :bytes, not a zero" do
+      # Absent and zero are different claims: a consumer summing :bytes across a mixed fleet
+      # must get the throughput of the streaming venues, not a total depressed by every poll
+      # that reported a confident zero.
+      provider = unique_provider()
+      :ok = attach([[:dp_exchange, :link, :event]], provider)
+
+      assert :ok = Telemetry.link_event(provider, "Quote")
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}, 5_000
+      assert measurements == %{count: 1}
+      refute Map.has_key?(measurements, :bytes)
+      assert metadata == %{provider: provider, type: "Quote"}
+    end
+
+    test "up carries a count of one and the provider, and nothing else" do
+      provider = unique_provider()
+      :ok = attach([[:dp_exchange, :link, :up]], provider)
+
+      assert :ok = Telemetry.link_up(provider)
+
+      assert_receive {:telemetry, [:dp_exchange, :link, :up], measurements, metadata}, 5_000
+      assert measurements == %{count: 1}
+      assert metadata == %{provider: provider}
+    end
+
     test "a reconnect with no delay reports zero rather than omitting the field" do
       # Absent and zero mean different things, and only one of them is true here.
       provider = unique_provider()

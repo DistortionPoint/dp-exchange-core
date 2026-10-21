@@ -966,16 +966,17 @@ defmodule DpExchange.Core.ContractTeethTest do
       # This fixture silently substitutes its one declared width for whatever was asked, on
       # purpose: a missing granularity becoming the closest one.
       answer = venue.get_historical_prices("BTC-USD", unserved, [], [])
-      assert AdapterContract.timeframe_fault(answer) == :substituted
+      assert AdapterContract.timeframe_fault(answer, unserved) == :substituted
     end
 
-    test "the reference venue refuses a width it does not declare" do
+    test "the reference venue refuses a width it does not declare, with the width it was given" do
       unserved = AdapterContract.unserved_timeframe(ReferenceVenue.capabilities())
 
       assert is_binary(unserved)
 
       answer = ReferenceVenue.get_historical_prices("BTC-USD", unserved, [], [])
-      assert AdapterContract.timeframe_fault(answer) == nil
+      assert answer == {:error, {:unsupported_timeframe, unserved}}
+      assert AdapterContract.timeframe_fault(answer, unserved) == nil
     end
 
     test "a venue declaring the whole vocabulary has no width to ask for" do
@@ -989,10 +990,33 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert AdapterContract.unserved_timeframe(caps) == nil
     end
 
-    test "only a success counts as serving a width that was not declared" do
-      assert AdapterContract.timeframe_fault({:ok, []}) == :substituted
-      assert AdapterContract.timeframe_fault({:error, :unsupported_timeframe}) == nil
-      assert AdapterContract.timeframe_fault({:refused, :unsupported_timeframe}) == nil
+    test "only the documented refusal, with the width as given, passes" do
+      assert AdapterContract.timeframe_fault({:error, {:unsupported_timeframe, "10m"}}, "10m") ==
+               nil
+
+      # A success is serving the width, whatever it holds.
+      assert AdapterContract.timeframe_fault({:ok, []}, "10m") == :substituted
+      assert AdapterContract.timeframe_fault({:ok, [:bar]}, "10m") == :substituted
+    end
+
+    test "any other answer is named, not taken for a refusal" do
+      # The group used to pass every one of these: it judged only `{:ok, _}`.
+      for answer <- [
+            {:error, :unsupported_timeframe},
+            {:error, :boom},
+            {:error, {:unsupported_timeframe, "1h"}},
+            {:error, {:unsupported_timeframe, nil}},
+            {:error, {:unsupported_timeframe, "10m", :extra}},
+            {:error, :not_supported},
+            {:refused, :unsupported_timeframe},
+            {:refused, {:unsupported_timeframe, "10m"}},
+            {:raised, %ArgumentError{}},
+            {:exit, :noproc},
+            :ok,
+            nil
+          ] do
+        assert AdapterContract.timeframe_fault(answer, "10m") == {:wrong_answer, answer}
+      end
     end
   end
 
@@ -1095,6 +1119,32 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       # Something eligible: checked.
       refute AdapterContract.nothing_checked?(Broken.Convention.Lax, declared, cases)
+    end
+
+    test "a call declared active and not exported is named, though another call is eligible" do
+      # `eligible_cases/3` drops it without a word, so a fake missing one of two calls was
+      # judged on the other and passed (assertions 33 and 35).
+      cases = [{:get_transfers, [%{}, []], :x}, {:get_order, [%{}, "id", []], :x}]
+      declared = Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+
+      assert [_one] = AdapterContract.eligible_cases(Broken.OverDeclares, declared, cases)
+
+      assert AdapterContract.unexported_calls(Broken.OverDeclares, declared, cases) ==
+               [{:get_order, 3}]
+
+      # Declared :unsupported, the same call is not owed; and a fake exporting both is clean.
+      off =
+        Capabilities.new(endpoints: %{{:get_order, 3} => :unsupported}, supported_quotes: ~w(USD))
+
+      assert AdapterContract.unexported_calls(Broken.OverDeclares, off, cases) == []
+
+      assert AdapterContract.unexported_calls(ReferenceVenue, declared, cases) == []
+
+      # Two cases for one call name one call.
+      twice = cases ++ [{:get_order, [%{}, "other", []], :y}]
+
+      assert AdapterContract.unexported_calls(Broken.OverDeclares, declared, twice) ==
+               [{:get_order, 3}]
     end
 
     test "a failure message prints the call and the expectation, never its arguments" do
@@ -1350,6 +1400,19 @@ defmodule DpExchange.Core.ContractTeethTest do
 
       assert AdapterContract.candle_range_probes([bar(a)]) ==
                [{[start: a], [a]}, {[end: a], []}]
+
+      # With the width known, the one-bar ask that keeps the bar is closed at both ends: a
+      # `start:` alone runs to "now", which a venue that bounds a window by its width refuses
+      # for a fake's old fixed bar.
+      assert AdapterContract.candle_range_probes([bar(a)], "1h") ==
+               [{[start: a, end: b], [a]}, {[end: a], []}]
+
+      # A width Core has no rule for keeps `start:` alone, and two or more bars are unchanged.
+      assert AdapterContract.candle_range_probes([bar(a)], "1w") ==
+               [{[start: a], [a]}, {[end: a], []}]
+
+      assert AdapterContract.candle_range_probes([bar(a), bar(b), bar(c)], "1h") ==
+               [{[start: a, end: c], [a]}]
     end
 
     test "an end that is inclusive, a start that is exclusive, or a stray bar is faulted" do
@@ -1364,17 +1427,39 @@ defmodule DpExchange.Core.ContractTeethTest do
       assert AdapterContract.range_fault([start: c], {:ok, [bar(a)]}, [c]) == {:outside_range, a}
       assert AdapterContract.range_fault([end: a], {:ok, [bar(a)]}, []) == {:outside_range, a}
 
-      # A refusal says nothing about the bounds.
-      assert AdapterContract.range_fault(range, {:error, :range_too_wide}, [a]) == nil
+      # A refusal of the ask that must drop the bar says nothing about the bounds.
+      assert AdapterContract.range_fault([end: a], {:error, :range_unavailable}, []) == nil
+    end
+
+    test "a range around the fake's own bars that is refused, raised or empty-handed is faulted" do
+      # The ranges come from the fake's own bars, so a window around them has data. A fake
+      # that refuses every range it is asked passed this group for having examined no bound.
+      a = ~U[2026-08-27 10:00:00Z]
+      range = [start: a, end: ~U[2026-08-27 11:00:00Z]]
+
+      for answer <- [
+            {:error, :range_too_wide},
+            {:refused, :not_listed},
+            {:raised, %RuntimeError{}},
+            {:exit, :boom},
+            {:ok, nil},
+            :ok
+          ] do
+        assert AdapterContract.range_fault(range, answer, [a]) == {:not_answered, answer}
+      end
     end
 
     test "the reference venue keeps [start, end) and a lax venue that ignores it is faulted" do
       a = ~U[2026-08-27 12:00:00Z]
       ask = fn range -> ReferenceVenue.get_historical_prices("BTC-USDC", "1h", range, []) end
 
-      for {range, must} <- AdapterContract.candle_range_probes(elem(ask.([]), 1)) do
+      for {range, must} <- AdapterContract.candle_range_probes(elem(ask.([]), 1), "1h") do
         assert AdapterContract.range_fault(range, ask.(range), must) == nil
       end
+
+      # And a venue that refuses the range it was asked is no longer a pass.
+      refuses = {:error, :range_too_wide}
+      assert AdapterContract.range_fault([start: a], refuses, [a]) == {:not_answered, refuses}
 
       # Ignoring `:end`, as a venue that has the bar whatever the range says.
       ignores_end = {:ok, [bar(a)]}

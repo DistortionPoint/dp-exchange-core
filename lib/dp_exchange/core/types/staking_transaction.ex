@@ -64,6 +64,10 @@ defmodule DpExchange.Core.Types.StakingTransaction do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:type` outside `:stake | :unstake | :reward | :other` (the venue's own word
+  belongs in `:venue_type`), on an `:amount` of zero or less, and on a negative
+  `:amount_paid_so_far` or `:amount_remaining`.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

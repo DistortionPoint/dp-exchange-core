@@ -506,6 +506,25 @@ defmodule DpExchange.Core.VenueTest do
       end
     end
 
+    test "cancel_order/3 and get_historical_prices/4 document the refusals groups 5 and 21 hold" do
+      {:docs_v1, _anno, _lang, _fmt, _moduledoc, _meta, entries} = Code.fetch_docs(Venue)
+
+      callback_doc = fn name, arity ->
+        {{:callback, ^name, ^arity}, _anno, _sig, %{"en" => doc}, _meta} =
+          List.keyfind(entries, {:callback, name, arity}, 0)
+
+        doc
+      end
+
+      cancel = callback_doc.(:cancel_order, 3)
+      assert cancel =~ "A terminal order stays terminal"
+      assert cancel =~ "{:ok, :cancelled}"
+
+      history = callback_doc.(:get_historical_prices, 4)
+      assert history =~ "A width the venue does not serve"
+      assert history =~ "{:error, {:unsupported_timeframe, timeframe}}"
+    end
+
     test "wanted/1 is an optional callback with a doc, and a typed collection result" do
       assert {:wanted, 1} in Venue.behaviour_info(:optional_callbacks)
       refute {:wanted, 1} in Venue.required_callbacks()

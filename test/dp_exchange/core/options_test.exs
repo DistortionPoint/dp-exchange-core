@@ -80,6 +80,9 @@ defmodule DpExchange.Core.OptionsTest do
             :timeout,
             :retry_attempts,
             :retry_delay,
+            :max_retry_after_s,
+            :max_body_bytes,
+            :weight,
             :log_requests
           ] do
         assert key in keys

@@ -35,6 +35,9 @@ defmodule DpExchange.Core.Types.ScreenerResult do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:rank` that is not a positive integer (a position in the venue's own list
+  starts at 1; `nil` is "the venue gave none") and on `:metrics` that is not a plain map.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

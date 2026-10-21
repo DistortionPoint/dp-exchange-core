@@ -142,6 +142,25 @@ defmodule DpExchange.Core.SourceSafetyCheckTest do
       assert Enum.map(findings, &{Path.basename(&1.file), &1.line}) == [{"a.ex", 3}, {"b.ex", 2}]
     end
 
+    test "Module.concat over a call that makes text is flagged, over a module name is not" do
+      source = """
+      defmodule Concats do
+        def a(x), do: Module.concat(Foo, String.capitalize(x))
+        def b(x), do: Module.concat(Foo, to_string(x))
+        def c(x), do: Module.concat(Foo, Enum.join(x, "."))
+        def d(x), do: Module.concat(Foo, Atom.to_string(x))
+        def e(x), do: Module.concat(Foo, inspect(x))
+        def ok(name, default), do: Module.concat(name, default |> Module.split() |> List.last())
+        def fixed(name), do: Module.concat(name, "Feed")
+      end
+      """
+
+      {lib, config} = tree!(%{"lib/concats.ex" => source})
+
+      assert {:ok, findings} = SourceSafetyCheck.run(lib, config)
+      assert lines_and_kinds(findings) == for(line <- 2..6, do: {line, :atom_from_text})
+    end
+
     test "code inside a macro's quote is code, and is read" do
       source = """
       defmodule Macros do

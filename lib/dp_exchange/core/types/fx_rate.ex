@@ -46,6 +46,9 @@ defmodule DpExchange.Core.Types.FxRate do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:rate` of zero or less: a rate a caller multiplies an amount by is above
+  zero, and a zero would turn every conversion into zero with no error.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

@@ -53,6 +53,9 @@ defmodule DpExchange.Core.Types.Funding do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on an `:amount` or `:estimated_amount` that is not a number. Neither is held to a
+  sign: funding is signed, and the sign is the venue's (see the moduledoc).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

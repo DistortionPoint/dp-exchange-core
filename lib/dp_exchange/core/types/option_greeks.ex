@@ -64,6 +64,10 @@ defmodule DpExchange.Core.Types.OptionGreeks do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a negative `:implied_volatility` or `:open_interest` (a volatility and a count
+  are not signed; the Greeks are, so `:delta`, `:theta`, `:rho` and the rest carry any sign),
+  and on a Greek or price that is not a number.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

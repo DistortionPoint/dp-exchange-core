@@ -93,6 +93,42 @@ defmodule DpExchange.Core.FakeInjectionTest do
     end
   end
 
+  describe "the documented precedence, all four set at once" do
+    test "symbol always-fail, symbol queue, whole-call always-fail, then whole-call queue" do
+      FakeInjection.queue_failures(:webull, [{:error, :global_queued}])
+      FakeInjection.fail_always(:webull, {:error, :global_always})
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :symbol_queued}])
+      FakeInjection.fail_always(:webull, "BTC-USD", {:error, :symbol_always})
+
+      # The first of the four with something wins, and nothing below it is consumed.
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") ==
+               {:override, {:error, :symbol_always}}
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") ==
+               {:override, {:error, :symbol_always}}
+
+      # Another symbol skips both symbol rules and meets the whole-call always-fail, which
+      # never pops, so the whole-call queue stays untouched behind it.
+      assert FakeInjection.next_outcome(:webull, "ETH-USD") ==
+               {:override, {:error, :global_always}}
+
+      assert FakeInjection.next_outcome(:webull) == {:override, {:error, :global_always}}
+
+      # Clearing the symbol's always-fail exposes its own queue, which pops once.
+      FakeInjection.reset(:webull)
+      FakeInjection.queue_failures(:webull, [{:error, :global_queued}])
+      FakeInjection.queue_failures(:webull, "BTC-USD", [{:error, :symbol_queued}])
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") ==
+               {:override, {:error, :symbol_queued}}
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") ==
+               {:override, {:error, :global_queued}}
+
+      assert FakeInjection.next_outcome(:webull, "BTC-USD") == :none
+    end
+  end
+
   describe "bypass_credentials/1" do
     test "is true only for the venue it was set for" do
       FakeInjection.bypass_credentials(:webull)

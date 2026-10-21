@@ -51,6 +51,9 @@ defmodule DpExchange.Core.Types.StakingReward do
 
   `:period_start` and `:period_end` are each a `DateTime` or `nil`: the window travels with the
   number (see above), and a window a consumer cannot compare is no window.
+
+  Also raises on a negative `:amount` or `:apy_pct`, and on an `:accrual_count` that is not a
+  non-negative integer or `nil`.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do

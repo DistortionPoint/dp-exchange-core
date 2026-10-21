@@ -183,7 +183,7 @@ defmodule DpExchange.Core.LinkSafetyCheck do
   # compared with `MapSet.member?/2` fails Dialyzer's PLT check with a
   # `call_without_opaque` mismatch — the same finding this family already hit once
   # (`Core.Notice`'s `@credential_keys`, C8 in the 2026-09-05 defect sweep) and reverted
-  # for the same reason. Three entries make a linear scan irrelevant next to that.
+  # for the same reason. Five entries make a linear scan irrelevant next to that.
   @link_creating_functions [:start_link, :link, :spawn_link, :async, :async_stream]
 
   @type violation :: %{

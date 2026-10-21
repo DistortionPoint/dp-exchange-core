@@ -30,7 +30,8 @@ defmodule DpExchange.Core.Types.Order do
   decision can be "the venue did not say".
   """
 
-  alias DpExchange.Core.Types.Validate
+  alias DpExchange.Core.Capabilities
+  alias DpExchange.Core.Types.{OrderLeg, Validate}
 
   @enforce_keys [:id, :symbol, :side, :order_type, :quantity, :status, :provider]
   defstruct [
@@ -108,12 +109,15 @@ defmodule DpExchange.Core.Types.Order do
           | :rejected
           | :expired
 
+  # The atoms of `DpExchange.Core.Capabilities.time_in_force/0`, which `new/1` checks against.
+  @type time_in_force :: :gtc | :ioc | :fok | :gtd | :day | :gfw | :gfm
+
   @type t :: %__MODULE__{
           id: String.t() | nil,
           symbol: String.t() | nil,
           side: side() | nil,
           order_type: order_type() | nil,
-          time_in_force: atom() | nil,
+          time_in_force: time_in_force() | nil,
           quantity: Decimal.t() | nil,
           price: Decimal.t() | nil,
           stop_price: Decimal.t() | nil,
@@ -149,6 +153,32 @@ defmodule DpExchange.Core.Types.Order do
   against it would conclude the order is over-filled. Zero stays legal (an order nothing has
   filled). Prices are not held to a sign here: a venue's `0` for the price of a market order is
   common, and which fields a venue states is the venue's word.
+
+  **Every closed vocabulary is refused outside what its type states, with no default.** `:side`
+  is `:buy`, `:sell` or `nil`; `:order_type` and `:status` are the atoms of `t:order_type/0` and
+  `t:status/0` or `nil`; `:time_in_force` is one of `DpExchange.Core.Capabilities.time_in_force/0`
+  or `nil` (it used to be any atom, so `:good_til_cancelled` or `:GTC` built and matched no
+  branch of a consumer's `case`). `nil` is "the venue did not say", never a stand-in for an
+  unrecognised word. `:legs` is `nil` or a proper list of `DpExchange.Core.Types.OrderLeg`.
+
+  **A status is refused beside a `:filled_quantity` that contradicts it.** Only when the
+  venue stated both (a `nil` size states nothing, so no judgement is made):
+
+    * `:filled` or `:partially_filled` with a `:filled_quantity` of zero: nothing was filled,
+      so the order is neither. A venue's status word read as `:filled` where the fill figure
+      says otherwise is the decode bug this catches, and a consumer who trusts the status
+      books a position that does not exist.
+    * `:pending`, `:open` or `:partially_filled` with a `:filled_quantity` at or above a
+      positive `:quantity`: the whole size is filled, so nothing is left to be working or
+      partial.
+    * `:filled` with a `:filled_quantity` below a positive `:quantity`: `:filled` means the
+      entire quantity traded. A cancel that landed after a part fill is `:cancelled` with
+      the figure in `:filled_quantity`, not `:filled`: a consumer reading `:filled` as
+      "nothing is left" would book a position larger than the one held.
+
+  `:cancelled`, `:rejected` and `:expired` carry whatever was filled before they ended, so
+  they are not judged against it. A `:filled_quantity` *above* `:quantity` is not judged
+  either: which of the two a venue rounded is the venue's word.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -166,5 +196,69 @@ defmodule DpExchange.Core.Types.Order do
     |> Validate.one_of!(:side, [:buy, :sell, nil])
     |> Validate.one_of!(:order_type, [nil | @order_types])
     |> Validate.one_of!(:status, [nil | @statuses])
+    |> Validate.one_of!(:time_in_force, [nil | Capabilities.time_in_force()])
+    |> status_consistent!()
+    |> legs!()
+  end
+
+  defp status_consistent!(%__MODULE__{status: status} = built) do
+    case contradiction(status, built.quantity, built.filled_quantity) do
+      nil ->
+        built
+
+      reason ->
+        raise ArgumentError,
+              "#{inspect(__MODULE__)}.new/1: status #{inspect(status)} contradicts " <>
+                "filled_quantity #{Validate.show(built.filled_quantity)} (quantity " <>
+                "#{Validate.show(built.quantity)}) — #{reason}"
+    end
+  end
+
+  defp contradiction(_status, _quantity, nil), do: nil
+
+  defp contradiction(status, quantity, filled) do
+    cond do
+      status in [:filled, :partially_filled] and Decimal.compare(filled, 0) == :eq ->
+        "nothing is filled, so the order is not #{status}"
+
+      status in [:pending, :open, :partially_filled] and fully_filled?(quantity, filled) ->
+        "the whole quantity is filled, so the order is not #{status}"
+
+      status == :filled and partly_filled?(quantity, filled) ->
+        "only part of the quantity is filled, so the order is not filled"
+
+      true ->
+        nil
+    end
+  end
+
+  defp fully_filled?(nil, _filled), do: false
+
+  defp fully_filled?(quantity, filled),
+    do: Decimal.compare(quantity, 0) == :gt and Decimal.compare(filled, quantity) != :lt
+
+  defp partly_filled?(nil, _filled), do: false
+
+  defp partly_filled?(quantity, filled),
+    do: Decimal.compare(quantity, 0) == :gt and Decimal.compare(filled, quantity) == :lt
+
+  defp legs!(%__MODULE__{legs: nil} = built), do: built
+
+  defp legs!(%__MODULE__{legs: legs} = built) when is_list(legs) do
+    case Enum.reject(legs, &is_struct(&1, OrderLeg)) do
+      [] ->
+        built
+
+      [other | _rest] ->
+        raise ArgumentError,
+              "#{inspect(__MODULE__)}.new/1: field :legs holds #{Validate.show(other)} — " <>
+                "every leg must be a DpExchange.Core.Types.OrderLeg"
+    end
+  end
+
+  defp legs!(%__MODULE__{legs: other}) do
+    raise ArgumentError,
+          "#{inspect(__MODULE__)}.new/1: field :legs holds #{Validate.show(other)} — must be " <>
+            "a list of DpExchange.Core.Types.OrderLeg, or nil"
   end
 end
