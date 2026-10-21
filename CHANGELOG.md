@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.119] - 2026-10-21
+
 ### Fixed
 
 - **Conformance group 53 failed every venue on its tree-name derivation.** `Module.concat/1,2`
