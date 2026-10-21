@@ -343,7 +343,7 @@ defmodule DpExchange.Core.Venue do
 
   ## What the conformance suite asserts of W1 to W7
 
-  Three groups hold the parts checkable against a Fake. **Group 47 holds W4's amounts**: a
+  Four groups hold the parts checkable against a Fake. **Group 47 holds W4's amounts**: a
   float, zero, a negative, NaN and infinity as the amount of `stake/3`, `unstake/3`,
   `convert/4`, `withdraw/5` and `transfer_internal/4` (each when active) is
   `{:error, {:invalid_amount, value}}`, the value as given. **Group 48 holds W5's staking
@@ -351,7 +351,11 @@ defmodule DpExchange.Core.Venue do
   (group 5 holds the rest of W5, for every callback whose spec names a struct). **Group 49
   holds W6's unknown id**: `get_order/3` and `cancel_order/3` answer an id nobody placed
   `{:refused, :not_found}`. Group 43 also holds, for every endpoint including each write,
-  that a key the call does not read is refused before anything is sent.
+  that a key the call does not read is refused before anything is sent. **Group 52 holds the
+  sizing and price of `c:place_order/3`** (the numbers W4 states for the other writes): a
+  float, zero, a negative, NaN and infinity as `:quantity` or `:price` is
+  `{:error, {:invalid_quantity, value}}` or `{:error, {:invalid_price, value}}`, the value as
+  given.
 
   **Still not asserted, and why.** W1 (a possibly-sent write is `:write_unconfirmed`) and W2
   (retries) need a fault injected after the request is sent, which a Fake cannot produce;

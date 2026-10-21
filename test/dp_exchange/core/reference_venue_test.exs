@@ -67,6 +67,32 @@ defmodule DpExchange.Core.ReferenceVenueTest do
                Reference.place_order(%{}, market, [])
     end
 
+    test "an amount with an exponent past the bound is refused before it is compared" do
+      # `Decimal.gt?/2` aligns exponents with `10^difference`: these made the venue allocate
+      # a number of a billion digits before it refused them. Refused unread, with the value as
+      # given, the way NaN is.
+      hostile = [
+        %Decimal{sign: 1, coef: 1, exp: 999_999_999},
+        %Decimal{sign: 1, coef: 1, exp: -999_999_999},
+        Decimal.new("1e5000")
+      ]
+
+      for bad <- hostile do
+        assert {:error, {:invalid_quantity, ^bad}} =
+                 Reference.place_order(%{}, %{@limit | quantity: bad}, [])
+
+        assert {:error, {:invalid_price, ^bad}} =
+                 Reference.place_order(%{}, %{@limit | price: bad}, [])
+
+        assert {:error, {:invalid_amount, ^bad}} = Reference.convert("BTC", "USD", bad, [])
+      end
+
+      # The largest exponent admitted still places, so the bound is a bound and not a refusal
+      # of anything with an exponent.
+      edge = %Decimal{sign: 1, coef: 1, exp: 1_000}
+      assert {:ok, %Types.Order{}} = Reference.place_order(%{}, %{@limit | quantity: edge}, [])
+    end
+
     test "a blank or non-text client order id is refused, a text one accepted" do
       for bad <- ["  ", 42] do
         assert {:error, {:invalid_client_order_id, ^bad}} =

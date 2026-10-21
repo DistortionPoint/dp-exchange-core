@@ -20,7 +20,7 @@ defmodule DpExchange.Core.FailClosedEdgesTest do
 
     test "a time before 1970 falls in its own bucket, not the next one" do
       at = DateTime.from_unix!(-1)
-      assert Timeframe.boundary(at, "1h") == DateTime.from_unix!(-3_600)
+      assert DateTime.compare(Timeframe.boundary(at, "1h"), DateTime.from_unix!(-3_600)) == :eq
     end
   end
 

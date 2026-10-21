@@ -17,7 +17,8 @@ defmodule DpExchange.Core.TimeframeTest do
       # Its absence here was not neutral: `aligned?/2` returns true for a width it
       # cannot model, so every 10m candle passed the authenticity check unexamined.
       assert {:ok, 600} = Timeframe.seconds("10m")
-      assert Timeframe.boundary(~U[2026-08-31 14:07:33Z], "10m") == ~U[2026-08-31 14:00:00Z]
+      boundary = Timeframe.boundary(~U[2026-08-31 14:07:33Z], "10m")
+      assert DateTime.compare(boundary, ~U[2026-08-31 14:00:00Z]) == :eq
       refute Timeframe.aligned?(~U[2026-08-31 14:07:00Z], "10m")
       assert Timeframe.aligned?(~U[2026-08-31 14:10:00Z], "10m")
     end
@@ -133,15 +134,21 @@ defmodule DpExchange.Core.TimeframeTest do
 
   describe "boundary/2" do
     test "truncates to the start of the containing bucket" do
-      assert ~U[2026-08-06 00:00:00Z] = Timeframe.boundary(~U[2026-08-06 13:47:12Z], "1d")
-      assert ~U[2026-08-06 12:00:00Z] = Timeframe.boundary(~U[2026-08-06 13:47:12Z], "4h")
-      assert ~U[2026-08-06 13:45:00Z] = Timeframe.boundary(~U[2026-08-06 13:47:12Z], "15m")
+      at = ~U[2026-08-06 13:47:12Z]
+
+      for {expected, width} <- [
+            {~U[2026-08-06 00:00:00Z], "1d"},
+            {~U[2026-08-06 12:00:00Z], "4h"},
+            {~U[2026-08-06 13:45:00Z], "15m"}
+          ] do
+        assert DateTime.compare(Timeframe.boundary(at, width), expected) == :eq
+      end
     end
 
     test "is idempotent — a boundary is its own boundary" do
       for tf <- Timeframe.known() do
         once = Timeframe.boundary(~U[2026-08-06 13:47:12Z], tf)
-        assert once == Timeframe.boundary(once, tf)
+        assert DateTime.compare(once, Timeframe.boundary(once, tf)) == :eq
         assert Timeframe.aligned?(once, tf)
       end
     end
@@ -151,16 +158,16 @@ defmodule DpExchange.Core.TimeframeTest do
       # `DateTime` is valid from -9999 and a venue timestamp with a bad year can build one.
       early = DateTime.new!(Date.new!(-1, 6, 15), ~T[10:30:00], "Etc/UTC")
 
-      assert Timeframe.boundary(early, "1d") ==
-               DateTime.new!(Date.new!(-1, 6, 15), ~T[00:00:00], "Etc/UTC")
+      day = DateTime.new!(Date.new!(-1, 6, 15), ~T[00:00:00], "Etc/UTC")
+      hour = DateTime.new!(Date.new!(-1, 6, 15), ~T[10:00:00], "Etc/UTC")
 
-      assert Timeframe.boundary(early, "1h") ==
-               DateTime.new!(Date.new!(-1, 6, 15), ~T[10:00:00], "Etc/UTC")
+      assert DateTime.compare(Timeframe.boundary(early, "1d"), day) == :eq
+      assert DateTime.compare(Timeframe.boundary(early, "1h"), hour) == :eq
     end
 
     test "an unmodelled timeframe returns the input untouched" do
       dt = ~U[2026-08-06 13:47:12Z]
-      assert dt == Timeframe.boundary(dt, "1w")
+      assert DateTime.compare(dt, Timeframe.boundary(dt, "1w")) == :eq
     end
   end
 end

@@ -21,6 +21,109 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+Tick AQ: numbers and identifiers from venue text (lens S), configuration, startup and option
+validation (lens T), unbounded state and resource cleanup (lens U), and the conformance groups
+that hold the three across the family. **The new groups run in every venue's CI: a package that
+breaks one of the rules below now fails its own suite.**
+
+### Added
+
+- **Conformance group 52, order sizing and prices.** `Core.Venue.place_order/3` has always said
+  "Quantities and prices accept a `Decimal`, an integer or a numeric string, and refuse a float
+  (it has already lost digits), zero and negative values, and NaN and infinity", as
+  `{:invalid_quantity, value}` and `{:invalid_price, value}`. Group 34 held items 1, 2, 5 and 8
+  of that check order and group 47 the amounts of the other writes, so nothing held this one: a
+  Fake that sent a float quantity on, or placed an order of NaN, passed all fifty-one groups. The
+  group hands the Fake's `place_order/3` each of a float, zero, a negative, NaN and infinity as
+  the `:quantity` and then the `:price` of the suite's own order request (one field bad at a
+  time) and requires exactly `{:error, {:invalid_quantity | :invalid_price, value}}`, the value
+  as given. A request that carries neither key fails the group rather than pass having probed
+  nothing (declare one with `order_args:`). The cases are `AdapterContract.order_value_cases/1`.
+- **Conformance group 53, source safety, and `Core.SourceSafetyCheck`.** A static read of the
+  package's own source (`package_root:`) and of its static `config/*.exs`: an atom built from
+  text (`String.to_atom/1`, `List.to_atom/1`, `:erlang.binary_to_atom/1,2`,
+  `:erlang.list_to_atom/1`, an interpolated atom `:"x_#{y}"`, `Module.concat/1,2` of anything but
+  literals) is an atom-table leak (atoms are never collected); `:erlang.binary_to_term/1,2`
+  without `[:safe]` builds atoms and funs from bytes; `Application.compile_env/3` and
+  `compile_env!/2` freeze a consumer's configuration at dependency-compile time; and
+  `System.get_env/0,1,2` and `System.fetch_env/1`, `fetch_env!/1` outside `config/runtime.exs`
+  read the environment where only that file may. The AST is read, so a mention in a comment, a
+  docstring or a string is never a finding, and an argument that is a literal is not one. An
+  empty scan is an error, as in groups 16, 18 and 19, and a file that cannot be read or parsed is
+  an error naming it.
+- `Types.Validate.integers!/2` (an integer or `nil`, for a sequence number) and
+  `Types.Validate.timeframe!/2` (a label in `Timeframe.nameable/0`).
+
+### Changed
+
+- **Conformance group 26 ends its add/remove cycle by unsubscribing the last symbol and requires
+  `coverage/1` to be empty.** The group checked only the symbols it named, so a Fake that kept an
+  entry per symbol it was ever asked about (a tombstone, a "not covered" row) passed it and grew
+  by one entry per distinct symbol for as long as it ran. The new fault is
+  `{:state_not_restored, symbols}`.
+- `Types.Candle.new/1` refuses an open, high, low or close at or below zero (a traded price is
+  above zero; group 39 already held a Fake's candles to it) and a `:timeframe` outside
+  `Timeframe.nameable/0`: `Timeframe.aligned?/2` answers `true` for a width it has no rule for,
+  so a bar labelled `"1H"` or `"60m"` passed the alignment check unexamined and was stored under
+  a label nothing reads. `Types.VolumeProfile.new/1` refuses an unnameable `:timeframe` the same
+  way.
+- `Types.Fill.new/1` refuses a `:price` of zero or less, as `Types.Trade` does (a negative `:fee`
+  stays legal: a maker rebate). `Types.Order.new/1` refuses a negative `:quantity` or
+  `:filled_quantity` (zero and `nil` stay legal; prices are not held to a sign there).
+  `Types.Conversion.new/1` refuses a `:rate` of zero or less and a negative `:from_amount` or
+  `:to_amount`.
+- `Types.OrderBook.new/1` and `Types.OrderBookDelta.new/1` refuse a `:sequence` that is neither
+  an integer nor `nil`: `"7" > 6` is true in Erlang term order, so a consumer dropping frames
+  whose sequence is `<=` the last applied would apply a stale one. `Instrument.new/1` refuses a
+  `:base` or `:quote` that is present and not a non-blank string.
+- `StakingRate.bps_to_pct/1` read an integer or a float straight into a `Decimal`: `10 ** 5000`
+  came back as a `Decimal` with exponent 4_998, a value every `Types.*` constructor refuses,
+  while the same number as text answered `nil`. An integer past the 34 digits a string may carry
+  is `nil` now, and both go through the exponent bound the `Decimal` clause applies.
+- `CanonicalPair` refuses an `:asset_aliases` that is not a map (or list of pairs) of binary =>
+  binary, naming the mapping, in both directions. An atom, a `nil` or a number on either side
+  raised `FunctionClauseError` from `String.upcase/1`, a non-collection raised
+  `Protocol.UndefinedError`, both from inside the first symbol a venue converted; a blank code
+  was accepted. Checked once per distinct alias map (the cache is untouched).
+- `HttpClient.request/5` refuses a `:provider` or `:rate_limit_key` that is not an atom or a
+  non-blank string (`nil` stays "none given"), with `ArgumentError` before anything is sent, like
+  its neighbouring options. Both are printed into log lines and bucket names, and a map, tuple or
+  pid raised `Protocol.UndefinedError` in the calling venue process on the first retry.
+- `PollingFeed` refuses a `:label` or `:provider` it cannot print or that `Notice.new/3` would
+  refuse, at start, as `{:invalid_option, key, value}`. A bad one raised inside the feed on the
+  first failure or on the first delivering-nothing notice, and the restart lost every runtime
+  `update_symbols/2` scope. The documentation now says a key it does not list is ignored, not
+  refused, because a venue forwards its own options to it unchanged.
+
+### Fixed
+
+- `PollingFeed` left its in-flight fetch running when it stopped normally. The fetch task is
+  linked to the feed, and a link carries only an abnormal exit, so a `GenServer.stop/1` or a
+  supervisor's shutdown sent the task a `:normal` signal it ignored: a hung fetch (the case
+  `:fetch_timeout_ms` exists for) outlived its owner, holding its socket. `terminate/2` now shuts
+  the task down and cancels its timer.
+- `FakeInjection` stranded a watcher process for every test whose agent died before its owner.
+  The watcher monitored only the owner and killed the agent when the owner went down, so an
+  agent that stopped on its own left the watcher alive until the whole test process ended. It now
+  also monitors the agent and exits when it goes down.
+- `ReferenceVenue` compared an order or conversion amount before checking its exponent, so a
+  caller's `1e999999999` made `Decimal.gt?/2` allocate a number of that many digits in the venue's
+  process before the refusal. An amount whose exponent is past `Types.Validate`'s bound is now
+  `{:invalid_quantity | :invalid_price | :invalid_amount, value}` unread, as NaN is.
+
+### Tests
+
+- A `DateTime` is compared with `DateTime.compare/2` rather than `==` where a test asserts an
+  instant (`types_test`, `validate_test`, `timeframe_test`, `fail_closed_edges_test`,
+  `venue_test`, `http_client_test`).
+- Every `assert_receive` in `telemetry_test` carries a 5 s ceiling, and the two `nil_recipient`
+  and lower-case delivery quiet windows guarding a negative are 500 ms, not 100.
+- The negative-only scans in `credential_redaction_check_test` and `link_safety_check_test` now
+  compile a positive control beside the clean fixture, so a scan that found nothing because it
+  read nothing fails instead of passing.
+- A `default_rate_limiter_test` case that asserted `Enum.to_list(1..0//-1)` (a fact about the
+  standard library) is removed, and its one wall-clock bound is 30 s.
+
 ## [0.3.117] - 2026-10-20
 
 _No consumer-facing changes. Internal or packaging work only — recorded so every published version has a heading, because an absent one cannot be told apart from one the release pipeline dropped._

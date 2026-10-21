@@ -269,6 +269,62 @@ defmodule DpExchange.Core.CanonicalPairTest do
     end
   end
 
+  describe "an :asset_aliases that is not binary => binary is refused (tick AQ)" do
+    # An atom, a `nil` or a number on either side raised `FunctionClauseError` from
+    # `String.upcase/1`, and a value that is not a collection raised `Protocol.UndefinedError`:
+    # both from inside the first symbol a venue converted, naming neither the mapping nor the
+    # alias. A blank code matched or produced nothing and was accepted.
+    test "each bad shape raises ArgumentError naming :asset_aliases, in both directions" do
+      bad_aliases = [
+        %{xbt: "BTC"},
+        %{"XBT" => nil},
+        %{"XBT" => :btc},
+        %{"" => "BTC"},
+        %{"XBT" => ""},
+        %{1 => "BTC"},
+        [xbt: "BTC"],
+        [{"XBT", "BTC"}, :not_a_pair],
+        "XBT",
+        5,
+        :aliases,
+        ~D[2026-01-01]
+      ]
+
+      for bad <- bad_aliases do
+        mapping = %{sep: "", quotes: ~w(USD), asset_aliases: bad}
+
+        assert_raise ArgumentError, ~r/:asset_aliases/, fn ->
+          CanonicalPair.to_canonical(mapping, "BTCUSD")
+        end
+
+        assert_raise ArgumentError, ~r/:asset_aliases/, fn ->
+          CanonicalPair.to_exchange(mapping, "BTC-USD")
+        end
+      end
+    end
+
+    test "a refused alias map is never cached" do
+      bad = %{"BAD#{System.unique_integer([:positive])}" => nil}
+      mapping = %{sep: "", quotes: ~w(USD), asset_aliases: bad}
+
+      assert_raise ArgumentError, ~r/:asset_aliases/, fn ->
+        CanonicalPair.to_canonical(mapping, "BTCUSD")
+      end
+
+      refute Map.has_key?(CanonicalPair.alias_cache(), bad)
+    end
+
+    test "the message is bounded for a huge map" do
+      huge = Map.new(1..500, fn n -> {n, n} end)
+      mapping = %{sep: "", quotes: ~w(USD), asset_aliases: huge}
+
+      error =
+        assert_raise ArgumentError, fn -> CanonicalPair.to_canonical(mapping, "BTCUSD") end
+
+      assert byte_size(error.message) < 1_000
+    end
+  end
+
   describe "two exchange codes for one canonical code (found 2026-10-10)" do
     test "to_exchange/2 refuses to choose between them" do
       mapping = %{sep: "", quotes: ~w(USD), asset_aliases: %{"XBT" => "BTC", "XXBT" => "BTC"}}

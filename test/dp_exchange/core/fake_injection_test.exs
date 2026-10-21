@@ -224,6 +224,29 @@ defmodule DpExchange.Core.FakeInjectionTest do
       assert_receive {:DOWN, ^agent_ref, :process, ^agent, _reason}, 5_000
     end
 
+    test "the watcher ends when the agent dies first, instead of waiting for the owner" do
+      # The watcher waited on the owner alone, so an agent killed from outside left it
+      # running until the owner exited, and the next configuration started another.
+      Process.flag(:trap_exit, true)
+      FakeInjection.queue_failures(:webull, [{:error, :first}])
+      {:ok, agent} = DpExchange.Core.Config.find_override(:fake_injection)
+
+      {:monitored_by, watchers} = Process.info(agent, :monitored_by)
+      assert watchers != []
+      refs = Map.new(watchers, &{Process.monitor(&1), &1})
+
+      Process.exit(agent, :kill)
+
+      for {ref, watcher} <- refs do
+        assert_receive {:DOWN, ^ref, :process, ^watcher, _reason}, 5_000
+      end
+
+      # A stale handle is "nothing configured", and configuring again starts a fresh agent.
+      assert FakeInjection.next_outcome(:webull) == :none
+      FakeInjection.queue_failures(:webull, [{:error, :again}])
+      assert FakeInjection.next_outcome(:webull) == {:override, {:error, :again}}
+    end
+
     test "resetting a venue nothing was configured for is a no-op, not an error" do
       assert FakeInjection.reset(:webull) == :ok
       assert FakeInjection.next_outcome(:webull) == :none

@@ -105,8 +105,18 @@ defmodule DpExchange.Core.Types.StakingRate do
     end
   end
 
-  def bps_to_pct(bps) when is_integer(bps), do: bps |> Decimal.new() |> Decimal.div(100)
-  def bps_to_pct(bps) when is_float(bps), do: bps |> Decimal.from_float() |> Decimal.div(100)
+  # **An integer or a float goes through the same door as a string.** They were converted
+  # straight to a `Decimal` and divided: `10 ** 5000` came back as a `Decimal` with exponent
+  # 4_998 (an integer is not bounded the way `Decimal.parse/1` text is), a number every
+  # `Types.*` constructor refuses and that `Decimal.compare/2` aligns by building a number of
+  # that many digits, while the same value as text answered `nil`. An integer with more digits
+  # than a string may carry (the bound below) is `nil` for the same reason. A float is read
+  # through its shortest round-trip spelling (`Decimal.from_float/1`), so `0.1` is `0.1`.
+  def bps_to_pct(bps) when is_integer(bps) do
+    if abs(bps) >= @max_parsed_coef, do: nil, else: bps |> Decimal.new() |> bps_to_pct()
+  end
+
+  def bps_to_pct(bps) when is_float(bps), do: bps |> Decimal.from_float() |> bps_to_pct()
 
   def bps_to_pct(bps) when is_binary(bps) do
     case bps |> String.trim() |> Decimal.parse() do

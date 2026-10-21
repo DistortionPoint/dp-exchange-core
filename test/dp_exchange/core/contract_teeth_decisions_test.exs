@@ -84,6 +84,7 @@ defmodule Broken.Teeth.SetFake do
     case opts[:mode] do
       :unsubscribe_ignores -> :ok
       :unsubscribe_clears -> put([])
+      :tombstones -> put(["STALE" | get() -- symbols])
       _conforming -> put(get() -- symbols)
     end
 
@@ -243,6 +244,49 @@ defmodule Broken.Teeth.LaxWrites do
 
   @spec replace_order(map(), String.t(), term(), keyword()) :: {:ok, map()}
   def replace_order(_credentials, _id, _changes, _opts), do: {:ok, %{}}
+end
+
+defmodule Broken.Teeth.LaxOrders do
+  @moduledoc false
+  # Places whatever it is handed: a float quantity, a zero price, a NaN are all an order.
+  @spec place_order(map(), term(), keyword()) :: {:ok, map()}
+  def place_order(_credentials, _request, _opts), do: {:ok, %{id: "placed"}}
+end
+
+defmodule Broken.Teeth.PartialOrders do
+  @moduledoc false
+  # Checks the quantity and forgets the price: a NaN price is placed.
+  @spec place_order(map(), map(), keyword()) :: {:ok, map()} | {:error, term()}
+  def place_order(_credentials, %{quantity: quantity}, _opts) do
+    if valid?(quantity), do: {:ok, %{id: "placed"}}, else: {:error, {:invalid_quantity, quantity}}
+  end
+
+  defp valid?(%Decimal{} = value),
+    do: not Decimal.nan?(value) and not Decimal.inf?(value) and Decimal.gt?(value, 0)
+
+  defp valid?(_other), do: false
+end
+
+defmodule Broken.Teeth.RewritingOrders do
+  @moduledoc false
+  # Refuses the right requests with the right tags, but hands back a rewritten value (a
+  # string) where the caller's own was sent, so a caller matching its value does not match.
+  @spec place_order(map(), map(), keyword()) :: {:error, term()}
+  def place_order(_credentials, %{quantity: quantity, price: price}, _opts) do
+    if bad?(quantity),
+      do: {:error, {:invalid_quantity, inspect(quantity)}},
+      else: {:error, {:invalid_price, inspect(price)}}
+  end
+
+  defp bad?(%Decimal{} = value), do: Decimal.nan?(value) or Decimal.inf?(value)
+  defp bad?(_other), do: true
+end
+
+defmodule Broken.Teeth.RaisingOrders do
+  @moduledoc false
+  # Raises where the convention answers a tuple.
+  @spec place_order(map(), term(), keyword()) :: no_return()
+  def place_order(_credentials, _request, _opts), do: raise(ArgumentError, "boom")
 end
 
 defmodule Broken.Teeth.RaisingWrites do
@@ -696,14 +740,15 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
     end
 
     # The fakes below send synchronously from the calling process, so a message that is going
-    # to arrive is already in the mailbox: the short wait decides nothing.
+    # to arrive is already in the mailbox. The window is still the full 500 ms a quiet period
+    # guarding a negative gets: it costs nothing on the positive path and cannot be short.
     test "a fake that goes quiet on nil delivers nothing, and is named" do
-      assert nil_recipient([mode: :silent_on_nil], 100) == :nothing_delivered
+      assert nil_recipient([mode: :silent_on_nil], 500) == :nothing_delivered
     end
 
     test "a fake that raises or exits on nil is named, whichever way it fails" do
-      assert {:raised, %ArgumentError{}} = nil_recipient([mode: :raises_on_nil], 100)
-      assert nil_recipient([mode: :exits_on_nil], 100) == {:escaped, :exit, :boom}
+      assert {:raised, %ArgumentError{}} = nil_recipient([mode: :raises_on_nil], 500)
+      assert nil_recipient([mode: :exits_on_nil], 500) == {:escaped, :exit, :boom}
     end
   end
 
@@ -750,7 +795,7 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
                Broken.Teeth.DeliveryFake,
                "BTC-USD",
                opts,
-               100
+               500
              ) == :not_delivered
     end
   end
@@ -1235,6 +1280,104 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
 
     test "no probe at all is not a fault: the group is opt-in" do
       assert AdapterContract.process_credential_fault(nil) == nil
+    end
+  end
+
+  @order_base %{
+    symbol: "BTC-USDC",
+    side: :buy,
+    order_type: :limit,
+    time_in_force: :gtc,
+    quantity: Decimal.new("0.001"),
+    price: Decimal.new("1")
+  }
+
+  # The group's own cases, shaped as the suite shapes them (`[credentials, request, opts]`).
+  defp value_cases do
+    for {request, reason} <- AdapterContract.order_value_cases(@order_base),
+        do: {:place_order, [%{}, request, []], reason}
+  end
+
+  defp case_count(base), do: length(AdapterContract.order_value_cases(base))
+
+  describe "assertion 52: a quantity or price that is not a positive finite number" do
+    test "each of quantity and price is spoiled by a float, zero, a negative, NaN and infinity" do
+      cases = AdapterContract.order_value_cases(@order_base)
+
+      assert length(cases) == 10
+
+      for {request, {tag, value}} <- cases do
+        key = if tag == :invalid_quantity, do: :quantity, else: :price
+        other = if key == :quantity, do: :price, else: :quantity
+
+        # Only the field named is bad, and the value is carried exactly as given.
+        assert tag in [:invalid_quantity, :invalid_price]
+        assert request[key] == value
+        assert request[other] == @order_base[other]
+        assert Map.delete(request, key) == Map.delete(@order_base, key)
+      end
+
+      values = for {_request, {:invalid_quantity, value}} <- cases, do: value
+      finite = for %Decimal{coef: coef} = value <- values, is_integer(coef), do: value
+
+      assert Enum.any?(values, &is_float/1)
+      assert Enum.any?(values, &match?(%Decimal{coef: :NaN}, &1))
+      assert Enum.any?(values, &match?(%Decimal{coef: :inf}, &1))
+      assert Enum.any?(finite, &Decimal.lt?(&1, 0))
+      assert Enum.any?(finite, &Decimal.eq?(&1, 0))
+    end
+
+    test "a key the request does not carry is not probed, and a request with neither is empty" do
+      assert case_count(Map.delete(@order_base, :price)) == 5
+      assert case_count(Map.delete(@order_base, :quantity)) == 5
+      assert case_count(Map.drop(@order_base, [:price, :quantity])) == 0
+
+      # A nil is not a value to spoil either: it is a key the request leaves unsaid.
+      assert case_count(%{@order_base | price: nil}) == 5
+    end
+
+    test "the reference venue refuses every case, with the tag and the value as given" do
+      assert AdapterContract.case_faults(ReferenceVenue, value_cases()) == []
+    end
+
+    test "a venue that places whatever it is handed is named on every case" do
+      faults = AdapterContract.case_faults(Broken.Teeth.LaxOrders, value_cases())
+
+      assert length(faults) == 10
+      assert Enum.all?(faults, &match?({:place_order, 3, _expected, {:answered, {:ok, _}}}, &1))
+    end
+
+    test "a venue that checks the quantity and forgets the price is named on the price cases" do
+      faults = AdapterContract.case_faults(Broken.Teeth.PartialOrders, value_cases())
+      tags = for {_name, _arity, {tag, _value}, _fault} <- faults, do: tag
+
+      assert tags == List.duplicate(:invalid_price, 5)
+    end
+
+    test "a refusal that rewrites the value is not the value as given" do
+      faults = AdapterContract.case_faults(Broken.Teeth.RewritingOrders, value_cases())
+
+      answers = for {:place_order, 3, _expected, {:answered, answer}} <- faults, do: answer
+
+      assert length(faults) == 10
+      assert Enum.all?(answers, &match?({:error, _reason}, &1))
+    end
+
+    test "a raise is named as a raise, not taken for a refusal" do
+      faults = AdapterContract.case_faults(Broken.Teeth.RaisingOrders, value_cases())
+
+      assert length(faults) == 10
+      assert Enum.all?(faults, &match?({:place_order, 3, _expected, :raised}, &1))
+    end
+  end
+
+  describe "assertion 26: the add and remove cycle returns the set to empty" do
+    test "a fake that keeps an entry for a symbol it was asked to forget is named" do
+      assert set_fault(:tombstones) == {:state_not_restored, ["STALE"]}
+    end
+
+    test "a fake that keeps the three operations apart ends empty and is not faulted" do
+      assert set_fault(:conforming) == nil
     end
   end
 end

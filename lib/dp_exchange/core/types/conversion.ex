@@ -71,6 +71,11 @@ defmodule DpExchange.Core.Types.Conversion do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  A `:rate` of zero or less raises (a rate a caller multiplies by is above zero), and so does a
+  `:from_amount` or `:to_amount` below zero: a conversion moves money, and a negative amount is
+  a sign flipped in a decode that every other field stays plausible around. Zero amounts stay
+  legal (a quote is held before an amount settles).
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -78,6 +83,8 @@ defmodule DpExchange.Core.Types.Conversion do
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.text!([:id, :from_asset, :to_asset])
     |> Validate.decimals!([:from_amount, :to_amount, :rate, :fee])
+    |> Validate.positive!([:rate])
+    |> Validate.non_negative!([:from_amount, :to_amount])
     |> Validate.one_of!(:status, @statuses)
   end
 

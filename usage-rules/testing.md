@@ -13,9 +13,23 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Fifty-one assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifty-three assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Groups 52 and 53 need nothing from you and fail a package that breaks a rule the contract
+already states.** Group 52: a float, zero, a negative, NaN or infinity as the `:quantity` or
+`:price` of `place_order/3` (when active) must be `{:error, {:invalid_quantity, value}}` or
+`{:error, {:invalid_price, value}}`, the value as given, on your fake. Your `order_args:`
+request must carry a `:quantity` or a `:price` to spoil, or the group fails rather than pass
+having probed nothing. Group 53 reads your source under `package_root:` (and the static
+`config/*.exs` files) and fails on an atom made from text (`String.to_atom/1`, `:"x_#{y}"`,
+`Module.concat/2` of anything but literals: use a closed lookup, or `String.to_existing_atom/1`
+with the `ArgumentError` turned into a refusal), on `:erlang.binary_to_term/1` without
+`[:safe]`, on `Application.compile_env/3` (read a consumer's configuration at call time with
+`Application.get_env/3`), and on `System.get_env/1` anywhere but `config/runtime.exs`. Group 26
+now also ends the add/remove cycle by unsubscribing the last symbol and expects `coverage/1`
+to be empty: a fake that keeps an entry per symbol it was ever asked about fails it.
 
 **Group 51 is opt-in and skips until you supply `process_probe: {Module, :function}`.** It is
 the credential check that reaches the process which holds the credential for its lifetime, as

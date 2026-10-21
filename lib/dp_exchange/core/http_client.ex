@@ -184,7 +184,8 @@ defmodule DpExchange.Core.HttpClient do
   - `:provider` - The venue's identity: echoed in `{:exchange_error, provider, _}` and in
     every `[:dp_exchange, :request | :rate_limit, _]` event's `provider:`. Also the limiter
     bucket unless `:rate_limit_key` names another (no `:provider` and no `:rate_limit_key`
-    means no rate limiting).
+    means no rate limiting). An atom or a non-blank string, or `ArgumentError` before anything
+    is sent (`:rate_limit_key` too): both are printed into log lines and bucket names.
   - `:rate_limit_key` - The limiter bucket this request is metered in (default: `:provider`).
     Selects ONLY the bucket: a venue that meters order writes apart from its reads passes
     `provider: :venue, rate_limit_key: :venue_orders`, and errors and telemetry still say
@@ -324,6 +325,7 @@ defmodule DpExchange.Core.HttpClient do
 
     max_retry_after_s!(opts)
     validate_timeout_and_flags!(opts)
+    validate_identities!(opts)
     get_without_body!(method, body)
 
     # **The endpoint, never the URL.** This logged `url` whole, so a venue that authenticates
@@ -1436,6 +1438,30 @@ defmodule DpExchange.Core.HttpClient do
       raise ArgumentError, "#{inspect(key)} must be a boolean, got #{inspect(flag)}"
     end
   end
+
+  # **`:provider` and `:rate_limit_key` name the venue and the limiter bucket, and both are
+  # interpolated into text** (`"<provider> <path>"` for a per-endpoint bucket, the retry and
+  # 429 log lines). Neither was checked, so a map, a tuple or a pid there raised
+  # `Protocol.UndefinedError` from `String.Chars` inside the pipeline, in the calling venue
+  # process, on the first retry or per-endpoint request rather than at the call that named
+  # it. An atom (the venue's own) or a non-blank string, exactly what `t:provider/0`
+  # documents; `nil` is "none given" and stays legal.
+  defp validate_identities!(opts) do
+    Enum.each([:provider, :rate_limit_key], fn key ->
+      value = Config.opt(opts, key, nil)
+
+      unless identity?(value) do
+        raise ArgumentError,
+              "#{inspect(key)} must be an atom or a non-blank string, got " <>
+                inspect(value, limit: 10, printable_limit: 80)
+      end
+    end)
+  end
+
+  defp identity?(nil), do: true
+  defp identity?(value) when is_atom(value), do: value not in [true, false]
+  defp identity?(value) when is_binary(value), do: String.trim(value) != ""
+  defp identity?(_value), do: false
 
   defp handle_rate_limit(response, method, url, opts) do
     # Parse rate limit headers to get more accurate retry timing

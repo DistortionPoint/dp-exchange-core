@@ -62,7 +62,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Fifty-one groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifty-three groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -246,7 +246,15 @@ defmodule DpExchange.Core.AdapterContract do
       {51,
        "credential redaction in a running process — a secret handed to the venue's own " <>
          "process (the :process_probe option) is not in :sys.get_status/2, which is what a " <>
-         "crash report prints; skipped without the option"}
+         "crash report prints; skipped without the option"},
+      {52,
+       "order sizing and prices — a float, zero, a negative, NaN or infinity as the quantity " <>
+         "or the price of place_order/3 (when active) is {:error, {:invalid_quantity, value}} " <>
+         "or {:error, {:invalid_price, value}}, the value as given, never a success"},
+      {53,
+       "source safety — the package's own source builds no atom from text, calls no " <>
+         "binary_to_term without [:safe], reads no compile_env, and reads the environment " <>
+         "nowhere but config/runtime.exs; the scan refuses to examine nothing"}
     ]
   end
 
@@ -740,6 +748,28 @@ defmodule DpExchange.Core.AdapterContract do
       {Map.put(base, :contract_unknown_field, 1),
        {:unsupported_order_field, :contract_unknown_field}}
     ]
+  end
+
+  @doc """
+  The requests of assertion 52, as `{request, reason}`, built from `base`, a request the venue
+  accepts: for each of `:quantity` and `:price` that `base` carries, one request per value of
+  `invalid_amounts/0` (a float, zero, a negative, NaN, infinity) in its place.
+
+  `reason` is `{:invalid_quantity, value}` or `{:invalid_price, value}`, the value as given
+  (`Core.Venue.place_order/3`, "Quantities and prices accept a `Decimal`, an integer or a
+  numeric string, and refuse a float, zero and negative values, and NaN and infinity"). Only
+  one field is bad in each request, so the refusal can only be for that field. A key `base`
+  does not carry is not probed: adding a `:price` to a market order would be refused for a
+  different reason (`{:unexpected_field, :price}`), and a venue whose sizing is a
+  `:quote_size` has no `:quantity` to spoil. `[]` therefore means `base` had neither, and the
+  group refuses to pass having examined nothing.
+  """
+  @spec order_value_cases(map()) :: [{map(), term()}]
+  def order_value_cases(base) when is_map(base) do
+    for {key, tag} <- [quantity: :invalid_quantity, price: :invalid_price],
+        Map.get(base, key) != nil,
+        {_label, value} <- invalid_amounts(),
+        do: {Map.put(base, key, value), {tag, value}}
   end
 
   @doc """
@@ -1543,7 +1573,11 @@ defmodule DpExchange.Core.AdapterContract do
   serves. The fault names the first rule broken: `{:never_covered, symbol}` (nothing to compare
   with), `{:subscribe_dropped, symbols}`, `{:subscribe_missed, symbol}`,
   `{:unsubscribe_left, symbol}`, `{:unsubscribe_overreached, symbol}`,
-  `{:update_not_taken, symbol}` or `{:update_left, symbol}`.
+  `{:update_not_taken, symbol}`, `{:update_left, symbol}` or `{:state_not_restored, symbols}`.
+
+  The last step unsubscribes the one symbol the set still holds, and the set must then be empty
+  again: coverage that retains anything for a symbol no longer subscribed is state that grows
+  by one entry for every distinct symbol a venue is ever asked about.
   """
   @spec subscription_set_fault(module(), [String.t(), ...], keyword()) ::
           nil | {atom(), term()}
@@ -1560,6 +1594,14 @@ defmodule DpExchange.Core.AdapterContract do
     fake.update_symbols([first], opts)
     after_update = covered.()
 
+    # The cycle's last step takes away the only symbol left, so the set must be what it was
+    # when the cycle began: empty. A fake that keeps a key per symbol it was ever asked about
+    # (a tombstone, a "not covered" row, an entry that outlives its unsubscribe) passes every
+    # check above, which look only at the symbols they name, and grows by one per distinct
+    # symbol for as long as it runs.
+    fake.unsubscribe([first], opts)
+    after_cycle = Enum.sort(MapSet.to_list(covered.()))
+
     dropped = after_first |> MapSet.difference(after_second) |> MapSet.to_list()
 
     [
@@ -1569,7 +1611,8 @@ defmodule DpExchange.Core.AdapterContract do
       {:unsubscribe_left, first, MapSet.member?(after_unsub, first)},
       {:unsubscribe_overreached, second, not MapSet.member?(after_unsub, second)},
       {:update_not_taken, first, not MapSet.member?(after_update, first)},
-      {:update_left, second, MapSet.member?(after_update, second)}
+      {:update_left, second, MapSet.member?(after_update, second)},
+      {:state_not_restored, after_cycle, after_cycle != []}
     ]
     |> Enum.find_value(fn {fault, detail, broken?} -> if broken?, do: {fault, detail} end)
   end
@@ -2356,6 +2399,8 @@ defmodule DpExchange.Core.AdapterContract do
       unknown_id_refusals(),
       order_write_discipline(),
       process_redaction(),
+      order_value_refusals(),
+      source_safety(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -5073,6 +5118,79 @@ defmodule DpExchange.Core.AdapterContract do
     end
   end
 
+  # --- 52. a quantity or a price that is not a positive finite number is refused -----------
+  #
+  # `Core.Venue.place_order/3` states it: "Quantities and prices accept a `Decimal`, an integer
+  # or a numeric string, and refuse a float (it has already lost digits), zero and negative
+  # values, and NaN and infinity", as `{:invalid_quantity, value}` and `{:invalid_price,
+  # value}`. Group 34 holds items 1, 2, 5 and 8 of that check order and group 47 holds the
+  # amounts of the other writes, so nothing held this one: a Fake that sent a float quantity
+  # on, or placed an order of NaN, passed all fifty-one groups. The cases are
+  # `order_value_cases/1` over the suite's own order request, judged by `case_faults/2` like
+  # group 34; only one field is bad in each, and the other is the request's own valid one.
+  defp order_value_refusals do
+    quote location: :keep do
+      describe "52. order sizing and prices are positive finite numbers" do
+        test "place_order/3 refuses a float, zero, a negative, NaN and infinity as quantity " <>
+               "or price" do
+          if @fake, do: assert_order_value_refusals(@fake, @venue.capabilities())
+        end
+      end
+
+      defp assert_order_value_refusals(fake, caps) do
+        if Capabilities.active?(caps, {:place_order, 3}) do
+          [credentials, base, opts] = endpoint_args(:place_order, 3)
+
+          cases =
+            for {request, reason} <- DpExchange.Core.AdapterContract.order_value_cases(base),
+                do: {:place_order, [credentials, request, opts], reason}
+
+          # A request carrying neither a quantity nor a price probes nothing, and a group that
+          # probed nothing must not read as a pass (declare the venue's own request with
+          # `order_args:`).
+          assert cases != [],
+                 "the suite's order request carries neither :quantity nor :price, so there is " <>
+                   "no sizing or price to spoil and this group would pass having checked " <>
+                   "nothing. Declare a request that does with `order_args:`."
+
+          assert_conventions(fake, cases, "the fake's place_order/3 amounts", true)
+        end
+      end
+    end
+  end
+
+  # --- 53. the package's own source builds no atom from text -------------------------------
+  #
+  # `Core.SourceSafetyCheck` reads the source under `package_root` and the static config files:
+  # an atom made from venue or caller text (the table is never collected), an unsafe
+  # `binary_to_term`, a `compile_env` read (a consumer's configuration frozen at dependency
+  # compile time), and an environment read outside `config/runtime.exs`. It is static, so it
+  # starts nothing and calls nothing; and it refuses an empty scan, like groups 16, 18 and 19.
+  defp source_safety do
+    quote location: :keep do
+      describe "53. source safety" do
+        test "no atom is built from text, no unsafe binary_to_term, no compile_env, and no " <>
+               "environment read outside config/runtime.exs" do
+          lib_root = Path.expand(@package_root)
+          config_path = Keyword.get(Mix.Project.config(), :config_path, "config/config.exs")
+          result = DpExchange.Core.SourceSafetyCheck.run(lib_root, Path.dirname(config_path))
+
+          assert {:ok, violations} = result,
+                 "source safety could not scan anything under #{lib_root} (or could not read " <>
+                   "a file there). That is almost always `package_root:` on `use " <>
+                   "DpExchange.Core.AdapterContract` pointing somewhere this package's " <>
+                   "source is not; it defaults to \"lib\", venue packages set " <>
+                   "\"lib/dp_exchange\", and Core's own suite sets \"test/support\"."
+
+          assert violations == [],
+                 "source that makes an atom from text, calls binary_to_term unsafely, reads " <>
+                   "compile_env, or reads the environment outside config/runtime.exs:\n" <>
+                   DpExchange.Core.SourceSafetyCheck.format(violations)
+        end
+      end
+    end
+  end
+
   # --- 44. the fake exports everything the facade does ------------------------------------
   #
   # Each venue's own tests held this (`facade -- fake == []`), so a sixth venue could ship a
@@ -5485,6 +5603,14 @@ defmodule DpExchange.Core.AdapterContract do
               "update_symbols/2 left #{inspect(symbol)} covered. It REPLACES the set — that " <>
                 "is the whole difference between it and subscribe/2, and a venue where " <>
                 "both add has one callback doing two jobs and the other doing none."
+            )
+
+          {:state_not_restored, leftovers} ->
+            flunk(
+              "after subscribing, replacing and unsubscribing every symbol the set held, " <>
+                "coverage/1 still reports #{inspect(leftovers)}. State kept for a symbol " <>
+                "that is no longer subscribed grows by one entry per distinct symbol the " <>
+                "venue is ever asked about, for as long as it runs."
             )
         end
       end

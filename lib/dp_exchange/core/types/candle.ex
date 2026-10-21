@@ -98,6 +98,11 @@ defmodule DpExchange.Core.Types.Candle do
 
   Also raises on a bar that is not `coherent?/1`: `high` below `low`, or an `open` or `close`
   outside `[low, high]`. A struct literal can still hold one; `new/1` will not build it.
+
+  An open, high, low or close at or below zero raises too, as a traded price does (conformance
+  group 39 holds a Fake's candles to it), and so does a `:timeframe` outside
+  `DpExchange.Core.Timeframe.nameable/0`: `Timeframe.aligned?/2` answers `true` for a width it
+  has no rule for, so a bar labelled `"1H"` would pass the alignment check unexamined.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -105,7 +110,9 @@ defmodule DpExchange.Core.Types.Candle do
       __MODULE__
       |> Validate.new!(@enforce_keys, attrs)
       |> Validate.decimals!([:open, :high, :low, :close, :volume])
+      |> Validate.positive!([:open, :high, :low, :close])
       |> Validate.non_negative!([:volume])
+      |> Validate.timeframe!(:timeframe)
 
     unless coherent?(built) do
       raise ArgumentError,

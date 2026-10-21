@@ -239,20 +239,28 @@ defmodule DpExchange.Core.FakeInjection do
         {:ok, agent} = Agent.start_link(fn -> %{} end)
         owner = self()
 
-        spawn(fn ->
-          ref = Process.monitor(owner)
-
-          receive do
-            {:DOWN, ^ref, :process, _pid, _reason} -> Process.exit(agent, :kill)
-          end
-        end)
-
+        watch(owner, agent)
         Config.put_override(@override_key, agent)
         agent
 
       agent ->
         agent
     end
+  end
+
+  # The watcher ends when EITHER side does. It used to wait on the owner alone, so an agent
+  # that died first (killed from outside) left its watcher running until the owner exited, and
+  # the next `agent!/0` started another: one stranded process per agent death.
+  defp watch(owner, agent) do
+    spawn(fn ->
+      owner_ref = Process.monitor(owner)
+      agent_ref = Process.monitor(agent)
+
+      receive do
+        {:DOWN, ^owner_ref, :process, _pid, _reason} -> Process.exit(agent, :kill)
+        {:DOWN, ^agent_ref, :process, _pid, _reason} -> :ok
+      end
+    end)
   end
 
   defp default_state do

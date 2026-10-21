@@ -20,6 +20,37 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
     Enum.map(violations, fn v -> {v.module, v.function, v.arity} end)
   end
 
+  # A process behaviour that links a child and never traps exits, compiled beside a fixture
+  # whose point is that it is NOT reported. A `refute` over a scan that found nothing at all
+  # holds whether the exclusion works or the check has silently stopped running; the
+  # companion makes it discriminate.
+  defp leak(u) do
+    %{
+      path: "leak.ex",
+      code: """
+      defmodule LeakFeed#{u} do
+        use GenServer
+
+        @impl true
+        def init(state), do: {:ok, state}
+
+        @impl true
+        def handle_call(:open, _from, state), do: {:reply, spawn_link(fn -> :ok end), state}
+      end
+      """
+    }
+  end
+
+  defp compile_with_leak!(u, sources), do: UnwiredFixture.compile!([leak(u) | sources])
+
+  defp assert_scan_live(violations, u) do
+    leak = Module.concat([:"Elixir", "LeakFeed#{u}"])
+
+    assert {leak, :handle_call, 3} in violation_mfas(violations),
+           "the scan did not report a plainly linking process, so the refute beside it proves " <>
+             "nothing"
+  end
+
   describe "the defect this check exists for" do
     test "the pre-fix shape: a linked child started from a callback, no trap_exit" do
       u = uniq()
@@ -66,7 +97,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "socket.ex",
             code: """
@@ -103,6 +134,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       feed = Module.concat([:"Elixir", "Feed#{u}"])
 
       refute Enum.any?(violations, &(&1.module == feed)),
@@ -243,7 +275,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "poller.ex",
             code: """
@@ -275,6 +307,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "ContinueFeed#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -294,7 +327,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "socket.ex",
             code: """
@@ -314,6 +347,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "BootstrapOnly#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -325,7 +359,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "zero.ex",
             code: """
@@ -343,6 +377,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "BootstrapZero#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -443,7 +478,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "supervisor.ex",
             code: """
@@ -463,6 +498,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       facade = Module.concat([:"Elixir", "Facade#{u}"])
 
       refute Enum.any?(violations, &(&1.module == facade)),
@@ -475,7 +511,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "child.ex",
             code: """
@@ -502,6 +538,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       sup = Module.concat([:"Elixir", "Sup#{u}"])
 
       refute Enum.any?(violations, &(&1.module == sup)),
@@ -513,7 +550,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "quiet.ex",
             code: """
@@ -528,6 +565,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "Quiet#{u}"])
       refute Enum.any?(violations, &(&1.module == mod))
     end
@@ -536,7 +574,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "socket.ex",
             code: """
@@ -562,6 +600,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "OutsideFeed#{u}"])
       refute Enum.any?(violations, &(&1.module == mod))
     end
@@ -605,7 +644,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "feed.ex",
             code: """
@@ -629,6 +668,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "GuardedInjectedFeed#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod))
@@ -683,7 +723,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
       u = uniq()
 
       {beam_dir, lib_root} =
-        UnwiredFixture.compile!([
+        compile_with_leak!(u, [
           %{
             path: "tasks.ex",
             code: """
@@ -707,6 +747,7 @@ defmodule DpExchange.Core.LinkSafetyCheckTest do
         ])
 
       assert {:ok, violations} = LinkSafetyCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "GuardedTaskFeed#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod))

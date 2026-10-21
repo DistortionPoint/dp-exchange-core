@@ -67,11 +67,18 @@ defmodule DpExchange.Core.Types.OrderBook do
   pairs, or when the moduledoc's ordering is broken: `bids` must not rise and `asks` must
   not fall from one level to the next, so `hd/1` is the best price. A venue-order book that
   was never re-sorted is true in every value and wrong in meaning. A level whose price is
-  `<= 0` or whose size is `<= 0` raises too (see "Sizes and prices" above).
+  `<= 0` or whose size is `<= 0` raises too (see "Sizes and prices" above), and so does a
+  `:sequence` that is neither an integer nor `nil`: a `"7"` compared with `>` against the
+  integer a consumer last held sorts above it by Erlang term order, and a stale book would read
+  as the newest.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
-    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.integers!([:sequence])
+
     check_levels!(built, :bids, [:gt, :eq])
     check_levels!(built, :asks, [:lt, :eq])
     built

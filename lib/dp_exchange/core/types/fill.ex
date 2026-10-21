@@ -52,6 +52,11 @@ defmodule DpExchange.Core.Types.Fill do
   Also raises on a `:side` that is not `:buy` or `:sell`, and on a `:liquidity` that is not
   `:maker`, `:taker` or `nil`: `side: :long` on a fill reads as no side to a consumer
   matching the two the type states, and a `"maker"` string matches neither.
+
+  A `:price` of zero or less raises, as a public trade's does (`Types.Trade`): a match
+  happened at a price above zero, and a `0` is a decode bug (an absent price read as a number)
+  that would zero the order's average price in whoever sums the fills. A negative `:fee` stays
+  legal, since a maker rebate is a fee the venue paid.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -59,6 +64,7 @@ defmodule DpExchange.Core.Types.Fill do
     |> Validate.new!(@enforce_keys, attrs)
     |> Validate.text!([:order_id])
     |> Validate.decimals!([:quantity, :price, :fee])
+    |> Validate.positive!([:price])
     |> Validate.non_negative!([:quantity])
     |> Validate.one_of!(:side, [:buy, :sell])
     |> Validate.one_of!(:liquidity, [:maker, :taker, nil])

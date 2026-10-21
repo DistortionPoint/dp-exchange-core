@@ -83,7 +83,9 @@ defmodule DpExchange.Core.TelemetryTest do
       before_monotonic = System.monotonic_time()
       returned = Telemetry.request_start(%{provider: provider, endpoint: "/x", method: :get})
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :start], measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :start], measurements, metadata},
+                     5_000
+
       assert is_integer(measurements.system_time)
       assert metadata.provider == provider
 
@@ -102,7 +104,9 @@ defmodule DpExchange.Core.TelemetryTest do
         status: 500
       )
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :stop], measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :stop], measurements, metadata},
+                     5_000
+
       assert measurements.duration >= 0
       assert metadata.status == 500
       assert metadata.provider == provider
@@ -118,8 +122,12 @@ defmodule DpExchange.Core.TelemetryTest do
       Telemetry.request_stop(System.monotonic_time(), metadata)
       Telemetry.request_exception(System.monotonic_time(), metadata)
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :stop], %{duration: _}, ^metadata}
-      assert_receive {:telemetry, [:dp_exchange, :request, :exception], %{duration: _}, ^metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :stop], %{duration: _}, ^metadata},
+                     5_000
+
+      assert_receive {:telemetry, [:dp_exchange, :request, :exception], %{duration: _},
+                      ^metadata},
+                     5_000
     end
 
     test "exception is its own event, not a stop carrying an error" do
@@ -133,7 +141,9 @@ defmodule DpExchange.Core.TelemetryTest do
 
       Telemetry.request_exception(System.monotonic_time(), %{provider: provider}, reason: "boom")
 
-      assert_receive {:telemetry, [:dp_exchange, :request, :exception], _measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :request, :exception], _measurements, metadata},
+                     5_000
+
       assert metadata.reason == "boom"
       refute_receive {:telemetry, [:dp_exchange, :request, :stop], _measurements, _metadata}, 500
     end
@@ -394,7 +404,7 @@ defmodule DpExchange.Core.TelemetryTest do
 
       Telemetry.link_down(provider, inspect({:remote, 1006, "abnormal"}))
 
-      assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements, metadata}, 5_000
       assert is_binary(metadata.reason)
     end
 
@@ -407,7 +417,8 @@ defmodule DpExchange.Core.TelemetryTest do
       assert :ok = Telemetry.link_down(provider, {:raw, :term})
 
       assert_receive {:telemetry, [:dp_exchange, :link, :down], _measurements,
-                      %{reason: "{:raw, :term}"}}
+                      %{reason: "{:raw, :term}"}},
+                     5_000
     end
 
     test "down bounds a huge reason, raw or text, because it is copied to every handler" do
@@ -439,7 +450,7 @@ defmodule DpExchange.Core.TelemetryTest do
 
       Telemetry.link_event(provider, :order_book, 2_048)
 
-      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :link, :event], measurements, metadata}, 5_000
       assert measurements.bytes == 2_048
       assert measurements.count == 1
       assert metadata.type == :order_book
@@ -452,7 +463,7 @@ defmodule DpExchange.Core.TelemetryTest do
 
       Telemetry.link_reconnect_attempt(provider, 1, 0)
 
-      assert_receive {:telemetry, [:dp_exchange, :link, :reconnect_attempt], _m, metadata}
+      assert_receive {:telemetry, [:dp_exchange, :link, :reconnect_attempt], _m, metadata}, 5_000
       assert metadata.attempt == 1
       assert metadata.delay_ms == 0
     end

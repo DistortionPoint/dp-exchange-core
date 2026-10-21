@@ -85,12 +85,15 @@ defmodule DpExchange.Core.Instrument do
   or `:status` outside the closed vocabularies in `t:instrument_type/0` and `t:status/0`
   (a raw venue string such as `"online"`, or `:tradeable`, is a plausible value with no
   meaning to a consumer matching the atoms); pass the venue's string through
-  `instrument_from/1` and `status_from/1` first.
+  `instrument_from/1` and `status_from/1` first. A `:base` or `:quote` that is present must be
+  a non-blank string: an atom or a number there built, and a catalogue matching on the
+  strings found no instrument for it.
   """
   @spec new(keyword()) :: t()
   def new(fields) do
     __MODULE__
     |> Validate.new!(@enforce_keys, fields)
+    |> Validate.text!([:base, :quote])
     |> Validate.one_of!(:instrument, [:spot, :perp, :future, :unknown])
     |> Validate.one_of!(:status, [:tradable, :delisted, :unknown])
   end

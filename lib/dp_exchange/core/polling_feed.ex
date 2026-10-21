@@ -253,9 +253,12 @@ defmodule DpExchange.Core.PollingFeed do
     * `:fetch_timeout_ms` - a fetch still running after this is a failure, a positive
       integer (default: the interval, clamped to
       `#{@min_fetch_timeout_ms}`..`#{@max_fetch_timeout_ms}`).
-    * `:label` - names this feed in notices and logs (default: `"polling-feed"`).
+    * `:label` - names this feed in notices and logs (default: `"polling-feed"`). An atom or a
+      non-blank string; anything else stops the feed at start with
+      `{:invalid_option, :label, value}`.
     * `:provider` - what a `Core.Notice` from this feed names as its provider (default:
-      `:label`).
+      `:label`). The same rule as `:label` (it is `Core.Notice`'s provider rule: an atom other
+      than `nil`, `true` and `false`, or a non-blank string).
     * `:on_refusal` - `(symbol, reason -> any)`, a 2-arity function, called once per refused
       symbol (default: no-op).
     * `:on_notice` - `t:notice_handler/0`, a 1-arity function (default: no-op).
@@ -266,6 +269,14 @@ defmodule DpExchange.Core.PollingFeed do
   otherwise re-poll the venue as fast as the fetch returns. The three durations are also
   bounded above by 4_294_967_295 milliseconds (the longest `Process.send_after/3` arms): a
   larger one stops the feed at start instead of raising from a timer on the first fetch.
+
+  **A key not listed above is ignored, not refused.** A venue's own `Feed` forwards its `opts`
+  to this module unchanged (see `DpExchange.Core.Config.opt/3`), so the keys of the venue's
+  other options arrive here too; refusing them would refuse every venue. A misspelt key is
+  caught where the caller's options are read, at the facade (`DpExchange.Core.Options.check/2`).
+
+  Stopping the feed (a supervisor's shutdown, `GenServer.stop/1`) also stops the fetch it has
+  in flight, so a fetch that is hung or slow does not outlive its owner.
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
@@ -507,6 +518,16 @@ defmodule DpExchange.Core.PollingFeed do
       # arriving through the one required function the `Config.opt/3` fix could not reach —
       # a required option has no default to fall back to.
       {is_function(state.sink, 1), {:invalid_option, :sink, state.sink}},
+      # **`:label` and `:provider` name this feed in every log line and notice, and neither was
+      # checked.** A label that is a tuple or a map raised `Protocol.UndefinedError` from the
+      # first failure's log message, and a provider that `Notice.new/3` refuses (`nil`, a
+      # blank string, a number) raised `ArgumentError` from `record_failure/3` when the feed
+      # first crossed into delivering-nothing: inside this process, on the path that exists to
+      # report an outage, so the restart came back from its static start opts and lost every
+      # `update_symbols/2` scope. Refused at start, naming the option, with the same rule
+      # `Notice.new/3` applies to a provider.
+      {identity?(state.label), {:invalid_option, :label, state.label}},
+      {identity?(state.provider), {:invalid_option, :provider, state.provider}},
       {is_nil(state.fetch) or is_function(state.fetch, 1),
        {:invalid_option, :fetch, state.fetch}},
       {is_nil(state.fetch_all) or is_function(state.fetch_all, 1),
@@ -539,6 +560,12 @@ defmodule DpExchange.Core.PollingFeed do
 
   defp timer_ms?(value, minimum),
     do: is_integer(value) and value >= minimum and value <= @max_timer_ms
+
+  # An atom (other than `nil`, `true` and `false`) or a non-blank string: what `Notice.new/3`
+  # accepts as a provider, and something `"#{value}"` can print.
+  defp identity?(value) when is_atom(value), do: value not in [nil, true, false]
+  defp identity?(value) when is_binary(value), do: String.trim(value) != ""
+  defp identity?(_value), do: false
 
   defp first_invalid({true, _reason}), do: nil
   defp first_invalid({false, reason}), do: {:error, reason}
@@ -667,6 +694,22 @@ defmodule DpExchange.Core.PollingFeed do
   end
 
   def handle_info(_other, state), do: {:noreply, state}
+
+  # **Stopping the feed stops the fetch it has in flight.** The fetch runs in a task LINKED to
+  # this process, and a link carries only an abnormal exit: a feed stopped normally
+  # (`GenServer.stop/1`, a supervisor's `:shutdown` through a trapped exit, `{:stop, :normal}`)
+  # sent its task a `:normal` exit signal, which a task that is not trapping exits ignores. A
+  # fetch that was hung (the case `:fetch_timeout_ms` exists for) or merely slow therefore
+  # outlived its owner, holding its socket and its venue request, with nobody left to read the
+  # answer. `terminate/2` runs because `init/1` traps exits.
+  @impl true
+  def terminate(_reason, %{in_flight: %{task: task, timer: timer}}) do
+    Process.cancel_timer(timer)
+    Task.shutdown(task, :brutal_kill)
+    :ok
+  end
+
+  def terminate(_reason, _state), do: :ok
 
   # The tracked timer has fired, so its ref is spent.
   defp poll_tick(state, symbol) do

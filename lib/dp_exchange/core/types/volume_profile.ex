@@ -68,11 +68,15 @@ defmodule DpExchange.Core.Types.VolumeProfile do
   Builds a `t:t/0`, failing closed if a required field is absent or `nil`.
 
   `@enforce_keys` guards presence, not `nil` — see `DpExchange.Core.Types.Validate`.
+
+  Also raises on a `:timeframe` outside `DpExchange.Core.Timeframe.nameable/0`, as
+  `Types.Candle.new/1` does: the interval is the key a profile is stored and joined under.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
     __MODULE__
     |> Validate.new!(@enforce_keys, attrs)
+    |> Validate.timeframe!(:timeframe)
     |> Validate.decimals!([:total_volume, :delta, :buy_volume, :sell_volume])
     |> Validate.non_negative!([:total_volume, :buy_volume, :sell_volume])
     |> Validate.decimal_map_values!([:buy_at_price, :sell_at_price])

@@ -52,7 +52,7 @@ defmodule DpExchange.Core.TypesTest do
         provider: :test_venue
       }
 
-      assert balance.timestamp == @ts
+      assert DateTime.compare(balance.timestamp, @ts) == :eq
       assert balance.available_balance == nil
       assert balance.hold == nil
     end
@@ -123,7 +123,7 @@ defmodule DpExchange.Core.TypesTest do
           provider: :test_venue
         )
 
-      assert quote_struct.venue_time == ancient
+      assert DateTime.compare(quote_struct.venue_time, ancient) == :eq
     end
 
     test "a Quote the venue gave no time for keeps venue_time nil, never a substituted clock" do
@@ -139,7 +139,7 @@ defmodule DpExchange.Core.TypesTest do
       }
 
       assert is_nil(quote_struct.venue_time)
-      assert quote_struct.observed_at == ~U[2026-09-10 00:00:00Z]
+      assert DateTime.compare(quote_struct.observed_at, ~U[2026-09-10 00:00:00Z]) == :eq
     end
 
     test "observed_at is mandatory on a Quote, so no consumer has to invent a time" do

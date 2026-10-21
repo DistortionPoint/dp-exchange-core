@@ -50,9 +50,11 @@ defmodule DpExchange.Core.Types.Validate do
   **Value rules a type's own doc states are held per type too**, by `positive!/2` (a traded
   price, a resting bid or ask, a position or withdrawal size, a strike), `non_negative!/2`,
   `text!/2` (an address, network, asset or id is a non-blank string), `maps!/2`, `dates!/2`,
-  `datetimes!/2` (a time field `new!/3` cannot recognise by name) and `symbol_lists!/2` (a
-  container of the right shape or `nil`). Each names module, field and
-  value, accepts `nil` (presence is `new!/3`'s job) and never repairs the input.
+  `datetimes!/2` (a time field `new!/3` cannot recognise by name), `symbol_lists!/2` (a
+  container of the right shape or `nil`), `integers!/2` (a sequence number) and
+  `timeframe!/2` (a candle width in `Timeframe.nameable/0`). Each names module, field and
+  value, accepts `nil` (presence is `new!/3`'s job; `timeframe!/2` is the one exception, and
+  its field is enforced non-nil) and never repairs the input.
 
   ## Struct literals still work
 
@@ -63,6 +65,8 @@ defmodule DpExchange.Core.Types.Validate do
   is the one that turns a decode bug into an error at the boundary instead of a crash three
   calls downstream.
   """
+
+  alias DpExchange.Core.Timeframe
 
   @max_decimal_exponent 1_000
 
@@ -238,6 +242,46 @@ defmodule DpExchange.Core.Types.Validate do
     each_present(built, fields, fn field, value ->
       unless symbol_list?(value), do: raise_shape!(module, field, value, "a list of strings")
     end)
+  end
+
+  @doc """
+  Returns `built` if each of `fields` is `nil` or an integer, and raises `ArgumentError`
+  naming module, field and value otherwise.
+
+  For a venue's sequence number (`OrderBook.sequence`, `OrderBookDelta.sequence`). A `"7"`
+  there built, and a consumer comparing it with `>` against the integer it held last got
+  Erlang term ordering (a binary sorts above every integer), so a stale frame read as the
+  newest one and no error said why. A float is refused by `new!/3` already; a `Decimal` is
+  refused here.
+  """
+  @spec integers!(struct(), [atom()]) :: struct()
+  def integers!(%module{} = built, fields) when is_list(fields) do
+    each_present(built, fields, fn field, value ->
+      unless is_integer(value), do: raise_shape!(module, field, value, "an integer")
+    end)
+  end
+
+  @doc """
+  Returns `built` if its `field` holds a label `DpExchange.Core.Timeframe.nameable?/1`
+  recognises, and raises `ArgumentError` naming module, field and value otherwise.
+
+  `Timeframe.aligned?/2` answers `true` for a width it has no rule for, so a bar labelled
+  `"1H"` or `"60m"` passed the authenticity check unexamined, and was stored under a label
+  nothing else reads. The label is the contract's vocabulary or it is refused. A value that
+  is not text at all is refused the same way (`nameable?/1` answers `false` for it).
+  """
+  @spec timeframe!(struct(), atom()) :: struct()
+  def timeframe!(%module{} = built, field) when is_atom(field) do
+    value = Map.fetch!(built, field)
+
+    if Timeframe.nameable?(value) do
+      built
+    else
+      raise ArgumentError,
+            "#{inspect(module)}.new/1: field #{inspect(field)} is #{show(value)} — must be " <>
+              "one of #{inspect(Timeframe.nameable())}; a width Core cannot " <>
+              "name is not checked for alignment and is stored under a label nothing can read"
+    end
   end
 
   defp symbol_list?([]), do: true

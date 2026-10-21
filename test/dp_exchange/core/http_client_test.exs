@@ -757,7 +757,7 @@ defmodule DpExchange.Core.HttpClientTest do
       %{reset_time: absolute} =
         HttpClient.parse_rate_limit_headers(base ++ [{"X-RateLimit-Reset", "1800000000"}])
 
-      assert absolute == DateTime.from_unix!(1_800_000_000)
+      assert DateTime.compare(absolute, DateTime.from_unix!(1_800_000_000)) == :eq
     end
 
     test "it no longer takes a provider — there is no venue dispatch left" do
@@ -2669,6 +2669,45 @@ defmodule DpExchange.Core.HttpClientTest do
       assert_receive {:rlk_hit, %{provider: ^provider, retry_after_ms: wait}}, 5_000
       assert wait > 0
       refute_receive {:rlk_hit, %{provider: ^bucket}}, 500
+    end
+  end
+
+  describe "the venue identity and the limiter bucket are text-shaped (tick AQ)" do
+    # `:provider` and `:rate_limit_key` are interpolated into the retry and 429 log lines and
+    # into a per-endpoint bucket name. A map, a tuple or a pid there raised
+    # `Protocol.UndefinedError` from `String.Chars` inside the pipeline, in the calling venue
+    # process, on the first retry rather than at the call that named it. They are refused in the
+    # caller, before anything is sent, like their neighbours.
+    test "a provider or rate_limit_key that is not an atom or a non-blank string is refused" do
+      use_stub()
+
+      for key <- [:provider, :rate_limit_key],
+          bad <- [%{venue: 1}, {:a, :tuple}, self(), 42, "", "   ", true, false] do
+        error = assert_raise ArgumentError, fn -> request([{key, bad}]) end
+
+        assert error.message =~ inspect(key)
+        assert error.message =~ "atom or a non-blank string"
+      end
+
+      # Nothing reached the limiter, let alone the network.
+      refute_received {:acquire, :called}
+      refute_received {:check, :called}
+    end
+
+    test "an atom, a non-blank string and an absent or nil value are accepted" do
+      use_stub()
+
+      for provider <- [:venue, "venue", nil], bucket <- [:bucket, "bucket", nil] do
+        # The closed port answers with a transport error, not a raise.
+        assert {:error, _reason} =
+                 request(provider: provider, rate_limit_key: bucket, rate_limit_blocking: false)
+      end
+    end
+
+    test "the refusal is made in the caller even when the limiter would have refused first" do
+      use_stub({:rate_limited, 1_000})
+
+      assert_raise ArgumentError, ~r/:provider/, fn -> request(provider: {:not, :text}) end
     end
   end
 

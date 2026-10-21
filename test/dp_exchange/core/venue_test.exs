@@ -295,7 +295,7 @@ defmodule DpExchange.Core.VenueTest do
       at = ~U[2020-07-13 15:30:59Z]
       assert {:ok, rate} = ReferenceVenue.get_fx_rate("AUDUSD", at, [])
 
-      assert rate.as_of == at
+      assert DateTime.compare(rate.as_of, at) == :eq
     end
 
     test "the benchmark is carried, because two sources can legitimately disagree" do

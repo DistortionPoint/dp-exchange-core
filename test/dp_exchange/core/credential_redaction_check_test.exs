@@ -23,6 +23,18 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
     Enum.map(violations, fn v -> {v.module, v.field} end)
   end
 
+  # A struct that leaks plainly, compiled beside a fixture whose point is that it is NOT
+  # reported. A `refute` over a scan that found nothing at all holds whether the exclusion
+  # works or the check has silently stopped running; the companion makes it discriminate.
+  defp leak(u),
+    do: %{path: "leak.ex", code: "defmodule Leak#{u} do\n  defstruct [:api_key]\nend\n"}
+
+  defp assert_scan_live(violations, u) do
+    assert {Module.concat([:"Elixir", "Leak#{u}"]), :api_key} in violation_fields(violations),
+           "the scan did not report a plainly leaking struct, so the refute beside it proves " <>
+             "nothing"
+  end
+
   describe "the defect this check exists for" do
     test "the pre-fix shape: a Credentials struct with no Inspect redaction at all" do
       u = uniq()
@@ -54,6 +66,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "credentials.ex",
             code: """
@@ -66,6 +79,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "Credentials#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -109,6 +123,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "credentials.ex",
             code: """
@@ -124,6 +139,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "HandRolled#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -266,6 +282,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "credentials.ex",
             code: """
@@ -278,6 +295,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "PublicClientId#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod and &1.field == :client_id))
@@ -311,6 +329,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "not_secret.ex",
             code: """
@@ -322,6 +341,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "TokenType#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -341,6 +361,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "feed.ex",
             code: """
@@ -357,6 +378,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "RawMapFeed#{u}"])
 
       refute Enum.any?(violations, &(&1.module == mod)),
@@ -370,6 +392,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
 
       {beam_dir, lib_root} =
         UnwiredFixture.compile!([
+          leak(u),
           %{
             path: "quote.ex",
             code: """
@@ -381,6 +404,7 @@ defmodule DpExchange.Core.CredentialRedactionCheckTest do
         ])
 
       assert {:ok, violations} = CredentialRedactionCheck.run(beam_dir, lib_root)
+      assert_scan_live(violations, u)
       mod = Module.concat([:"Elixir", "PlainQuote#{u}"])
       refute Enum.any?(violations, &(&1.module == mod))
     end

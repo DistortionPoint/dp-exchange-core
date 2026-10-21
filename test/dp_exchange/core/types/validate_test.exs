@@ -1403,7 +1403,7 @@ defmodule DpExchange.Core.Types.ValidateTest do
     test "a DateTime builds, and nil is left to presence: allowed on venue_time, not observed_at" do
       assert %TopOfBook{venue_time: nil} = TopOfBook.new([observed_at: @ts] ++ @top)
       built = TopOfBook.new([observed_at: @ts, venue_time: @ts] ++ @top)
-      assert built.venue_time == @ts
+      assert DateTime.compare(built.venue_time, @ts) == :eq
 
       assert_raise ArgumentError, ~r/observed_at/, fn ->
         TopOfBook.new([observed_at: nil] ++ @top)

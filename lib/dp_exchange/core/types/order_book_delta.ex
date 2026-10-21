@@ -108,11 +108,16 @@ defmodule DpExchange.Core.Types.OrderBookDelta do
   an integer). A level on `:buy`, or on the string `"bid"`, is
   read by a consumer matching the two sides as no side at all, and its quantity lands on
   neither side of the book. A price `<= 0` or a negative quantity raises too; a quantity of
-  zero is kept, because it is how a delta says a level ceased to exist.
+  zero is kept, because it is how a delta says a level ceased to exist. A `:sequence` that is
+  neither an integer nor `nil` raises: a consumer dropping a frame whose sequence is `<=` the
+  last applied would compare a `"7"` as larger than every integer and apply a stale delta.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
-    built = Validate.new!(__MODULE__, @enforce_keys, attrs)
+    built =
+      __MODULE__
+      |> Validate.new!(@enforce_keys, attrs)
+      |> Validate.integers!([:sequence])
 
     if is_list(built.levels) and Enum.all?(built.levels, &level?/1) do
       Enum.each(built.levels, &check_values!/1)

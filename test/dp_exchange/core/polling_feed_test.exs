@@ -2166,4 +2166,92 @@ defmodule DpExchange.Core.PollingFeedTest do
       assert rearmed != armed
     end
   end
+
+  describe "found 2026-10-21 (tick AQ, option validation and cleanup)" do
+    test "a label or provider that cannot name the feed is refused at start" do
+      # `"#{label}"` raised `Protocol.UndefinedError` from the first failure's log line, and a
+      # provider `Notice.new/3` refuses raised `ArgumentError` from `record_failure/3` when the
+      # feed first crossed into delivering-nothing: inside the feed, on the path that reports
+      # an outage, so the restart lost every runtime scope.
+      Process.flag(:trap_exit, true)
+      base = [sink: sink_to_self(), fetch: &event/1]
+
+      for {key, bad} <- [
+            label: {:a, :tuple},
+            label: %{},
+            label: "  ",
+            label: true,
+            label: false,
+            label: 42,
+            provider: 42,
+            provider: "",
+            provider: false,
+            provider: %{name: 1},
+            provider: {:venue, 1}
+          ] do
+        assert {:error, {:invalid_option, ^key, ^bad}} =
+                 PollingFeed.start_link(Keyword.put(base, key, bad))
+      end
+    end
+
+    test "an atom or a string names the feed, and an absent or nil value takes the default" do
+      Process.flag(:trap_exit, true)
+      base = [sink: sink_to_self(), fetch: &event/1, symbols: [], start_delay_ms: 600_000]
+
+      for opts <- [
+            [label: :my_poll, provider: :venue],
+            [label: "my-poll", provider: "venue"],
+            [label: nil, provider: nil],
+            []
+          ] do
+        assert {:ok, pid} = PollingFeed.start_link(Keyword.merge(base, opts))
+        assert Process.alive?(pid)
+        assert :ok = GenServer.stop(pid, :normal, 5_000)
+      end
+    end
+
+    test "stopping the feed stops the fetch it has in flight" do
+      # The fetch runs in a task LINKED to the feed, and a link carries only an abnormal exit:
+      # a feed stopped normally sent its task a `:normal` signal, which a task that is not
+      # trapping exits ignores. A hung fetch outlived its owner, holding its socket.
+      Process.flag(:trap_exit, true)
+      test = self()
+
+      fetch = fn _symbol ->
+        send(test, {:fetching, self()})
+        Process.sleep(:infinity)
+      end
+
+      {:ok, feed} =
+        PollingFeed.start_link(
+          sink: sink_to_self(),
+          fetch: fetch,
+          symbols: ["A"],
+          start_delay_ms: 0,
+          interval_ms: 600_000
+        )
+
+      assert_receive {:fetching, task}, 5_000
+      ref = Process.monitor(task)
+
+      assert :ok = GenServer.stop(feed, :normal, 5_000)
+      assert_receive {:DOWN, ^ref, :process, ^task, _reason}, 5_000
+    end
+
+    test "stopping a feed with nothing in flight is clean" do
+      Process.flag(:trap_exit, true)
+
+      {:ok, feed} =
+        PollingFeed.start_link(
+          sink: sink_to_self(),
+          fetch: &event/1,
+          symbols: ["A"],
+          start_delay_ms: 600_000,
+          interval_ms: 600_000
+        )
+
+      assert :ok = GenServer.stop(feed, :normal, 5_000)
+      refute Process.alive?(feed)
+    end
+  end
 end

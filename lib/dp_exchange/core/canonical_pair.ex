@@ -16,6 +16,10 @@ defmodule DpExchange.Core.CanonicalPair do
         asset_aliases: %{"XBT" => "BTC"} # exchange base code → canonical (optional)
       }
 
+  A malformed mapping is refused by both directions with an `ArgumentError` naming the key:
+  `:sep` must be a binary, `:quotes` a list of binaries, and `:asset_aliases` a map (or a list of
+  pairs) whose codes on both sides are non-blank binaries.
+
   ## `quotes` is sorted longest-first internally, whatever order the caller gives it
 
   A concat-style mapping (`sep: ""`) has to find the SUFFIX among `quotes` that ends the
@@ -128,10 +132,16 @@ defmodule DpExchange.Core.CanonicalPair do
   defp check_mapping!(mapping), do: bad_mapping!(:sep, Map.get(mapping, :sep))
 
   defp bad_mapping!(key, value) do
-    wanted = if key == :sep, do: "a binary", else: "a list of binaries"
+    wanted =
+      case key do
+        :sep -> "a binary"
+        :asset_aliases -> "a map (or a list of pairs) of binary => binary"
+        _quotes -> "a list of binaries"
+      end
 
     raise ArgumentError,
-          "CanonicalPair mapping #{inspect(key)} must be #{wanted}, got #{inspect(value)}"
+          "CanonicalPair mapping #{inspect(key)} must be #{wanted}, got " <>
+            inspect(value, limit: 10, printable_limit: 80)
   end
 
   # Uppercased, like the input. A mapping written `%{"xbt" => "btc"}` or `quotes: ["usdt"]`
@@ -156,10 +166,13 @@ defmodule DpExchange.Core.CanonicalPair do
 
   defp aliases(mapping) do
     case Map.get(mapping, :asset_aliases, %{}) do
-      raw when is_map(raw) and map_size(raw) == 0 -> %{}
-      raw when is_map(raw) -> cached_aliases(raw)
-      # Not a map (a keyword list was accepted here before): computed per call, never cached.
-      raw -> upcase_aliases(raw)
+      raw when is_map(raw) and not is_struct(raw) and map_size(raw) == 0 -> %{}
+      raw when is_map(raw) and not is_struct(raw) -> cached_aliases(raw)
+      # Not a map (a list of pairs was accepted here before): computed per call, never cached.
+      raw when is_list(raw) -> upcase_aliases(raw)
+      # Anything else has no pairs to read. `Map.new/2` raised `Protocol.UndefinedError` from
+      # inside the first symbol conversion, naming `Enumerable` and not the mapping.
+      raw -> bad_mapping!(:asset_aliases, raw)
     end
   end
 
@@ -190,11 +203,25 @@ defmodule DpExchange.Core.CanonicalPair do
     end
   end
 
+  # **Every entry is a pair of binaries, or the mapping is refused.** An atom, a `nil` or a
+  # number on either side raised `FunctionClauseError` from `String.upcase/1` (or, for a
+  # non-pair element of a list, from the anonymous function) inside the first symbol a venue
+  # converted, which names neither the mapping nor the alias that is wrong. A blank code on
+  # either side is refused too: it matches every symbol's empty remainder or maps one to
+  # nothing. This runs once per distinct alias map (a hit in the cache above skips it).
   defp upcase_aliases(raw) do
-    Map.new(raw, fn {exchange, canonical} ->
-      {String.upcase(exchange), String.upcase(canonical)}
+    Map.new(raw, fn
+      {exchange, canonical} when is_binary(exchange) and is_binary(canonical) ->
+        alias_pair!(raw, String.upcase(exchange), String.upcase(canonical))
+
+      _not_a_pair_of_binaries ->
+        bad_mapping!(:asset_aliases, raw)
     end)
   end
+
+  defp alias_pair!(raw, "", _canonical), do: bad_mapping!(:asset_aliases, raw)
+  defp alias_pair!(raw, _exchange, ""), do: bad_mapping!(:asset_aliases, raw)
+  defp alias_pair!(_raw, exchange, canonical), do: {exchange, canonical}
 
   @doc false
   @spec alias_cache() :: %{optional(map()) => map()}

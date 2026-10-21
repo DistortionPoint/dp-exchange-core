@@ -81,7 +81,9 @@ defmodule DpExchange.Core.ReferenceVenue do
   # The orders this process has placed, `%{id => Types.Order}`. A fake that answers any id it is
   # asked about has invented an order nobody placed (venue rule W6): an unknown id is
   # `{:refused, :not_found}`, as on the real path. Process-scoped, like `@covered_key`, for the
-  # same reason: the suite runs `async: true`.
+  # same reason: the suite runs `async: true`. Never evicted: it lives and dies with the test
+  # process that placed the orders, which is the only reason that is acceptable. A venue that
+  # keeps orders for a long-lived process bounds them.
   @orders_key {__MODULE__, :orders}
 
   # The reference venue does not stake — `has_staking: false` below, and these six
@@ -275,7 +277,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   defp check_amount(value) do
     with {:ok, decimal} <- cast_amount(value),
-         true <- not Decimal.nan?(decimal) and not Decimal.inf?(decimal),
+         true <- readable?(decimal),
          true <- Decimal.gt?(decimal, 0) do
       {:ok, decimal}
     else
@@ -759,12 +761,20 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   defp positive_amount(value, key) do
     with {:ok, decimal} <- cast_amount(value),
-         true <- not Decimal.nan?(decimal) and not Decimal.inf?(decimal),
+         true <- readable?(decimal),
          true <- Decimal.gt?(decimal, 0) do
       {:ok, decimal}
     else
       _invalid -> {:error, {invalid_tag(key), value}}
     end
+  end
+
+  # A number this venue will do arithmetic on: finite, and with an exponent `Types.Validate`
+  # admits. `Decimal.gt?/2` aligns exponents with `10^difference`, so a caller's
+  # `1e999999999` made the comparison allocate a number of that many digits, in the venue's
+  # process, before any refusal. The bound is the one every `Core.Types.*` constructor holds.
+  defp readable?(%Decimal{coef: coef, exp: exp}) do
+    is_integer(coef) and abs(exp) <= Types.Validate.max_decimal_exponent()
   end
 
   defp cast_amount(%Decimal{} = decimal), do: {:ok, decimal}

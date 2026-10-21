@@ -143,6 +143,12 @@ defmodule DpExchange.Core.Types.Order do
   enforced keys still admit `nil`". `@enforce_keys` still guards their *presence*; this adds
   the one field where `nil` was never intended, using
   `DpExchange.Core.Types.Validate`.
+
+  A `:quantity` or `:filled_quantity` below zero raises: a size is never negative, a negative
+  one is a decode bug (a sign flipped, a delta read as a level), and a consumer summing fills
+  against it would conclude the order is over-filled. Zero stays legal (an order nothing has
+  filled). Prices are not held to a sign here: a venue's `0` for the price of a market order is
+  common, and which fields a venue states is the venue's word.
   """
   @spec new(keyword() | map()) :: t()
   def new(attrs) do
@@ -156,6 +162,7 @@ defmodule DpExchange.Core.Types.Order do
       :average_price,
       :fee
     ])
+    |> Validate.non_negative!([:quantity, :filled_quantity])
     |> Validate.one_of!(:side, [:buy, :sell, nil])
     |> Validate.one_of!(:order_type, [nil | @order_types])
     |> Validate.one_of!(:status, [nil | @statuses])
