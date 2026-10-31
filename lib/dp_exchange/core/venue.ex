@@ -1116,7 +1116,17 @@ defmodule DpExchange.Core.Venue do
   @callback get_volume_profile(symbol(), String.t(), keyword()) ::
               result([Types.VolumeProfile.t()])
 
-  @doc "A bulk snapshot across the venue's symbols, where it offers one."
+  @doc """
+  A bulk snapshot across the venue's symbols, where it offers one.
+
+  The row shape is the venue's own, so **each implementation documents every field's unit**,
+  and a volume field says which currency it counts. A bare `volume_24h` is ambiguous between
+  base and quote by a factor of the price, and both readings look plausible: Coinbase's is
+  base, and a consumer reading it as dollars filtered out 35 of 36 pairs under a $100,000
+  floor (dp_exchange_coinbase issue #6). A quote-currency figure the venue sends is passed
+  through under a name that says what it is; one it does not send is not computed from
+  price × base volume and presented as the venue's.
+  """
   @callback get_market_overview(keyword()) :: result(map())
 
   @doc """

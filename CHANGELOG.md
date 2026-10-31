@@ -21,6 +21,14 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`get_market_overview/1` requires each implementation to document every field's unit**,
+  and a volume field to say whether it counts base or quote currency. Prompted by
+  dp_exchange_coinbase issue #6, where a base-currency `volume_24h` read as dollars. A
+  quote figure the venue sends is passed through under a name saying what it is; one it
+  does not send is not synthesised from price × base volume.
+
 ## [0.3.120] - 2026-10-21
 
 ### Added
