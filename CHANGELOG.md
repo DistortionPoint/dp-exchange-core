@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.121] - 2026-10-31
+
 ### Documentation
 
 - **`get_market_overview/1` requires each implementation to document every field's unit**,
