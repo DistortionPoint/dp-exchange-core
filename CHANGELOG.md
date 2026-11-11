@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.122] - 2026-11-11
+
 ### Documentation
 
 - **`coverage/1`: a stream narrows when the venue stops serving a still-connected route**,
