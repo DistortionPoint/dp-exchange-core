@@ -1676,6 +1676,15 @@ defmodule DpExchange.Core.Venue do
   which is a false alarm and its own harm. So on a stream, coverage means *observed at least
   once since this connection came up* — never "recently", and never "how stale".
 
+  **"This connection" means the route the venue is still serving.** A link can stay up while
+  the venue stops publishing to it. On `dp_exchange_webull`, one App Key streams us-crypto
+  on one session at a time, and a session that loses that permission stays connected and
+  subscribed (dp_exchange_webull issue #13). Evidence from before such a loss is evidence
+  from a connection that has, for data, dropped, so the route narrows on it exactly as on
+  `:link_down`. It narrows only on an *event*: the venue's own notice, or a whole session
+  silent while a sibling on the same account streams, which a quiet market cannot produce.
+  Elapsed time alone is never one.
+
   ## It answers a map in every state
 
   With no feed running, or with a `:feed` option naming a pid on **another node**, the answer

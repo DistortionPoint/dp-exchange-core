@@ -21,6 +21,15 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Documentation
+
+- **`coverage/1`: a stream narrows when the venue stops serving a still-connected route**,
+  not only on `:link_down`. Prompted by dp_exchange_webull issue #13, where sessions that
+  lost the us-crypto permission stayed connected and kept their pairs reported as
+  `:stream`. Narrowing is triggered by an event (the venue's notice, or a whole session
+  silent while a sibling streams), never by elapsed time, so the rule against a staleness
+  window on a stream stands.
+
 ## [0.3.121] - 2026-10-31
 
 ### Documentation
