@@ -21,6 +21,8 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+## [0.3.123] - 2026-11-11
+
 ### Added
 
 - **`start_options/0` and `call_options/1`: a venue declares the option keys it accepts
