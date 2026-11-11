@@ -1620,4 +1620,234 @@ defmodule DpExchange.Core.ContractTeethDecisionsTest do
       assert set_fault(:conforming) == nil
     end
   end
+
+  describe "assertion 55: start_options/0 is a list of unique atoms" do
+    test "unique atoms, and the empty list, conform" do
+      assert AdapterContract.start_options_fault([:credentials, :name]) == nil
+      assert AdapterContract.start_options_fault([]) == nil
+    end
+
+    test "something that is not a list is named" do
+      assert AdapterContract.start_options_fault(nil) == {:not_a_list, nil}
+      assert AdapterContract.start_options_fault({:ok, [:name]}) == {:not_a_list, {:ok, [:name]}}
+    end
+
+    test "an entry that is not an atom is named" do
+      assert AdapterContract.start_options_fault([:name, "credentials", 1]) ==
+               {:not_atoms, ["credentials", 1]}
+    end
+
+    test "a repeated key is named once" do
+      assert AdapterContract.start_options_fault([:name, :credentials, :name, :name]) ==
+               {:duplicates, [:name]}
+    end
+
+    test "declaring the probe key is a lie about the start check" do
+      probe = AdapterContract.unknown_option_probe()
+      assert AdapterContract.start_options_fault([:name, probe]) == {:probe_key, probe}
+    end
+
+    test "a raise is a fault of its own, not a list" do
+      raised = {:raised, %UndefinedFunctionError{}}
+      assert AdapterContract.start_options_fault(raised) == {:raised, raised}
+      assert AdapterContract.start_options_fault({:exit, :noproc}) == {:raised, {:exit, :noproc}}
+    end
+  end
+
+  describe "assertion 55: call_options/1 follows the activation of the callback" do
+    test "an active endpoint answers unique atoms, an inactive one the atom" do
+      assert AdapterContract.declared_options_fault({:ok, [:credentials, :limit]}, true) == nil
+      assert AdapterContract.declared_options_fault({:ok, []}, true) == nil
+      assert AdapterContract.declared_options_fault({:error, :not_supported}, false) == nil
+    end
+
+    test "an active endpoint answering :not_supported disagrees with its declaration" do
+      answer = {:error, :not_supported}
+      assert AdapterContract.declared_options_fault(answer, true) == {:not_supported, answer}
+    end
+
+    test "an inactive endpoint answering anything else is named, keys included" do
+      for answer <- [{:ok, []}, {:ok, [:limit]}, {:error, {:unknown_function, :x}}, :ok] do
+        assert AdapterContract.declared_options_fault(answer, false) ==
+                 {:answered_while_inactive, answer}
+      end
+    end
+
+    test "keys that are not a list of unique atoms are named" do
+      assert AdapterContract.declared_options_fault({:ok, :all}, true) ==
+               {:keys, {:not_a_list, :all}}
+
+      assert AdapterContract.declared_options_fault({:ok, [:a, "b"]}, true) ==
+               {:keys, {:not_atoms, ["b"]}}
+
+      assert AdapterContract.declared_options_fault({:ok, [:a, :a]}, true) ==
+               {:keys, {:duplicates, [:a]}}
+    end
+
+    test "a raise is named whether the endpoint is active or not" do
+      raised = {:raised, %FunctionClauseError{}}
+      assert AdapterContract.declared_options_fault(raised, true) == {:raised, raised}
+      assert AdapterContract.declared_options_fault(raised, false) == {:raised, raised}
+    end
+
+    test "an unknown-function answer for an active endpoint is the wrong answer" do
+      answer = {:error, {:unknown_function, :get_price}}
+      assert AdapterContract.declared_options_fault(answer, true) == {:wrong_answer, answer}
+    end
+  end
+
+  describe "assertion 55: an unknown function name is an error, never {:ok, []}" do
+    test "the probe is a name no venue defines" do
+      probe = AdapterContract.unknown_function_probe()
+      assert probe == :dp_contract_no_such_function
+
+      for {name, arity} <- DpExchange.Core.Venue.behaviour_info(:callbacks) do
+        refute name == probe, "#{name}/#{arity} is the probe"
+      end
+    end
+
+    test "the unknown_function error naming the probe is the only conforming answer" do
+      probe = AdapterContract.unknown_function_probe()
+      assert AdapterContract.unknown_function_fault({:error, {:unknown_function, probe}}) == nil
+    end
+
+    test "{:ok, []} is a substitute, and so is any {:ok, keys}" do
+      assert AdapterContract.unknown_function_fault({:ok, []}) == {:substituted, {:ok, []}}
+
+      assert AdapterContract.unknown_function_fault({:ok, [:limit]}) ==
+               {:substituted, {:ok, [:limit]}}
+    end
+
+    test ":not_supported is for a function that exists" do
+      assert AdapterContract.unknown_function_fault({:error, :not_supported}) ==
+               {:not_supported, {:error, :not_supported}}
+    end
+
+    test "a raise, and an error naming another function, are faults of their own" do
+      raised = {:raised, %ArgumentError{message: "boom"}}
+      assert AdapterContract.unknown_function_fault(raised) == {:raised, raised}
+
+      other = {:error, {:unknown_function, :get_price}}
+      assert AdapterContract.unknown_function_fault(other) == {:wrong_answer, other}
+      assert AdapterContract.unknown_function_fault(nil) == {:wrong_answer, nil}
+    end
+  end
+
+  describe "assertion 55: the fake accepts every key the facade declares" do
+    test "equal lists, and a fake with more keys, conform" do
+      assert AdapterContract.fake_keys_fault([:limit, :depth], [:depth, :limit]) == nil
+      assert AdapterContract.fake_keys_fault([:limit], [:limit, :fake_only]) == nil
+      assert AdapterContract.fake_keys_fault([], []) == nil
+    end
+
+    test "a facade key the fake lacks is named once" do
+      assert AdapterContract.fake_keys_fault([:limit, :depth, :since], [:limit]) ==
+               {:fake_lacks, [:depth, :since]}
+
+      assert AdapterContract.fake_keys_fault([:depth, :depth], []) == {:fake_lacks, [:depth]}
+    end
+  end
+
+  describe "assertion 55: a declared key is not refused as unknown by its own endpoint" do
+    test "the unknown_option refusal naming the key is the fault" do
+      assert AdapterContract.undeclared_key_fault(:limit, {:error, {:unknown_option, :limit}}) ==
+               {:undeclared, :limit}
+    end
+
+    test "any other answer is not this group's business" do
+      for answer <- [
+            :ok,
+            {:ok, []},
+            {:refused, :not_listed},
+            {:error, {:invalid_option, :limit, nil}},
+            {:error, {:unsupported_option, :limit}},
+            {:error, {:unknown_option, :other}},
+            {:error, {:invalid_options, []}},
+            {:raised, %ArgumentError{}}
+          ] do
+        assert AdapterContract.undeclared_key_fault(:limit, answer) == nil
+      end
+    end
+  end
+
+  describe "assertion 55: the reference venue declares what its checks accept" do
+    test "start_options/0 is what start_link/1 refuses against" do
+      assert ReferenceVenue.start_options() == [:credentials, :name]
+      assert ReferenceVenue.start_link([]) == :ignore
+      assert ReferenceVenue.start_link(name: :ref, credentials: %{}) == :ignore
+      assert {:error, {:unknown_option, :nope}} = ReferenceVenue.start_link(nope: true)
+    end
+
+    test "an active callback answers the keys its own check allows" do
+      assert {:ok, keys} = ReferenceVenue.call_options(:get_order_book)
+      assert :depth in keys and :limit in keys and :timeout in keys
+
+      assert {:ok, [:credentials, :scope]} = ReferenceVenue.call_options(:cancel_all_orders)
+      assert {:ok, [:credentials]} = ReferenceVenue.call_options(:place_order)
+      assert {:ok, [:to, :feed, :credentials]} = ReferenceVenue.call_options(:subscribe)
+    end
+
+    test "a function without options answers an empty list, and the lifecycle the start keys" do
+      for name <- [:provider_name, :runtime_id, :capabilities, :start_options, :call_options] do
+        assert ReferenceVenue.call_options(name) == {:ok, []}
+      end
+
+      assert ReferenceVenue.call_options(:child_spec) == {:ok, ReferenceVenue.start_options()}
+      assert ReferenceVenue.call_options(:start_link) == {:ok, ReferenceVenue.start_options()}
+    end
+
+    test "a callback declared :unsupported answers :not_supported whatever its keys" do
+      assert ReferenceVenue.call_options(:get_transfers) == {:error, :not_supported}
+      assert ReferenceVenue.call_options(:quantization) == {:error, :not_supported}
+    end
+
+    test "a name that is no function, and a name that is no atom, are unknown functions" do
+      probe = AdapterContract.unknown_function_probe()
+      assert ReferenceVenue.call_options(probe) == {:error, {:unknown_function, probe}}
+
+      assert ReferenceVenue.call_options("get_price") ==
+               {:error, {:unknown_function, "get_price"}}
+
+      assert ReferenceVenue.call_options(nil) == {:error, {:unknown_function, nil}}
+
+      # An optional callback the reference leaves out is not a function of it.
+      assert ReferenceVenue.call_options(:coverage_by_kind) ==
+               {:error, {:unknown_function, :coverage_by_kind}}
+    end
+
+    test "every key declared for an endpoint is accepted by it, and a stray one is not" do
+      assert {:ok, keys} = ReferenceVenue.call_options(:get_trades)
+
+      for key <- keys do
+        refute match?(
+                 {:error, {:unknown_option, ^key}},
+                 ReferenceVenue.get_trades("BTC-USD", [{key, nil}])
+               )
+      end
+
+      assert {:error, {:unknown_option, :nope}} = ReferenceVenue.get_trades("BTC-USD", nope: 1)
+    end
+  end
+
+  describe "assertion 55: the new callbacks are handled by the groups that walk every callback" do
+    test "call_options/1 is called with a function name, not an option list" do
+      assert AdapterContract.arg_shape(:call_options, 1, false) == [:function_name]
+      assert AdapterContract.arg_shape(:start_options, 0, false) == []
+    end
+
+    test "neither is asked for a credential by the credential gate" do
+      caps = Capabilities.new(endpoints: %{}, supported_quotes: ~w(USD))
+      gated = AdapterContract.credential_gated_endpoints(caps, [:equity])
+
+      refute {:start_options, 0} in gated
+      refute {:call_options, 1} in gated
+    end
+
+    test "neither is handed the unknown-option probe, each with a reason" do
+      exclusions = AdapterContract.unknown_option_exclusions()
+
+      assert is_binary(exclusions[{:start_options, 0}])
+      assert is_binary(exclusions[{:call_options, 1}])
+    end
+  end
 end

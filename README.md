@@ -52,7 +52,7 @@ for why, and for what picking either up would take.
 
 ## What the contract covers
 
-**89 callbacks**, of which 85 are required and 4 are optional (`list_instruments/1`,
+**91 callbacks**, of which 87 are required and 4 are optional (`list_instruments/1`,
 `quantization/1`, `coverage_by_kind/1`, `wanted/1`). A venue package serves what its venue serves and
 declares the rest `:unsupported` — the function is still defined and answers
 `{:error, :not_supported}`, never a raise and never a missing function.

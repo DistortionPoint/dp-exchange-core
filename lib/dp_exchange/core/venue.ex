@@ -395,7 +395,8 @@ defmodule DpExchange.Core.Venue do
   # --- Declaration -------------------------------------------------------
   #
   # Static, credential-free, and safe to call at boot. A consumer decides whether to use a
-  # package at all from these four, so none of them may need a network or a key.
+  # package at all from the first four, so none of them may need a network or a key. The last
+  # two say which option keys the package accepts, and need none either.
 
   @doc "The venue's display name."
   @callback provider_name() :: String.t()
@@ -419,6 +420,64 @@ defmodule DpExchange.Core.Venue do
   Static and safe at boot. This is what a consumer branches on instead of venue identity.
   """
   @callback capabilities() :: Capabilities.t()
+
+  @doc """
+  The option keys `c:start_link/1` and `c:child_spec/1` accept, as a list of unique atoms.
+
+  A key outside this list is refused `{:error, {:unknown_option, key}}` at start; every key
+  inside it is not. The list is **the same one the venue's start-time check refuses against**
+  (one module attribute or function read by both), never a second hand-copied list, so the
+  declaration and the check cannot drift apart.
+
+  Static and safe at boot: it needs no network and no credential. A consumer that holds one
+  options keyword for several venues narrows it before it starts one:
+
+      Venue.start_link(Keyword.take(opts, Venue.start_options()))
+
+  Group 55 of `DpExchange.Core.AdapterContract` holds the shape.
+  """
+  @callback start_options() :: [atom()]
+
+  @doc """
+  The option keys the public function `name` accepts, as an answer for a function *name*.
+
+  The three answers, checked in this order:
+
+    1. `{:error, :not_supported}` - `name` is a callback of this behaviour that the venue's
+       facade defines, and `DpExchange.Core.Capabilities.active?/2` says that endpoint is not
+       active. That endpoint answers `{:error, :not_supported}` whatever the options, so it
+       has no keys to declare. A callback the facade does not define at all (an optional one
+       left out) is not this answer; it is the third.
+    2. `{:ok, keys}` - `name` is a public facade function, a callback or a venue-specific one.
+       `keys` is **exactly** the keys that call accepts without
+       `{:error, {:unknown_option, _}}`: the transport keys it allows
+       (`DpExchange.Core.Options.transport_options/0` less the ones it does not read), its own
+       keys, `:credentials`, and any extra keys the call site passes to its check. A function
+       that takes no options (`c:provider_name/0`, `c:runtime_id/0`, `c:asset_classes/0`,
+       `c:capabilities/0`, `c:quantization/1`, `c:start_options/0` and this callback) answers
+       `{:ok, []}`. `child_spec` and `start_link` answer `{:ok, start_options()}`. No
+       duplicates. The lists are the ones the call-site checks use, by construction.
+    3. `{:error, {:unknown_function, name}}` - anything else: a misspelt or unknown name, or
+       a `name` that is not an atom.
+
+  **An unknown name is an error, never `{:ok, []}`.** `{:ok, []}` says "this function accepts
+  no options", so a misspelt name would read as a real function that wants none and a consumer
+  would silently drop every option it meant to pass. That is a nearby substitute where there
+  should be an error, the failure mode this family is built to refuse (fail closed).
+
+  A consumer narrows its options to what a call accepts:
+
+      {:ok, keys} = Venue.call_options(:get_price)
+      Venue.get_price(symbol, Keyword.take(opts, keys))
+
+  Static and safe at boot. The Fake answers for itself: the keys its own checks accept, a
+  superset of the facade's for every active endpoint (a consumer testing against the Fake
+  passes the facade's list). Group 55 of `DpExchange.Core.AdapterContract` holds all of this.
+  """
+  @callback call_options(atom()) ::
+              {:ok, [atom()]}
+              | {:error, :not_supported}
+              | {:error, {:unknown_function, atom()}}
 
   # --- Market data -------------------------------------------------------
   #
@@ -2108,6 +2167,16 @@ defmodule DpExchange.Core.Venue do
         "irreplaceable and not load-bearing — get_positions/1 plus place_order/3 leaves a " <>
           "residue when the position moves between the read and the order, and only the " <>
           "venue flattens to exactly zero; a venue carrying no positions has nothing to close",
+      {:start_options, 0} =>
+        "irreplaceable and not load-bearing — only the venue knows which keys its start-time " <>
+          "check accepts, but a consumer that passes exactly the keys it documented starts " <>
+          "the venue without asking; it exists so a shared options keyword can be narrowed " <>
+          "with Keyword.take/2 instead of refused",
+      {:call_options, 1} =>
+        "irreplaceable and not load-bearing — only the venue knows which keys each of its " <>
+          "calls accepts, but a consumer that passes exactly the keys it documented is " <>
+          "complete without asking; it exists so a shared options keyword can be narrowed " <>
+          "per call with Keyword.take/2 instead of refused",
       {:subscribe_notices, 1} =>
         "not load-bearing — losing notices costs visibility into the stream, not the stream",
       {:wanted, 1} =>

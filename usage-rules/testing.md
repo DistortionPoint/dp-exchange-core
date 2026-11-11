@@ -13,9 +13,18 @@ defmodule DpExchange.YourVenue.ContractTest do
 end
 ```
 
-Fifty-four assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
+Fifty-five assertion groups, listed in `DpExchange.Core.AdapterContract.assertions/0`. It
 ships inside the Hex tarball, so you get it as a dependency and run it against yourself.
 **Prose in six `CLAUDE.md` files drifts; a suite running in five CI pipelines cannot.**
+
+**Group 55 needs nothing from you and holds the option keys your venue and fake declare.**
+`start_options/0` must be unique atoms; `call_options/1` must answer `{:ok, unique atoms}` for
+every callback you define that `capabilities/0` makes active and `{:error, :not_supported}` for
+one it does not; a name that is no function must be `{:error, {:unknown_function, name}}`, never
+`{:ok, []}`. The facade's keys for an endpoint must all be accepted by the fake, and on the fake
+each declared key (added alone with the value `nil`) must not be refused as `{:unknown_option,
+key}` by a call whose plain form succeeded. It fails when it judged no endpoint, so declare what
+the fake needs in `endpoint_opts:`. Source `call_options/1` from the lists your checks use.
 
 **Group 54 needs nothing from you and looks inside the orders and fills your fake answers.**
 It places the suite's own order, reads it back with `get_order/3`, lists with `get_orders/2`,

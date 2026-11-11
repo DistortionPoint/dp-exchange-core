@@ -310,7 +310,7 @@ two different things. **Read [Authentication](usage-rules/auth.md) before writin
 in particular the Schwab section, because its refresh token is one-time use and losing the
 rotated value is unrecoverable without a person.
 
-## The contract is 89 callbacks, and a package implements what its venue serves
+## The contract is 91 callbacks, and a package implements what its venue serves
 
 `Venue.required_callbacks/0` is what the compiler enforces, and it is all but four of them.
 Only `list_instruments/1`, `quantization/1`, `coverage_by_kind/1` and `wanted/1` are
@@ -374,6 +374,38 @@ holds an idempotency key passes an explicit `:retry_attempts` for a write.
 **`max_body_bytes:` bounds the size of a response** (default 16 MiB). The body is counted as
 it arrives and the transfer is halted at the limit, so an oversized or endless response is
 never held in memory. It returns `{:error, {:response_too_large, limit}}`, never retried.
+
+### Discovering which option keys a venue accepts
+
+Because an unknown key is refused, a consumer holding one options keyword for several venues
+asks each venue what it takes and narrows to that, instead of finding out from a refusal:
+
+```elixir
+{:ok, keys} = MyVenue.call_options(:get_price)
+MyVenue.get_price(symbol, Keyword.take(opts, keys))
+
+MyVenue.start_link(Keyword.take(opts, MyVenue.start_options()))
+```
+
+Both are required callbacks (static, no network, no credential), so every venue answers them.
+
+- **`start_options/0`** is a list of unique atoms: exactly the keys `start_link/1` and
+  `child_spec/1` accept. A key outside it is `{:error, {:unknown_option, key}}` at start.
+- **`call_options/1`** takes a function *name* (an atom) and answers, checked in this order:
+  1. `{:error, :not_supported}`: the name is a callback the venue defines and `capabilities/0`
+     does not make it active. That endpoint answers `:not_supported` whatever the options, so
+     there is nothing to take.
+  2. `{:ok, keys}`: a public function of the venue. `keys` is exactly what that call accepts
+     without `{:unknown_option, _}`: its transport keys, its own keys and `:credentials`. A
+     function that takes no options answers `{:ok, []}`; `child_spec` and `start_link` answer
+     `{:ok, start_options()}`.
+  3. `{:error, {:unknown_function, name}}`: anything else, a misspelt name or a non-atom.
+
+**An unknown name is an error, never `{:ok, []}`.** `{:ok, []}` says "this function takes no
+options", so a typo would silently drop every option you meant to pass: a nearby substitute
+where there should be an error. Match on the three answers; do not treat the second error as
+"no options". The Fake answers for itself and accepts at least every key the venue declares, so
+a suite that narrows with the venue's list also runs against the Fake (conformance group 55).
 
 ## Market data means the same thing on every venue
 

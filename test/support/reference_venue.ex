@@ -78,6 +78,54 @@ defmodule DpExchange.Core.ReferenceVenue do
   # (`DpExchange.Core.Options`, "What is allowed"); group 46 holds it.
   @no_request_options [:to, :feed, :credentials]
 
+  # The keys `start_link/1` accepts, and the ONE list both the start check and `start_options/0`
+  # read, so the declaration cannot drift from the refusal (group 55).
+  @start_options [:credentials, :name]
+
+  # What a call that has no entry in `@call_keys` accepts: `:credentials` and nothing else. It
+  # is what `check_options/1` checks against, which every such call goes through, and the answer
+  # `call_options/1` gives for it.
+  @default_call_keys [:credentials]
+
+  @transport_keys Options.transport_options()
+
+  # The keys of every call whose option list is not `@default_call_keys`, keyed by function
+  # name. Each call site below checks its options against `call_keys/1`, and `call_options/1`
+  # answers from the same function, so the declaration and the checks are one list by
+  # construction (group 55). A call that sends a request allows the transport keys; one that
+  # sends none allows its own keys and `:credentials` only (group 46).
+  @call_keys %{
+    get_price: @transport_keys,
+    get_symbols: @transport_keys,
+    get_top_of_book: @transport_keys,
+    get_historical_prices: [:include_partial, :limit | @transport_keys],
+    get_order_book: [:depth, :limit | @transport_keys],
+    get_trades: [:include_broken, :since, :limit | @transport_keys],
+    cancel_all_orders: [:credentials, :scope],
+    get_auction_imbalance: [:credentials, :auction],
+    transfer_internal: [:credentials, :from, :to],
+    list_networks: [:credentials, :network],
+    subscribe: @no_request_options,
+    unsubscribe: @no_request_options,
+    update_symbols: @no_request_options,
+    subscribe_notices: @no_request_options
+  }
+
+  # Functions that accept no option key. `coverage/1` and `wanted/1` are here because this
+  # reference reads none from their keyword and checks none: declaring `[]` is what a consumer
+  # who passes only what is declared needs, and they are excluded from group 43's probe.
+  @no_option_functions [
+    :provider_name,
+    :runtime_id,
+    :asset_classes,
+    :capabilities,
+    :quantization,
+    :start_options,
+    :call_options,
+    :coverage,
+    :wanted
+  ]
+
   # The orders this process has placed, `%{id => Types.Order}`. A fake that answers any id it is
   # asked about has invented an order nobody placed (venue rule W6): an unknown id is
   # `{:refused, :not_found}`, as on the real path. Process-scoped, like `@covered_key`, for the
@@ -164,7 +212,11 @@ defmodule DpExchange.Core.ReferenceVenue do
   end
 
   @impl true
-  def start_link(_opts), do: :ignore
+  def start_link(opts) do
+    # A key outside `start_options/0` is refused at start, as `{:unknown_option, key}`; the
+    # list is the one `start_options/0` declares.
+    with :ok <- Options.check(opts, @start_options), do: :ignore
+  end
 
   # --- declaration -------------------------------------------------------
 
@@ -204,6 +256,39 @@ defmodule DpExchange.Core.ReferenceVenue do
     )
   end
 
+  @impl true
+  def start_options, do: @start_options
+
+  @impl true
+  def call_options(name) when is_atom(name) do
+    # In the order `Core.Venue.call_options/1` states: a callback this module defines that
+    # `capabilities/0` makes inactive is `:not_supported`; a function it defines answers its
+    # keys; anything else (an optional callback left out included) is an unknown function.
+    case List.keyfind(Venue.behaviour_info(:callbacks), name, 0) do
+      {^name, arity} = endpoint ->
+        declared_call_options(endpoint, function_exported?(__MODULE__, name, arity))
+
+      nil ->
+        {:error, {:unknown_function, name}}
+    end
+  end
+
+  def call_options(name), do: {:error, {:unknown_function, name}}
+
+  defp declared_call_options({name, _arity}, false), do: {:error, {:unknown_function, name}}
+
+  defp declared_call_options({name, _arity} = endpoint, true) do
+    if Capabilities.active?(capabilities(), endpoint),
+      do: {:ok, call_keys(name)},
+      else: Venue.not_supported()
+  end
+
+  # The keys a call accepts: the one list its own check reads (`@call_keys`), the start keys for
+  # the two lifecycle functions, none for the functions that take no options.
+  defp call_keys(name) when name in [:child_spec, :start_link], do: @start_options
+  defp call_keys(name) when name in @no_option_functions, do: []
+  defp call_keys(name), do: Map.get(@call_keys, name, @default_call_keys)
+
   # Everything the facade declares is :experimental — the honest state for code no one
   # has run in production — except the two deliberate refusals.
   defp endpoint_maturities do
@@ -224,7 +309,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     # convention (`Core.Venue.get_price/2`), held by conformance assertion 33. Then the
     # options (group 43): this read has none of its own.
     with :ok <- check_symbol(symbol),
-         :ok <- Options.check(opts, Options.transport_options()) do
+         :ok <- Options.check(opts, call_keys(:get_price)) do
       priced(symbol)
     end
   end
@@ -268,7 +353,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   # The options of a call that sends no request: its own keys and `:credentials` only
   # (`DpExchange.Core.Options`, "What is allowed"), checked after the positional arguments and
   # before the credentials. Group 43 holds it for every endpoint.
-  defp check_options(opts, own \\ []), do: Options.check(opts, [:credentials | own])
+  defp check_options(opts), do: Options.check(opts, @default_call_keys)
 
   # An amount is a `Decimal`, an integer or a numeric string, finite and above zero. A float
   # has already lost digits; zero, a negative, NaN and infinity are not amounts. Anything else
@@ -396,7 +481,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   # Its own keys: `:limit` is known (and then refused as unsupported, MD4).
   defp historical_options(opts),
-    do: Options.check(opts, [:include_partial, :limit | Options.transport_options()])
+    do: Options.check(opts, call_keys(:get_historical_prices))
 
   # `:start` inclusive, `:end` exclusive, on `opened_at` (MD2).
   defp in_range?(at, range) do
@@ -409,7 +494,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def get_symbols(opts) do
-    with :ok <- Options.check(opts, Options.transport_options()) do
+    with :ok <- Options.check(opts, call_keys(:get_symbols)) do
       {:ok, @symbols}
     end
   end
@@ -417,7 +502,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   @impl true
   def get_order_book(symbol, opts) do
     with :ok <- check_symbol(symbol),
-         :ok <- Options.check(opts, [:depth, :limit | Options.transport_options()]),
+         :ok <- Options.check(opts, call_keys(:get_order_book)),
          {:ok, depth} <- check_depth(Keyword.get(opts, :depth)) do
       booked(symbol, depth)
     end
@@ -453,7 +538,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   @impl true
   def get_top_of_book(symbol, opts) do
     with :ok <- check_symbol(symbol),
-         :ok <- Options.check(opts, Options.transport_options()) do
+         :ok <- Options.check(opts, call_keys(:get_top_of_book)) do
       top_of(symbol)
     end
   end
@@ -914,7 +999,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   def cancel_all_orders(_credentials, opts) do
     # No default scope. The reference venue enforces the contract's own rule, so a
     # conformance run against it fails a package that quietly picked one.
-    with :ok <- check_options(opts, [:scope]) do
+    with :ok <- Options.check(opts, call_keys(:cancel_all_orders)) do
       cancel_scope(Keyword.get(opts, :scope))
     end
   end
@@ -960,7 +1045,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     # The symbol first, as every other single-symbol read here: a `nil`, non-string or blank
     # one is `{:invalid_symbol, value}` before the auction is looked at.
     with :ok <- check_symbol(symbol),
-         :ok <- check_options(opts, [:auction]) do
+         :ok <- Options.check(opts, call_keys(:get_auction_imbalance)) do
       auction_imbalance(symbol, Keyword.get(opts, :auction))
     end
   end
@@ -1071,8 +1156,8 @@ defmodule DpExchange.Core.ReferenceVenue do
     # transfer's own keys; the suite hands the same `endpoint_opts:` to both lists, so both are
     # checked against them. A transfer whose source is its destination is refused (W4).
     with {:ok, _decimal} <- check_amount(amount),
-         :ok <- check_options(opts, [:from, :to]),
-         :ok <- check_options(request_opts, [:from, :to]) do
+         :ok <- Options.check(opts, call_keys(:transfer_internal)),
+         :ok <- Options.check(request_opts, call_keys(:transfer_internal)) do
       transfer(asset, amount, Keyword.get(opts, :from), Keyword.get(opts, :to))
     end
   end
@@ -1114,7 +1199,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   @impl true
   def list_networks(asset, opts) do
-    with :ok <- check_options(opts, [:network]) do
+    with :ok <- Options.check(opts, call_keys(:list_networks)) do
       networks_for(asset, Keyword.get(opts, :network))
     end
   end
@@ -1183,7 +1268,7 @@ defmodule DpExchange.Core.ReferenceVenue do
 
   # Its own keys: `:since` and `:limit` are known (and then refused as unsupported, MD4).
   defp trade_options(opts),
-    do: Options.check(opts, [:include_broken, :since, :limit | Options.transport_options()])
+    do: Options.check(opts, call_keys(:get_trades))
 
   defp traded(symbol, include_broken?) do
     # A broken trade in the list, excluded by default. The reference venue carries one so a
@@ -1309,7 +1394,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     # `:credentials` is read here.
     with {:ok, symbols} <- check_symbols(symbols),
          {:ok, target} <- check_subscriber(Config.opt(opts, :to, self())),
-         :ok <- Options.check(opts, @no_request_options) do
+         :ok <- Options.check(opts, call_keys(:subscribe)) do
       deliver_subscription(symbols, target)
     end
   end
@@ -1342,7 +1427,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     # A malformed list is refused, never `:ok` (assertion 32); upper-cased on the way in, as
     # every real facade does (assertion 29). Then the options (group 43).
     with {:ok, symbols} <- check_symbols(symbols),
-         :ok <- Options.check(opts, @no_request_options) do
+         :ok <- Options.check(opts, call_keys(:unsubscribe)) do
       # Nothing arrives for an unsubscribed symbol, so nothing should be reported for it.
       Process.put(@covered_key, MapSet.difference(covered(), MapSet.new(symbols)))
 
@@ -1354,7 +1439,7 @@ defmodule DpExchange.Core.ReferenceVenue do
   def update_symbols(symbols, opts) do
     # The options before the live set is touched: a refused call leaves the set as it was.
     with {:ok, symbols} <- check_symbols(symbols),
-         :ok <- Options.check(opts, @no_request_options) do
+         :ok <- Options.check(opts, call_keys(:update_symbols)) do
       replace_symbols(symbols, opts)
     end
   end
@@ -1408,7 +1493,7 @@ defmodule DpExchange.Core.ReferenceVenue do
     # Registers and sends nothing: this reference has no feed, so it raises no notice, and a
     # `:link_up` on registration is one the real feeds do not send (family convention 9).
     with {:ok, _target} <- check_subscriber(Config.opt(opts, :to, self())),
-         :ok <- Options.check(opts, @no_request_options) do
+         :ok <- Options.check(opts, call_keys(:subscribe_notices)) do
       :ok
     end
   end

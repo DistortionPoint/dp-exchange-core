@@ -53,6 +53,51 @@ defmodule DpExchange.Core.VenueTest do
                ])
     end
 
+    test "start_options/0 and call_options/1 are required callbacks, not optional ones" do
+      # A consumer narrows its options with `Keyword.take(opts, keys)` on every venue, so a
+      # venue that left either out would be a venue a consumer must special-case (issue #43).
+      callbacks = Venue.behaviour_info(:callbacks)
+      optional = Venue.behaviour_info(:optional_callbacks)
+      required = Venue.required_callbacks()
+
+      for callback <- [{:start_options, 0}, {:call_options, 1}] do
+        assert callback in callbacks
+        refute callback in optional
+        assert callback in required
+      end
+
+      # And the module that implements the whole facade implements them.
+      Code.ensure_loaded!(ReferenceVenue)
+      assert function_exported?(ReferenceVenue, :start_options, 0)
+      assert function_exported?(ReferenceVenue, :call_options, 1)
+    end
+
+    test "both are documented, with the order of the answers and why a name is not {:ok, []}" do
+      docs = Venue |> Code.fetch_docs() |> elem(6)
+
+      for {name, arity} <- [{:start_options, 0}, {:call_options, 1}] do
+        assert {{:callback, ^name, ^arity}, _anno, _sig, %{"en" => doc}, _meta} =
+                 List.keyfind(docs, {:callback, name, arity}, 0),
+               "#{name}/#{arity} has no @doc"
+
+        assert doc =~ "Keyword.take"
+      end
+
+      {_key, _anno, _sig, %{"en" => call_doc}, _meta} =
+        List.keyfind(docs, {:callback, :call_options, 1}, 0)
+
+      assert call_doc =~ "{:error, :not_supported}"
+      assert call_doc =~ "{:error, {:unknown_function, name}}"
+      assert call_doc =~ "never `{:ok, []}`"
+    end
+
+    test "the two are classified, so the graduation bar has decided about them" do
+      for callback <- [{:start_options, 0}, {:call_options, 1}] do
+        refute callback in Venue.core_endpoints()
+        assert is_binary(Venue.peripheral_endpoints()[callback])
+      end
+    end
+
     test "required_callbacks/0 is derived, not hand-maintained" do
       required = Venue.required_callbacks()
 

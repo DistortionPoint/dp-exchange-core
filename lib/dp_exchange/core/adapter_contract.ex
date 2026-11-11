@@ -62,7 +62,7 @@ defmodule DpExchange.Core.AdapterContract do
 
   ## What it asserts, and what it deliberately does not
 
-  Fifty-four groups, listed in `assertions/0`. The load-bearing one is **capabilities and
+  Fifty-five groups, listed in `assertions/0`. The load-bearing one is **capabilities and
   behaviour agreeing in both directions**: over-declaring fails in a caller's hands at
   runtime, and under-declaring hides working functionality. Holding both is what makes
   `capabilities/0` trustworthy enough for a consumer to branch on instead of branching on
@@ -260,7 +260,14 @@ defmodule DpExchange.Core.AdapterContract do
          "get_order/3, get_orders/2, get_trade_history/2 and cancel_order/3 is one its own " <>
          "new/1 builds: side, type, status and time in force inside the vocabulary, a status " <>
          "that agrees with the filled quantity, and at least one examined when place_order/3 " <>
-         "is active"}
+         "is active"},
+      {55,
+       "declared options — start_options/0 is a list of unique atoms, and call_options/1 " <>
+         "answers {:ok, unique atoms} for every callback the module defines that " <>
+         "capabilities/0 makes active, {:error, :not_supported} for one it does not, and " <>
+         "{:error, {:unknown_function, name}} for a name that is no function, on the facade " <>
+         "and the fake; the facade's keys are a subset of the fake's, and no key the fake " <>
+         "declares is refused by the fake as {:unknown_option, key}"}
     ]
   end
 
@@ -363,6 +370,9 @@ defmodule DpExchange.Core.AdapterContract do
     # its symbol. Each fake raised, and assertions 12 and 17 take a raise as an answer, so
     # none of these paths was ever checked. Every position below is the `Core.Venue` spec's.
     {:quantization, 1} => [:symbol],
+    # `call_options/1` takes a function NAME. By arity it was called `call_options([])`, which
+    # is not an atom and so is `{:unknown_function, []}` on a conforming venue.
+    {:call_options, 1} => [:function_name],
     {:stake, 3} => [:asset, :amount, :opts],
     {:unstake, 3} => [:asset, :amount, :opts],
     {:quote_conversion, 4} => [:asset, :quote_asset, :amount, :opts],
@@ -1251,6 +1261,10 @@ defmodule DpExchange.Core.AdapterContract do
     {:runtime_id, 0} => "takes no arguments, so there is no option list to probe",
     {:asset_classes, 0} => "takes no arguments, so there is no option list to probe",
     {:capabilities, 0} => "takes no arguments, so there is no option list to probe",
+    {:start_options, 0} => "takes no arguments, so there is no option list to probe",
+    {:call_options, 1} =>
+      "takes a function name only, so there is no option list to probe; group 55 holds " <>
+        "what it declares",
     {:quantization, 1} => "takes a symbol only, so there is no option list to probe",
     {:child_spec, 1} =>
       "builds a supervisor child spec from start-up options; it starts nothing and is not " <>
@@ -1354,6 +1368,155 @@ defmodule DpExchange.Core.AdapterContract do
   defp unjudged_fault(:ok = answer), do: {:ignored, answer}
   defp unjudged_fault({:ok, _value} = answer), do: {:ignored, answer}
   defp unjudged_fault(_answer), do: nil
+
+  @doc """
+  The function name assertion 55 hands `call_options/1` that is no function of any venue.
+
+  An unknown name must be `{:error, {:unknown_function, name}}`, never `{:ok, []}`.
+  """
+  @spec unknown_function_probe() :: :dp_contract_no_such_function
+  def unknown_function_probe, do: :dp_contract_no_such_function
+
+  @doc """
+  What is wrong with a `start_options/0` answer, or `nil`. Assertion 55.
+
+    * `{:not_a_list, answer}` - not a list.
+    * `{:not_atoms, keys}` - a list with an entry that is not an atom.
+    * `{:duplicates, keys}` - the same key twice (`keys` are the repeated ones).
+    * `{:probe_key, key}` - it declares `unknown_option_probe/0`, the key assertion 43 hands
+      every call as one nothing reads, so one of the two is lying.
+    * `{:raised, answer}` - a raise, exit or throw (`{:raised, e}` from the suite's `call_on/3`).
+  """
+  @spec start_options_fault(term()) ::
+          nil
+          | {:not_a_list, term()}
+          | {:not_atoms, [term()]}
+          | {:duplicates, [atom()]}
+          | {:probe_key, atom()}
+          | {:raised, term()}
+  def start_options_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def start_options_fault(keys) when is_list(keys) do
+    case key_list_fault(keys) do
+      nil -> probe_key_fault(keys)
+      fault -> fault
+    end
+  end
+
+  def start_options_fault(answer), do: {:not_a_list, answer}
+
+  defp probe_key_fault(keys) do
+    if unknown_option_probe() in keys, do: {:probe_key, unknown_option_probe()}
+  end
+
+  defp key_list_fault(keys) do
+    cond do
+      not Enum.all?(keys, &is_atom/1) -> {:not_atoms, Enum.reject(keys, &is_atom/1)}
+      keys != Enum.uniq(keys) -> {:duplicates, Enum.uniq(keys -- Enum.uniq(keys))}
+      true -> nil
+    end
+  end
+
+  @doc """
+  What is wrong with a `call_options/1` answer for a callback the module defines, or `nil`.
+  Assertion 55. `active?` is whether `capabilities/0` makes the callback active.
+
+  An active endpoint must answer `{:ok, keys}`, `keys` unique atoms. An inactive one must
+  answer `{:error, :not_supported}`, the atom, whatever the options, as every other function
+  of an unsupported endpoint does.
+
+    * `{:not_supported, answer}` - an active endpoint answered `{:error, :not_supported}`.
+    * `{:answered_while_inactive, answer}` - an inactive endpoint answered anything but
+      `{:error, :not_supported}`.
+    * `{:keys, fault}` - an `{:ok, keys}` whose keys are not unique atoms; `fault` is
+      `{:not_a_list | :not_atoms | :duplicates, term}`.
+    * `{:raised, answer}` - a raise, exit or throw.
+    * `{:wrong_answer, answer}` - any other answer, `{:ok, []}` for an unknown name included
+      when it is given here, and `{:error, {:unknown_function, name}}` for a function that
+      exists.
+  """
+  @spec declared_options_fault(term(), boolean()) ::
+          nil
+          | {:not_supported | :answered_while_inactive | :raised | :wrong_answer, term()}
+          | {:keys, term()}
+  def declared_options_fault({kind, _reason} = answer, _active?)
+      when kind in [:raised, :exit, :throw],
+      do: {:raised, answer}
+
+  def declared_options_fault({:error, :not_supported}, false), do: nil
+
+  def declared_options_fault({:error, :not_supported} = answer, true),
+    do: {:not_supported, answer}
+
+  def declared_options_fault(answer, false), do: {:answered_while_inactive, answer}
+
+  def declared_options_fault({:ok, keys}, true) do
+    case keys_fault(keys) do
+      nil -> nil
+      fault -> {:keys, fault}
+    end
+  end
+
+  def declared_options_fault(answer, true), do: {:wrong_answer, answer}
+
+  defp keys_fault(keys) when is_list(keys), do: key_list_fault(keys)
+  defp keys_fault(keys), do: {:not_a_list, keys}
+
+  @doc """
+  What is wrong with a `call_options/1` answer for `unknown_function_probe/0`, or `nil`.
+  Assertion 55.
+
+  It must be exactly `{:error, {:unknown_function, :dp_contract_no_such_function}}`.
+  `{:substituted, answer}` is `{:ok, keys}` (an unknown name answered `{:ok, []}` reads as a
+  real function that takes no options: a nearby substitute where there should be an error),
+  `{:not_supported, answer}` is `{:error, :not_supported}` (that answer is for a function that
+  exists and is inactive), `{:raised, answer}` is a raise, exit or throw, and
+  `{:wrong_answer, answer}` is anything else, including `{:unknown_function, other_name}`.
+  """
+  @spec unknown_function_fault(term()) ::
+          nil | {:substituted | :not_supported | :raised | :wrong_answer, term()}
+  def unknown_function_fault({:error, {:unknown_function, :dp_contract_no_such_function}}),
+    do: nil
+
+  def unknown_function_fault({kind, _reason} = answer) when kind in [:raised, :exit, :throw],
+    do: {:raised, answer}
+
+  def unknown_function_fault({:ok, _keys} = answer), do: {:substituted, answer}
+  def unknown_function_fault({:error, :not_supported} = answer), do: {:not_supported, answer}
+  def unknown_function_fault(answer), do: {:wrong_answer, answer}
+
+  @doc """
+  What is wrong with the keys a Fake declares for an endpoint beside the facade's, or `nil`.
+  Assertion 55.
+
+  Every key the facade declares for an endpoint the Fake must also accept, because a consumer
+  testing against the Fake passes the facade's list. `{:fake_lacks, keys}` names the facade's
+  keys the Fake does not declare. Keys only the Fake declares are allowed.
+  """
+  @spec fake_keys_fault([atom()], [atom()]) :: nil | {:fake_lacks, [atom()]}
+  def fake_keys_fault(facade_keys, fake_keys)
+      when is_list(facade_keys) and is_list(fake_keys) do
+    case facade_keys -- fake_keys do
+      [] -> nil
+      missing -> {:fake_lacks, Enum.uniq(missing)}
+    end
+  end
+
+  @doc """
+  What is wrong with a Fake's answer to a call carrying one key it declared, with the value
+  `nil`, or `nil`. Assertion 55.
+
+  A key the Fake lists in `call_options/1` for an endpoint must never be answered
+  `{:error, {:unknown_option, key}}` by that endpoint's own check: that is the declaration
+  and the check disagreeing, and a consumer that trusted the declaration is refused. The
+  Fake may answer anything else (a value it cannot use is `{:invalid_option, key, nil}`, and
+  a call it cannot serve with that key is its own refusal): only the unknown-option refusal of
+  `key` itself is a fault. `{:undeclared, key}` is that refusal.
+  """
+  @spec undeclared_key_fault(atom(), term()) :: nil | {:undeclared, atom()}
+  def undeclared_key_fault(key, {:error, {:unknown_option, key}}), do: {:undeclared, key}
+  def undeclared_key_fault(_key, _answer), do: nil
 
   @doc """
   The invalid amounts assertion 47 hands every amount-taking write: `{label, value}`.
@@ -2317,7 +2480,13 @@ defmodule DpExchange.Core.AdapterContract do
   # credential is an expected input there, because both mean "can I reach the venue at all"
   # rather than "give me this venue's data". A denylist of two, not an allowlist of what to
   # check, so it cannot rot into a list nobody updates.
-  @credential_gate_exempt ~w(test_connection get_rate_limit_status)a
+  #
+  # `start_options` and `call_options` are exempt for a different reason: they are static
+  # declarations, like `provider_name/0` and `capabilities/0` (which return a bare value and so
+  # can never match the `{:ok, _}` the gate looks for). `call_options/1` answers `{:ok, keys}`,
+  # and no credential can change which keys a function accepts; asking it for one would make
+  # the declaration need a key to be read, which a consumer deciding what to pass cannot have.
+  @credential_gate_exempt ~w(test_connection get_rate_limit_status start_options call_options)a
 
   @doc """
   The endpoints assertion 17 asks a `credential_benefit: :required` venue's fake to refuse
@@ -2325,7 +2494,8 @@ defmodule DpExchange.Core.AdapterContract do
 
   Every facade callback that is **answerable** (not `child_spec/1` or `start_link/1`, which
   start something), **active** in `caps`, not one of the two whose own doc types the
-  credential `credentials() | nil`, not declared in `Capabilities.no_venue_contact`, and not
+  credential `credentials() | nil`, not `start_options/0` or `call_options/1` (static
+  declarations of option keys, which no credential changes), not declared in `Capabilities.no_venue_contact`, and not
   `market_status/1` on a venue whose `asset_classes` are exactly `[:crypto]` (crypto trades
   continuously, so there is no session for a credential to gate).
 
@@ -2527,6 +2697,9 @@ defmodule DpExchange.Core.AdapterContract do
       source_safety(),
       order_values(),
       order_value_helpers(),
+      declared_options(),
+      declared_option_helpers(),
+      declared_option_probes(),
       positive_values(),
       convention_helpers(),
       return_types(),
@@ -4587,7 +4760,7 @@ defmodule DpExchange.Core.AdapterContract do
         # **The expectation comes from `Core.Venue`'s own `@callback` specs**, read with
         # `Code.Typespec.fetch_callbacks/1`, not from a table here — so a callback added later
         # is checked the day it is added, and a table cannot drift from the contract it
-        # restates. Of the 89 callbacks, those whose success type names a `Core.Types` struct
+        # restates. Of the callbacks, those whose success type names a `Core.Types` struct
         # are checked; an answer that is not `{:ok, _}` is left to the assertions that own
         # refusals (6 and 12). What fails is a success of the wrong kind: a raw map, or a list
         # holding anything but the promised struct.
@@ -5073,6 +5246,197 @@ defmodule DpExchange.Core.AdapterContract do
 
         {endpoint, DpExchange.Core.AdapterContract.unknown_option_evidence?(mode, answer),
          DpExchange.Core.AdapterContract.unknown_option_fault(mode, answer)}
+      end
+    end
+  end
+
+  # --- 55. the option keys a venue declares are the ones it accepts ------------------------
+  #
+  # `start_options/0` and `call_options/1` let a consumer narrow one shared options keyword per
+  # call (`Keyword.take(opts, keys)`) instead of being refused for a key another venue reads.
+  # A declaration that disagrees with the check it describes is worse than none, so this group
+  # holds five things, each a decision made by a public function the teeth tests run:
+  #
+  #   * `start_options/0`, facade and fake: unique atoms, and not the probe key
+  #     (`start_options_fault/1`);
+  #   * `call_options/1` for every callback the module defines: `{:ok, unique atoms}` when
+  #     `capabilities/0` makes it active, `{:error, :not_supported}` when it does not
+  #     (`declared_options_fault/2`);
+  #   * a name that is no function: `{:error, {:unknown_function, name}}`, never `{:ok, []}`
+  #     (`unknown_function_fault/1`);
+  #   * every key the facade declares for an endpoint, the fake declares too
+  #     (`fake_keys_fault/2`): a consumer testing against the fake passes the facade's list;
+  #   * on the fake, a declared key is never refused as unknown (`undeclared_key_fault/2`).
+  #     Each key is added alone with the value `nil`, to an endpoint whose plain call succeeded
+  #     (group 43's rule: a fake that refuses the generated arguments for its own reason never
+  #     reached its options). The group fails when it judged nothing.
+  defp declared_options do
+    quote location: :keep do
+      describe "55. declared option keys" do
+        test "start_options/0 is a list of unique atoms, on the facade and the fake" do
+          for {label, module} <- declared_option_modules() do
+            answer = call_on(module, {:start_options, 0}, [])
+            fault = DpExchange.Core.AdapterContract.start_options_fault(answer)
+
+            assert fault == nil,
+                   "#{label} start_options/0 answered #{inspect(answer, limit: 12)}: " <>
+                     "#{inspect(fault)}. It must be a list of unique atoms, the keys " <>
+                     "start_link/1 accepts, read from the same list the start check uses."
+          end
+        end
+
+        test "call_options/1 answers every callback the module defines by its activation" do
+          for {label, module} <- declared_option_modules() do
+            assert declared_option_answers(module) != [],
+                   "#{label} defines no callback to ask call_options/1 about"
+
+            faults = declared_option_faults(module)
+
+            assert faults == [],
+                   "#{label} call_options/1: an active endpoint must answer {:ok, unique " <>
+                     "atoms} and an inactive one {:error, :not_supported}. " <>
+                     "Faults: #{inspect(faults, limit: 12)}"
+          end
+        end
+
+        test "call_options/1 refuses a name that is no function, never {:ok, []}" do
+          probe = DpExchange.Core.AdapterContract.unknown_function_probe()
+
+          for {label, module} <- declared_option_modules() do
+            answer = call_on(module, {:call_options, 1}, [probe])
+            fault = DpExchange.Core.AdapterContract.unknown_function_fault(answer)
+
+            assert fault == nil,
+                   "#{label} call_options(#{inspect(probe)}) answered #{inspect(answer)}: " <>
+                     "#{inspect(fault)}. It must be " <>
+                     "{:error, {:unknown_function, #{inspect(probe)}}}; {:ok, []} for a " <>
+                     "misspelt name is a substitute where there should be an error."
+          end
+        end
+
+        test "every key the facade declares for an endpoint, the fake declares too" do
+          if @fake do
+            faults =
+              for {name, _arity} = endpoint <- active_on_fake(Venue.behaviour_info(:callbacks)),
+                  fault =
+                    DpExchange.Core.AdapterContract.fake_keys_fault(
+                      declared_keys(@venue, name),
+                      declared_keys(@fake, name)
+                    ),
+                  do: {endpoint, fault}
+
+            assert faults == [],
+                   "the fake does not accept a key the facade declares, so a consumer " <>
+                     "testing against the fake is refused for passing the facade's list. " <>
+                     "Faults: #{inspect(faults, limit: 12)}"
+          end
+        end
+
+        test "no key the fake declares is refused by the fake as unknown" do
+          if @fake do
+            results = Enum.map(unknown_option_endpoints(), &probe_declared_keys/1)
+
+            faults =
+              for {endpoint, _judged, key_faults} <- results,
+                  fault <- key_faults,
+                  do: {endpoint, fault}
+
+            assert faults == [],
+                   "the fake declares these keys in call_options/1 and its own check refuses " <>
+                     "them as {:unknown_option, key}: the declaration and the check " <>
+                     "disagree. Faults: #{inspect(faults, limit: 12)}"
+
+            judged = Enum.count(results, fn {_endpoint, judged?, _faults} -> judged? end)
+
+            assert judged > 0,
+                   "no endpoint's declared keys could be judged: the fake refused every " <>
+                     "generated call before its options, or declared no key beyond the ones " <>
+                     "the call already carries. Declare what it needs in `endpoint_opts:`. " <>
+                     "Probed: #{inspect(Enum.map(results, &elem(&1, 0)))}"
+          end
+        end
+      end
+    end
+  end
+
+  # Group 55's helpers, quoted apart so no block passes credo's length or complexity ceiling.
+  defp declared_option_helpers do
+    quote location: :keep do
+      # The facade, and the fake when there is one.
+      defp declared_option_modules do
+        if @fake, do: [facade: @venue, fake: @fake], else: [facade: @venue]
+      end
+
+      # Every callback `module` defines: the behaviour's callbacks, less an optional one the
+      # module does not export (leaving it out is what "optional" allows).
+      defp defined_endpoints(module) do
+        optional = Venue.behaviour_info(:optional_callbacks)
+        Code.ensure_loaded(module)
+
+        for {name, arity} = endpoint <- Venue.behaviour_info(:callbacks),
+            endpoint not in optional or function_exported?(module, name, arity),
+            do: endpoint
+      end
+
+      # `{endpoint, active?, answer}` for each, activation read from the facade's capabilities
+      # (the fake is held to the same declaration, as in group 12).
+      defp declared_option_answers(module) do
+        caps = @venue.capabilities()
+
+        for {name, _arity} = endpoint <- defined_endpoints(module) do
+          {endpoint, Capabilities.active?(caps, endpoint),
+           call_on(module, {:call_options, 1}, [name])}
+        end
+      end
+
+      # `{endpoint, fault}` for each answer `declared_options_fault/2` rejects.
+      defp declared_option_faults(module) do
+        for {endpoint, active?, answer} <- declared_option_answers(module),
+            fault = DpExchange.Core.AdapterContract.declared_options_fault(answer, active?),
+            do: {endpoint, fault}
+      end
+    end
+  end
+
+  # Group 55's per-key probe of the fake, quoted apart for credo's complexity ceiling.
+  defp declared_option_probes do
+    quote location: :keep do
+      # The keys `module` declares for `name`, or `[]` when it did not answer `{:ok, keys}`
+      # (the other tests of this group judge that answer).
+      defp declared_keys(module, name) do
+        case call_on(module, {:call_options, 1}, [name]) do
+          {:ok, keys} when is_list(keys) -> keys
+          _not_a_declaration -> []
+        end
+      end
+
+      # `{endpoint, judged?, faults}`: the fake's plain call is the baseline, every declared key
+      # the call does not already carry is added alone with the value `nil`. Judged only when
+      # that plain call succeeded and at least one key was tried.
+      defp probe_declared_keys({name, arity} = endpoint) do
+        args = endpoint_args(name, arity)
+        carried = args |> List.last() |> Keyword.keys()
+        tried = declared_keys(@fake, name) -- carried
+
+        baseline = call_on(@fake, endpoint, args)
+        judged? = tried != [] and DpExchange.Core.AdapterContract.unknown_option_judged?(baseline)
+
+        {endpoint, judged?, declared_key_faults(judged?, endpoint, args, tried)}
+      end
+
+      defp declared_key_faults(false, _endpoint, _args, _tried), do: []
+
+      defp declared_key_faults(true, endpoint, args, tried),
+        do: Enum.flat_map(tried, &declared_key_faults(endpoint, args, &1))
+
+      defp declared_key_faults(endpoint, args, key) do
+        with_key = List.update_at(args, -1, &Keyword.put(&1, key, nil))
+        answer = call_on(@fake, endpoint, with_key)
+
+        case DpExchange.Core.AdapterContract.undeclared_key_fault(key, answer) do
+          nil -> []
+          fault -> [fault]
+        end
       end
     end
   end
@@ -5966,7 +6330,8 @@ defmodule DpExchange.Core.AdapterContract do
                   :name,
                   :symbols,
                   :payment_details,
-                  :account_id
+                  :account_id,
+                  :function_name
                 ],
            do: value_arg(kind)
 
@@ -6058,6 +6423,10 @@ defmodule DpExchange.Core.AdapterContract do
       defp value_arg(:symbols), do: [sample_symbol()]
       defp value_arg(:payment_details), do: %{"type" => "bank", "name" => "contract-method"}
       defp value_arg(:account_id), do: "contract-account-1"
+
+      # A function every venue defines and declares active (it is a declaration), so
+      # `call_options/1` answers `{:ok, _}` for it and group 12 sees an active answer.
+      defp value_arg(:function_name), do: :capabilities
     end
   end
 

@@ -21,6 +21,30 @@ an acceptable changelog line.
 
 ## [Unreleased]
 
+### Added
+
+- **`start_options/0` and `call_options/1`: a venue declares the option keys it accepts
+  (#43).** Two new **required** `Venue` callbacks, so every venue package must implement them
+  (a venue that does not fails conformance group 1 and the compiler warns about the
+  missing callback). `start_options/0` is the unique atoms `start_link/1` and `child_spec/1` accept,
+  read from the same list the start check refuses against. `call_options/1` takes a function
+  name and answers `{:error, :not_supported}` for a callback the venue defines and
+  `capabilities/0` makes inactive, `{:ok, keys}` for a public function (exactly the keys its
+  call accepts without `{:unknown_option, _}`), and `{:error, {:unknown_function, name}}` for
+  anything else, never `{:ok, []}`. A consumer narrows with `Keyword.take(opts, keys)`.
+  The callbacks are classified peripheral in `peripheral_endpoints/0`, so a venue need not
+  list them in `capabilities/0`; the contract is now 91 callbacks, 87 required.
+- **Conformance group 55: declared option keys.** `start_options/0` and `call_options/1` of the
+  facade and the fake answer as above; the facade's keys for an endpoint are a subset of the
+  fake's; and on the fake no declared key, added alone with the value `nil` to an endpoint
+  whose plain call succeeded, is refused `{:unknown_option, key}`. Fails when it judged
+  nothing. Public decisions `start_options_fault/1`, `declared_options_fault/2`,
+  `unknown_function_fault/1`, `fake_keys_fault/2`, `undeclared_key_fault/2` and
+  `unknown_function_probe/0`, with teeth tests. Both callbacks are in
+  `unknown_option_exclusions/0`, are exempt from the credential gate (group 17), and
+  `call_options/1` is called with a function name, not an option list.
+- Usage rules: "Discovering which option keys a venue accepts".
+
 ## [0.3.122] - 2026-11-11
 
 ### Documentation

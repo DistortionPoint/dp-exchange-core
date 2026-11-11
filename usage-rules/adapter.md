@@ -289,12 +289,12 @@ Where a moduledoc explains *why* a guard exists, that explanation is the most va
 thing in the file. Carry it when the code moves or is copied. A guard without its reason
 reads as defensive padding, and the next person tidying up deletes it.
 
-## The surface is 89 callbacks; 85 must exist and 4 may be absent
+## The surface is 91 callbacks; 87 must exist and 4 may be absent
 
-`Venue.required_callbacks/0` is the list the compiler enforces: 85 of the 89. A function for
+`Venue.required_callbacks/0` is the list the compiler enforces: 87 of the 91. A function for
 a callback your venue does not serve **must still be defined**; it declares the endpoint
 `:unsupported` and answers `{:error, :not_supported}`. **A new package does not have to
-implement 85 real endpoints.** It implements what its venue serves and declares the rest —
+implement 87 real endpoints.** It implements what its venue serves and declares the rest —
 which is exactly the work, because the declaring is where the thinking is. Many callback docs
 in `Core.Venue` begin "Optional"; that means "may be `:unsupported`", not "may be missing".
 
@@ -358,6 +358,15 @@ plain `{:error, _}`, never `:order_unconfirmed`. A function that answers
 Conformance group 43 holds the Fake to this on every endpoint it serves, reads, writes and
 feed calls alike (the few callbacks that cannot take the probe are listed with a reason in
 `AdapterContract.unknown_option_exclusions/0`); see `usage-rules/testing.md`.
+
+**Declare the keys you check against (`start_options/0`, `call_options/1`).** Both are required
+callbacks. Keep each call's allowed-key list in one place that the call's `Options.check/2` and
+`call_options/1` both read (a module attribute or a function), never a second hand-copied list,
+and likewise one list for the start check and `start_options/0`. `call_options/1` answers
+`{:error, :not_supported}` for a callback you define that `capabilities/0` makes inactive,
+`{:ok, keys}` for a public function, and `{:error, {:unknown_function, name}}` for anything
+else, never `{:ok, []}`. Your Fake answers for itself and accepts at least the facade's keys.
+Group 55 holds all of it.
 
 **Transport keys only where read (0.3.104).** `transport_options/0` names the shared keys; it
 is not a list every call accepts. A call that sends an HTTP request allows
